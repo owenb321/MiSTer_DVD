@@ -587,6 +587,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   wire             v_sync_mixer;
   wire             pixel_en_mixer;
   wire             dot_frame_top_par_err;   // DVD-FORK (field-parity corrector): mixer frame-top parity verdict (dot_clk level)
+  wire        [7:0]dot_strict_waits;        // DVD-FORK FIX (field start): mixer telemetry, dot_clk domain (wrapping count)
 
   /* osd - yuv2rgb interface */
   wire             pixel_en_osd;            // pixel enable 
@@ -1902,7 +1903,9 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .dbg_first_vpos(dbg_first_vpos),                 // DVD-FORK DEBUG
     .dbg_last_vpos(dbg_last_vpos),               // DVD-FORK DEBUG
     .disp_v_offset(disp_v_offset),                           // DVD-FORK (CRT anamorphic letterbox bar offset)
-    .frame_top_par_err(dot_frame_top_par_err)                // DVD-FORK (field-parity corrector): to the addrgen via sync_raster_par_err
+    .frame_top_par_err(dot_frame_top_par_err),               // DVD-FORK (field-parity corrector): to the addrgen via sync_raster_par_err
+    .interlaced(dot_interlaced),                             // DVD-FORK FIX (field start): strict first-field placement (dot domain already)
+    .strict_waits(dot_strict_waits)                          // DVD-FORK FIX (field start): telemetry, refused frame-top slots (wraps)
     );
 
   /* On-Screen Display */

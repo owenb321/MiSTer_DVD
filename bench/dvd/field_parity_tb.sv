@@ -214,6 +214,7 @@ module field_parity_tb;
 `ifndef NO_PARITY_FIX
     .frame_top_par_err(mixer_par_err),
 `endif
+    .interlaced(1'b1), .strict_waits(),   // DVD-FORK FIX (field start): the mixer's raster flag = the sync_gen's
     .disp_v_offset(12'd0)
   );
 

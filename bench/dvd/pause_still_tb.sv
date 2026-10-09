@@ -218,6 +218,7 @@ module pause_still_tb;
     .h_pos(h_pos), .v_pos(v_pos), .h_sync_in(h_sync), .v_sync_in(v_sync), .pixel_en_in(pixel_en),
     .y_out(), .u_out(), .v_out(), .osd_out(),
     .h_sync_out(), .v_sync_out(), .pixel_en_out(),
+    .interlaced(1'b1), .strict_waits(),   // DVD-FORK FIX (field start): the mixer's raster flag = the sync_gen's
     .disp_v_offset(12'd0)
   );
 

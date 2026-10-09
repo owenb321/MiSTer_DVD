@@ -98,6 +98,14 @@ module field_phase_tb;
   reg clk = 0;      always #5  clk = ~clk;
   reg dot_clk = 0;  always #10 dot_clk = ~dot_clk;
   reg rst = 0;
+  /* DVD-FORK FIX (field start, 2026-10-08): the decoder SOFT reset, modelled as on the core.
+   * reset.v drives sync_rst/dot_rst — resample, framestore reader, pixel_queue, the mixer's
+   * data path and the parity CDC — from it, while the raster (sync_gen) and the mixer's
+   * sync line stay on hard_rst. Every mount and every menu<->title jump is one of these, and
+   * scenario [10] is the start it causes. */
+  reg soft_rst = 1'b0;
+  wire srst = rst & ~soft_rst;               // active-low, like rst
+  wire [7:0] strict_waits;                   // the mixer's count of refused frame-top slots
 
   // ---- stimulus ----
   reg  [2:0] output_frame = 3'd2;
@@ -145,12 +153,14 @@ module field_phase_tb;
 `ifndef NO_PARITY_FIX
   wire mixer_par_err;
   reg  pe_s1 = 0, pe_s2 = 0;
-  always @(posedge clk) begin pe_s1 <= mixer_par_err; pe_s2 <= pe_s1; end
+  always @(posedge clk)
+    if (~srst) begin pe_s1 <= 1'b0; pe_s2 <= 1'b0; end   // sync_reg on sync_rst
+    else begin pe_s1 <= mixer_par_err; pe_s2 <= pe_s1; end
   wire par_err_sync = pe_s2;
 `endif
 
   resample resample (
-    .clk(clk), .rst(rst),
+    .clk(clk), .rst(srst),
     .output_frame(output_frame), .output_frame_valid(output_frame_valid),
     .output_frame_rd(output_frame_rd),
     .progressive_sequence(progressive_sequence), .progressive_frame(progressive_frame),
@@ -203,7 +213,7 @@ module field_phase_tb;
     .fifo_addr_depth(9'd8), .fifo_dta_depth(9'd8),
     .fifo_addr_threshold(9'd32), .fifo_dta_threshold(9'd64))
   disp_reader (
-    .rst(rst), .clk(clk),
+    .rst(srst), .clk(clk),
     .wr_addr_clk_en(1'b1),
     .wr_addr_full(disp_wr_addr_full), .wr_addr_almost_full(disp_wr_addr_almost_full),
     .wr_addr_en(disp_wr_addr_en), .wr_addr_ack(disp_wr_addr_ack),
@@ -218,11 +228,11 @@ module field_phase_tb;
     .wr_dta(mem_word)
   );
   always @(posedge clk)
-    if (~rst) wr_dta_en <= 1'b0;
+    if (~srst) wr_dta_en <= 1'b0;
     else      wr_dta_en <= rd_addr_valid;
 
   pixel_queue pixel_queue (
-    .clk_in(clk), .clk_in_en(1'b1), .rst(rst),
+    .clk_in(clk), .clk_in_en(1'b1), .rst(srst),
     .y_in(px_y), .u_in(px_u), .v_in(px_v), .osd_in(px_osd), .position_in(px_position),
     .pixel_wr_en(px_wr_en), .pixel_wr_almost_full(pq_wr_almost_full),
     .pixel_wr_full(), .pixel_wr_overflow(),
@@ -246,9 +256,9 @@ module field_phase_tb;
   );
 
   mixer mixer (
-    // hard_rst tied to rst: this bench has one reset and never models a decoder
-    // soft reset, so the sync line behaves exactly as it did before that port existed.
-    .clk(dot_clk), .clk_en(1'b1), .rst(rst), .hard_rst(rst),
+    // rst = the soft-reset leg (dot_rst on the core), hard_rst = the hard one: the sync
+    // line and the strict_waits counter survive scenario [10]'s soft reset, as on the core.
+    .clk(dot_clk), .clk_en(1'b1), .rst(srst), .hard_rst(rst),
     .pixel_repetition(1'b0),
     .y_in(mx_y), .u_in(mx_u), .v_in(mx_v), .osd_in(mx_osd), .position_in(mx_position),
     .pixel_rd_en(mx_rd_en), .pixel_rd_valid(mx_rd_valid), .pixel_rd_underflow(mx_rd_underflow),
@@ -258,6 +268,7 @@ module field_phase_tb;
 `ifndef NO_PARITY_FIX
     .frame_top_par_err(mixer_par_err),
 `endif
+    .interlaced(1'b1), .strict_waits(strict_waits),   // DVD-FORK FIX (field start): the mixer's raster flag = the sync_gen's
     .disp_v_offset(12'd0)
   );
 
@@ -511,24 +522,68 @@ module field_phase_tb;
     end
   endtask
 
+  /* ★ A START MUST BE CLEAN FROM ITS FIRST FIELD (2026-10-08, docs/field_parity.md "Strict
+   * first field"). No settle window: every field from the first one displayed after a start
+   * must carry the matching line parity, none may repeat its predecessor, and none may be a
+   * partial head. Before the mixer's strict first-field placement a start landed on a
+   * coin-flip slot and only the FEEDBACK arm healed it, PAR_CONFIRM refreshes (~0.5 s) later.
+   * That half-second is the reported blip, so a settle window here would hide exactly what
+   * this window checks. (The first two fields are judged too: tally() skips them because it
+   * compares against fields i-1 and i-2, which a start does not have.) */
+  task start_clean(input [8*40-1:0] name, input integer n);
+    integer s0, i, mis, rpt, part;
+    begin
+      s0 = fld_n;  wait_flds(n);
+      mis = 0;  rpt = 0;  part = 0;
+      for (i = s0; i < s0 + n; i = i + 1) begin
+        if (!clean_head(i)) part = part + 1;
+        else if (mis_now(i)) begin
+          mis = mis + 1;
+          $display("  field %0d MISALIGNED (start+%0d): %s source line %0d displayed in the %s raster field",
+                   i, i - s0, ((rec_code[i]-base_code) & 1) ? "odd (bottom)" : "even (top)",
+                   rec_code[i] - base_code, rec_vpar[i] ? "BOTTOM" : "TOP");
+        end
+        if ((i > s0) && (rec_code[i] == rec_code[i-1])) rpt = rpt + 1;
+      end
+      if (mis == 0 && rpt == 0 && part == 0)
+        $display("[%0s] PASS: all %0d fields from the first one displayed land on the matching raster parity, no settle, no repeat",
+                 name, n);
+      else begin
+        errors = errors + 1;
+        $display("[%0s] FAIL: %0d misaligned, %0d repeat(s), %0d partial head(s) in the first %0d fields of a start - a start must be clean from its first field",
+                 name, mis, rpt, part, n);
+      end
+    end
+  endtask
+
   integer phase = 0;
+  integer start_only = 0;
+  integer k, w0, sw_total;
 
   initial begin
     void'($value$plusargs("phase=%d", phase));
     if ($test$plusargs("dbg")) dbg = 1;
+    /* +start_only: [1] and [10] alone, the two windows that judge a START. ~1/10 of the
+     * full run, which is what lets the runner afford a mutation sweep over them. */
+    if ($test$plusargs("start_only")) start_only = 1;
     $display("\n==== field_phase_tb  +phase=%0d ====", phase);
 
     rst = 0; output_frame_valid = 0;
     repeat (8) @(posedge clk);
     rst = 1;
 
-    // [1] COLD START at the +phase-selected raster field parity (feedback case)
+    // [1] COLD START at the +phase-selected raster field parity. One of the two +phase
+    // arms releases the first field toward the WRONG slot. Until 2026-10-08 that arm was
+    // healed by the feedback arm inside a SETTLE_FB window, i.e. it displayed misaligned for
+    // PAR_CONFIRM refreshes; the mixer's strict first-field placement now waits for the
+    // matching slot instead, so the window has no settle at all.
     repeat (2) @(negedge v_sync);
     repeat (phase) @(negedge v_sync);          // one field period shifts landing parity
     output_frame_valid = 1;
-    // the feedback arm's window: misaligned fields are expected while its verdict is
-    // still being confirmed, so only the repeat budget is enforced across the settle.
-    check_window_s("1-cold-start", SETTLE_FB, SETTLE_FB);
+    start_clean("1-cold-start", NCHK);
+
+    if (!start_only) begin
+    check_window("1b-steady");
 
     // [2] SEEK released on a SAME-parity tff (alternation break; the chapter skip)
     output_frame_valid = 0;
@@ -594,10 +649,37 @@ module field_phase_tb;
     progressive_frame = 0; repeat_first_field = 0; film_mode = 0; top_field_first = 1;
     stutter(4);
     check_window_s("7-post-stutter", SETTLE_FB, SETTLE_FB); // the feedback arm heals the rest
+    end   // !start_only
+
+    // [10] DECODER SOFT RESET — the start every mount and every menu<->title jump makes
+    // (dvd/flush_ctl.sv soft_flush -> reset.v). The data path restarts with
+    // last_image = NO_OUTPUT, so resample_addrgen's feed-forward arm has nothing to
+    // compare against, while the raster runs straight through. Two attempts released one
+    // field period apart land toward OPPOSITE slots, so whichever +phase this is, one of
+    // them needs the strict placement — measured below rather than assumed.
+    progressive_frame = 0; repeat_first_field = 0; film_mode = 0; top_field_first = 1;
+    sw_total = 0;
+    for (k = 0; k < 2; k = k + 1) begin
+      output_frame_valid = 0;
+      @(negedge v_sync);
+      soft_rst = 1'b1;  repeat (8) @(posedge clk);  soft_rst = 1'b0;
+      repeat (2 + k) @(negedge v_sync);        // the reader re-mounts; nothing displayed
+      w0 = strict_waits;
+      output_frame_valid = 1;
+      start_clean(k ? "10-soft-reset-b" : "10-soft-reset-a", NCHK);
+      sw_total = sw_total + ((strict_waits - w0) & 8'hFF);
+    end
+    /* Non-vacuity, and it reads the mixer's own count deliberately: the count records a
+     * mismatched slot whether or not the strict term then refuses it, so a mutation that
+     * removes the refusal still counts here and fails on MISALIGNED above. Zero means
+     * neither attempt was released toward the wrong slot, and [10] proved nothing. */
+    if (sw_total == 0)
+      $fatal(1, "[10] SCENARIO VACUOUS: neither soft-reset start was released toward the wrong slot (strict_waits did not move)");
+    $display("[10-soft-reset] the strict placement refused %0d slot(s) over the two starts", sw_total);
 
     $display("(source line 0 stamps %0d, line 1 stamps %0d; %0d fields measured)",
              base_code, peak_code, fld_n);
-    if (fld_n < 4*(SETTLE+NCHK) || peak_code != base_code + 8'd1)
+    if (fld_n < (start_only ? 3*NCHK : 4*(SETTLE+NCHK)) || peak_code != base_code + 8'd1)
       $fatal(1, "==== BENCH BROKEN (+phase=%0d): %0d fields, stamps %0d/%0d (expected two adjacent) ====",
              phase, fld_n, base_code, peak_code);
     if (errors == 0) begin
