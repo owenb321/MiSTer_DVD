@@ -85,7 +85,10 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
       above ran on `DVD_navfixes_20261008_1851.rbf`. The corrected build,
       `DVD_navfixes_20261009_0149.rbf`, passes timing: `clk_dec` 88.94 / 88.07 MHz,
       `clk_mem` 94.4 / 94.1 MHz. It differs only for a looping type-2/3 cell command on
-      an indefinite still; none of the discs tested above has one.
+      an indefinite still; none of the discs tested above has one. In the library only
+      ROLLERBALLB has one (VTSM 1, PGC 24, its paged menu: `g2 = 13; LinkPGCN 24`). ✅ The
+      maintainer checked it by hand on this build: the menu works, unchanged from 0.9.0
+      (the 1851 build would have frozen a page).
 
 - ⏳ **THE LIBRARY NAVIGATION SWEEP (2026-10-08, `feature/nav-sweep`, offline only).**
   The microcoded VM against libdvdnav over every library disc, with
