@@ -48,8 +48,14 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
   - **HW round 2 (2026-10-09, `DVD_fieldstart_20261009_0454.rbf`):** 15 launches
     `fb_heals` **0**; 30 Video Output round trips `fb_heals` **0** (control 3 in 10). Two
     switches took a second strict wait ~0.1 s in, which is the FRAME re-break being refused.
+  - **Rebased onto PR #169 (2026-10-09):** SEED 5 re-rolled (`clk_mem` 82.67/83.82). Seven
+    seeds swept; **SEED 13** clears both: `clk_dec` 90.78/90.56, `clk_mem` 90.51/91.22 →
+    `DVD_fieldstart_20261009_1511.rbf` (`30dab25`, clean). `clock_check` PASS, 1 WARN:
+    `h2f_user0` −0.631 ns at 100 °C inside stock `ascal` (`avl_write_i` → its dpram); new on
+    this seed, an HPS-bridge path in the framework. The HIL rounds ran on the pre-rebase
+    builds; the field-start logic is identical.
   - **Next step:** the maintainer's eye on the CRT and on HDMI Weave (starts, menu↔title,
-    Video Output switches). Then merge.
+    Video Output switches) on the `1511` build. Then merge.
 
 - ✅ **SPRM6/7 FOLLOW PLAYBACK; FIRST PLAY WITH NO FP PGC; AN INDEFINITE STILL BEFORE A
   NON-LOOP CELL COMMAND (2026-10-08, ✅ MERGED PR #169; HW-CONFIRMED on the rig, A/B

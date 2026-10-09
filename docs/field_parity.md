@@ -490,6 +490,10 @@ wait at +0.11 s and +0.12 s after the switch. That is the FRAME-leftover re-brea
 the spot where round 1 healed it 0.5 s later. The pictures (stills and motion, before and
 after a switch) were clean in every screenshot taken.
 
+The rebased build for the eye test is `DVD_fieldstart_20261009_1511.rbf` (`30dab25`, onto PR
+#169, SEED 13 pinned: `clk_dec` 90.78 / 90.56, `clk_mem` 90.51 / 91.22 MHz; seed table in
+`DVD.qsf`). Its field-start logic is identical to round 2's.
+
 One screenshot in round 1, taken after a 20-toggle run, showed every other line dark. It did
 not reproduce in seven later shots on either arm, and it had no matching counter event, so it
 is recorded here and not explained.
