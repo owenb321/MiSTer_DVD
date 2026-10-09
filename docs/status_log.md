@@ -45,9 +45,11 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     Video Output switches were improved, not fixed: heals landed 0.54/0.62 s after the
     switch. A leftover progressive FRAME image spent a one-shot arm, so the arm now covers
     8 accepted frame-tops (`[12]`, mutation S4). Table in `docs/field_parity.md`.
-  - **Next step:** HW round 2 on the windowed build: the same 15 launches plus ≥ 30 timed
-    Video Output toggles (`fb_heals` = 0 expected), then the maintainer's eye on the CRT and
-    on HDMI Weave.
+  - **HW round 2 (2026-10-09, `DVD_fieldstart_20261009_0454.rbf`):** 15 launches
+    `fb_heals` **0**; 30 Video Output round trips `fb_heals` **0** (control 3 in 10). Two
+    switches took a second strict wait ~0.1 s in, which is the FRAME re-break being refused.
+  - **Next step:** the maintainer's eye on the CRT and on HDMI Weave (starts, menu↔title,
+    Video Output switches). Then merge.
 
 - ✅ **SPRM6/7 FOLLOW PLAYBACK; FIRST PLAY WITH NO FP PGC; AN INDEFINITE STILL BEFORE A
   NON-LOOP CELL COMMAND (2026-10-08, ✅ MERGED PR #169; HW-CONFIRMED on the rig, A/B

@@ -5,8 +5,9 @@
 > now refuses the wrong slot for the first field after a reset or a raster restart, so a
 > mount, a menu↔title jump or a Video Output switch starts aligned from its first field. The
 > corrector stays as the safety net for mid-play slips. See
-> ["Strict first field"](#strict-first-field-2026-10-08) below; status `⏳ HW-confirm pending`
-> (branch `feature/field-start`).
+> ["Strict first field"](#strict-first-field-2026-10-08) below. Status: HIL-measured clean on
+> the rig (feedback heals 0 over 15 starts and 30 Video Output round trips, control 5 and 3);
+> `⏳` the maintainer's eye on the CRT and HDMI Weave (branch `feature/field-start`).
 
 **Status: ✅ RE-ENABLED and ✅ HW-CONFIRMED (2026-09-03, issue #41). Round 1 confirmed the
 analog CRT — "this one seems to always get the fields right on the TV", where PR #40 was a
@@ -386,7 +387,8 @@ refreshes have elapsed. Moved earlier it would wait the budget out instead of me
 
 ## Strict first field (2026-10-08)
 
-**Status: sim-proven RED/GREEN (`run_field_phase.sh --red`); `⏳ HW-confirm pending`, branch
+**Status: sim-proven RED/GREEN (`run_field_phase.sh --red`, S1–S4); HIL-measured clean in
+round 2 (below); `⏳` the maintainer's eye on the CRT and HDMI Weave. Branch
 `feature/field-start`.**
 
 ### The symptom, and the hole it came through
@@ -472,6 +474,25 @@ field. It spent the arm, spilled across two interlaced fields, and the first rea
 image landed a slot late. `field_phase_tb` `[12]` reproduces it (16/16 misaligned at one of
 four switch points). The arm now covers `STRICT_TOPS` accepted frame-tops, and mutation S4
 (`STRICT_TOPS = 1`) puts the defect back.
+
+### HW round 2 (2026-10-09) — the windowed arm
+
+Build `DVD_fieldstart_20261009_0454.rbf` (`2b14d26`, SEED 5, `clk_dec` 92.96 / 90.66 MHz,
+`clock_check` PASS).
+
+| test | control (round 1) | fix, round 2 |
+|---|---|---|
+| 15 launches of `RINGER_WS` on Interlaced | `fb_heals` 5 | `fb_heals` **0** (`strict_waits` 5) |
+| Video Output round trips, `THE_OFFICE` | 3 heals in 10 | **0 heals in 30** (`strict_waits` 29) |
+
+The timed log shows the window working directly. Two switches each took a **second** strict
+wait at +0.11 s and +0.12 s after the switch. That is the FRAME-leftover re-break, refused on
+the spot where round 1 healed it 0.5 s later. The pictures (stills and motion, before and
+after a switch) were clean in every screenshot taken.
+
+One screenshot in round 1, taken after a 20-toggle run, showed every other line dark. It did
+not reproduce in seven later shots on either arm, and it had no matching counter event, so it
+is recorded here and not explained.
 
 ### Known limits
 
