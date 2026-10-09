@@ -108,3 +108,8 @@ The release netlist of 2026-10-07 (the dither-latin netlist plus the release ver
 Verdict `PASS (0 fail, 0 warn)`; `clk_hdmi` INFO only (in `ascal`, above the floor).
 `clk_mem` passes by **+0.016 ns**: one seed of eight cleared it on this netlist, so the
 next `mem_shim_burst` retime is needed before the next feature adds logic.
+
+**Done (2026-10-09, `feature/clkmem-retime`):** the speculative-pop retime took the
+bridge's pop off the stage-A verdict and put a credit queue (`dvd/mem_req_prefetch.sv`) on
+the request FIFO's read side. 7 of 7 seeds then cleared `clk_mem` (≥ 94.2 MHz); SEED 17
+`clock_check` PASS with 0 warnings (`docs/status_log.md` "clk_mem retime").

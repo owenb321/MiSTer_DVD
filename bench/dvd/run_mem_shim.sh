@@ -60,6 +60,10 @@ done
 # while idle). It also fails on a coverage hole: any retimed path the stimulus never hit.
 # The request-FIFO queue (dvd/mem_req_prefetch.sv) is outside this module and has its own
 # gate: bench/dvd/run_mem_prefetch.sh.
+# ⚠ The coverage block in mem_shim_ab_tb.sv reads the REFERENCE's internals by name
+# (pk_valid, sA_slow, pA_rd_miss, pA_wr_fast). pk_valid is gone since the pk->sk merge
+# (691288a): moving RETIME_BASE past it means dropping cv_both / cv_peek_pk /
+# cv_pk_consume, or re-pointing those counters at the new names.
 # ⚠ This arm pins one intended-no-op change. A later change to mem_shim_burst that is
 # MEANT to alter timing will fail it: move RETIME_BASE to that change's parent, or drop
 # the arm, and say which in the commit.
