@@ -700,7 +700,7 @@ game discs plus a seeded random 100; numbers and method in
 which would give auto 16:9 switching on PAL widescreen CRTs.
 **⛔ by decision 2026-10-01:** UOP enforcement, APS (Macrovision) and CGMS-A.
 
-### 🔧 clk_mem retime: the speculative pop off the critical path (2026-10-09, `feature/clkmem-retime`, unmerged — `docs/status_log.md` "clk_mem retime")
+### ✅ clk_mem retime: the speculative pop off the critical path (2026-10-09, ✅ MERGED PR #171; HW A/B = `main` — `docs/status_log.md` "clk_mem retime")
 
 - [x] `mem_shim_burst`: pk merged into sk, one comparator per consumer, data loads off the
       stage-A verdict; LOCKSTEP 0 mismatches, coverage-gated, 4 new RED arms.

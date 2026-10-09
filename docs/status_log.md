@@ -22,9 +22,9 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- ✅ **CLK_MEM RETIME: THE SPECULATIVE POP OFF THE CRITICAL PATH (2026-10-09,
-  `feature/clkmem-retime`; sim-proven, every seed of a 7-seed sweep clears 90 MHz, HW A/B
-  equal to `main`; unmerged).** The follow-up PR #157 left open ("retime the
+- ✅ **CLK_MEM RETIME: THE SPECULATIVE POP OFF THE CRITICAL PATH (2026-10-09, ✅ MERGED
+  PR #171; sim-proven, every seed of a 7-seed sweep clears 90 MHz, HW A/B equal to `main`
+  on the rig).** The follow-up PR #157 left open ("retime the
   speculative-pop cluster").
   - **Why:** `clk_mem` (90 MHz) closed by placement luck. v0.9.0's SEED 5 cleared by
     +0.016 ns, the rebase onto PR #169 re-rolled it to 82.67 MHz, and PR #170's 7-seed sweep

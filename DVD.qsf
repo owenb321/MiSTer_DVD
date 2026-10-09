@@ -1616,7 +1616,7 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 #   SEED  3: 90.63/87.98 | 89.76/90.29
 # SEED 13 pinned: clears both at both corners, and the best clk_dec of the seven (SEED 11
 # also clears both, with less margin). The sweep wrote SEED 3 here, the last one it fitted.
-# CLK_MEM RETIME (2026-10-09, feature/clkmem-retime: mem_shim_burst off the stage-A verdict +
+# CLK_MEM RETIME (2026-10-09, PR #171: mem_shim_burst off the stage-A verdict +
 # dvd/mem_req_prefetch.sv on the request FIFO's read side). clk_dec / clk_mem @100C / @-40C:
 #   SEED 13: 92.21/88.98 | 97.76/98.67   SEED  1: 93.02/90.46 | 99.57/99.38
 #   SEED  5: 91.01/88.77 | 94.20/95.78   SEED  7: 91.04/88.79 | 100.99/101.31
