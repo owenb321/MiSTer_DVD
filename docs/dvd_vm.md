@@ -764,7 +764,7 @@ Residents maze is enterable; Dinosaur's bonus-feature navigation, other menus an
 minigame all work; three of the six recovered discs confirmed booting. Expected to fix
 the box set's menu failures (sim-verified above, not yet run on hardware).
 
-## Title key on a disc with no Title menu — audit 10b (2026-10-09, `feature/title-noentry`) — ✅ HW A/B vs `main`, ⏳ merge
+## Title key on a disc with no Title menu — audit 10b (2026-10-09) — ✅ HW A/B vs `main`, ✅ MERGED (PR #173)
 
 **The defect.** On 88 of 1,521 library discs (5.8 %) the VMGM PGCI_UT exists but has no
 entry-2 (Title) PGC; the Sony/Columbia authoring of SPIDER-MAN_2, PANIC_ROOM_SUPERBIT and

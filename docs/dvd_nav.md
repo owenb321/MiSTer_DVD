@@ -4859,7 +4859,7 @@ the in-title PCI/HLI **button highlight** (the white-rabbit *icon* itself; `nav_
 in-title but the subpicture-graphic plumbing in `emu.sv` is menu-gated → renders "white on
 white"), and the transport-HUD-overlaps-subtitle bug (MiB visual commentary).
 
-## Mount-time VMGM Title-entry probe (audit 10b, 2026-10-09) — ✅ HW A/B vs `main`, ⏳ merge (`feature/title-noentry`)
+## Mount-time VMGM Title-entry probe (audit 10b, 2026-10-09) — ✅ HW A/B vs `main`, ✅ MERGED (PR #173)
 
 With Disc Menus on and a VMGI present, the mount no longer raises `nav_ready` in
 `S_FINALIZE`. It first runs the `DOM_VMGM` jump's walk at entry 2 with `probe` set

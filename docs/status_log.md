@@ -23,7 +23,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 ## Hardware status (THIS fork, verified 2026-06-21)
 
 - ✅ **TITLE KEY ON A DISC WITH NO TITLE MENU IS A NO-OP (audit 10b, 2026-10-09,
-  `feature/title-noentry`; sim-green, ✅ HW A/B against its own control; ⏳ merge).**
+  ✅ MERGED PR #173; sim-proven, ✅ HW A/B against its own control).**
   - **The defect.** 88 of 1,521 library discs author a VMGM PGCI_UT with no entry-2 (Title)
     PGC (Sony/Columbia authoring writes every VMGM entry id as 0x00: SPIDER-MAN_2,
     PANIC_ROOM_SUPERBIT, TOKYO_GODFATHERS). The reader's entry scan missed and took SRP[0],

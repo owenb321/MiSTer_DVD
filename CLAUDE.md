@@ -390,7 +390,7 @@ otherwise; `--red` runs its mutation arms).
 | Chapter skip at the title's edges: Next → POST, Prev → `prev_pgcn` (audit 7) | ✅ HW (vs libdvdnav), MERGED PR #158 | `dvd_nav.md` | `run_chap_edge.sh --red`, `check_chap_edge_wiring.py` |
 | `.BUP` fallback (audit 8): fabric IFO header gate; Main mirrors unreadable IFO sectors | ✅ HW (fabric A/B vs `main`; Main mirror on a physical disc), MERGED PR #163 | `dvd_nav.md` "IFO header gate" | `run_bup.sh --red`, `main/tests` [21]–[29] |
 | Library sweep vs libdvdnav found SPRM6/7 frozen + no-FP-PGC boot: both fixed (+ 0xFF still holds before a non-loop cell command) | ✅ HW, MERGED PR #169 | `nav_engine.md` §5a | `run_sprm67.sh --red` |
-| Title key on a disc with no Title menu is a no-op (audit 10b): mount-time VMGM probe, `emu.sv` key gate | ✅ HW A/B vs `main` (SPIDER-MAN_2, PANIC_ROOM; T2 positive control), ⏳ merge (`feature/title-noentry`) | `dvd_vm.md` "Title key on a disc with no Title menu" | `run_title_probe.sh --red`, `check_title_key_wiring.py` |
+| Title key on a disc with no Title menu is a no-op (audit 10b): mount-time VMGM probe, `emu.sv` key gate | ✅ HW A/B vs `main` (SPIDER-MAN_2, PANIC_ROOM; T2 positive control), MERGED PR #173 | `dvd_vm.md` "Title key on a disc with no Title menu" | `run_title_probe.sh --red`, `check_title_key_wiring.py` |
 
 ### Transport, HUD and input
 
@@ -489,7 +489,7 @@ otherwise; `--red` runs its mutation arms).
 
 - ❌ HD output (720p/1080p): fixed 27 MHz SD dot clock.
 - ❌ UDF-only images, parental control.
-- ⏳ 3rd-ed. audit tail (1–8 shipped, 10b on a branch): `docs/roadmap.md` "2026-10-01 spec-audit".
+- ⏳ 3rd-ed. audit tail (1–8 and 10b shipped): `docs/roadmap.md` "2026-10-01 spec-audit".
 - ❌ Trick play (continuous 2×/4×): needs a flush-free I-frame splice (`docs/dvd_nav.md` §2d).
 - ⚠ `lates` counts one per refresh while a PGC still is held, so boot/menu windows
   over-report (`docs/decode_pacing.md` §2c). Real lates are 0 on the census set since F1 +
