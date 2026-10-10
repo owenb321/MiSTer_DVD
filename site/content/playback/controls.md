@@ -267,6 +267,8 @@ the disc provides one.
 
 **B5 (Menu)** and **B12 (Title)** are the two menu keys a set-top remote has. Menu goes to
 the disc's root menu; Title goes to the title menu. Many discs make them the same thing.
+Some discs have no title menu at all, and on those **Title does nothing**, as on a set-top
+player. Use Menu instead.
 
 If no button is highlighted, **Select does nothing**, with one exception: on a
 [still picture with nothing to select](#still-pictures) it moves the disc on. To get back

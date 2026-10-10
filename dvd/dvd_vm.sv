@@ -33,7 +33,14 @@
 //   key_menu        -> title: synthesized CallSS VTSM Root; menu: LinkRSM
 //   (Select with no buttons armed is a STRICT NO-OP - see the ev_menu handler)
 //   key_title       -> VMGM Title menu (entry 2), the real-remote TITLE key;
-//                      from a title also saves RSM (Menu/Select toggle back)
+//                      from a title also saves RSM (Menu/Select toggle back).
+//                      Only ever raised on a disc that HAS a Title menu: emu.sv
+//                      drops the key when the reader's mount probe found no
+//                      VMGM entry-2 PGC (audit 10b, libdvdnav vm_jump_menu), so
+//                      on such a disc it is a strict no-op that never reaches
+//                      here. (Before: the reader's scan missed and fell back to
+//                      VMGM PGC 1 -- usually the boot logos. A scan miss does
+//                      NOT raise pgc_error; only a missing VMGI/PGCI_UT does.)
 //   key_cmenu       -> VTSM Chapter/PTT menu (entry 7), the remote's scene-
 //                      selection key. Measured on 956 library discs: 401 (42%)
 //                      author one, so the no-menu path is the COMMON case and
@@ -50,7 +57,10 @@
 //                      stopped VM as failure), so its vm_adv is masked.
 //   pgc_error       -> fallback chain (own VTSM -> best-menu-VOB VTSM ->
 //                      VMGM Title -> resume/auto title), ported from the
-//                      Phase-2/3 emu glue this module replaces.
+//                      Phase-2/3 emu glue this module replaces. It runs only when
+//                      a jump fails outright (no VMGI / VTSI / PGCI_UT, PGCN out
+//                      of range): a menu ENTRY miss is not an error, the reader
+//                      takes the domain's PGC 1 (S_SRP_EVAL).
 //
 // Every reader-wait event (vm_cell_cmd / vm_pgc_end) is ALWAYS answered with
 // exactly one of: vm_adv (continue authored behaviour), vm_replay (replay

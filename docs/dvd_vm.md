@@ -417,7 +417,7 @@ Events, serviced one at a time from V_IDLE (all latched):
 | `btn_cmd_valid` | run the button's command (directly from the 64-bit register) |
 | `key_menu` | title: synthesized `CallSS VTSM Root` (sets `came_via_menukey`); menu: `LinkRSM` **only if `came_via_menukey`** (the movie menu↔title toggle), else re-invoke `CallSS VTSM Root`. The **first** menu invocation of a mount retargets to `best_menu_vts` — see "Boot-chain menu shortcut" below |
 | ~~`key_resume`~~ | **RETIRED 2026-09-17.** Select with no buttons armed is a strict no-op and the port is gone; `key_menu` owns the resume toggle. See "Select during a menu transition" below |
-| `key_title` | B12 "Title" (the real-remote **Top Menu** key) — **✅ HW-CONFIRMED 2026-07-31 (PR fj#152)**: jump to the **VMGM Title menu** (entry 2) from anywhere. From a playing title also saves RSM + sets `came_via_menukey` (Menu/Select toggle back, like `key_menu`); from a menu it jumps **without touching RSM or the toggle** — a disc-driven menu's RSM is the boot trampoline and must not be re-blessed. `fb=FB_VMGM` (no VMGM Title entry → resume/auto-title). Tests: `dvd_vm_tb` [S17], `iso_reader_cluedo_menu_tb` [B] |
+| `key_title` | B12 "Title" (the real-remote **Top Menu** key) — **✅ HW-CONFIRMED 2026-07-31 (PR fj#152)**: jump to the **VMGM Title menu** (entry 2) from anywhere. From a playing title also saves RSM + sets `came_via_menukey` (Menu/Select toggle back, like `key_menu`); from a menu it jumps **without touching RSM or the toggle** — a disc-driven menu's RSM is the boot trampoline and must not be re-blessed. `fb=FB_VMGM` (the jump fails outright: no VMGI / PGCI_UT → resume/auto-title). **On a disc with no VMGM entry 2 the key never reaches the VM** (audit 10b): see "Title key on a disc with no Title menu" below. Tests: `dvd_vm_tb` [S17], `iso_reader_cluedo_menu_tb` [B], `run_title_probe.sh` |
 | `key_return` | B13 "Return" (**GoUp**, libdvdnav `dvdnav_go_up`) — **✅ HW-CONFIRMED 2026-07-31 (PR fj#152)**: in-domain jump to the loaded PGC's authored `goup_pgcn` — the menu hierarchy's "one level up" pointer; mirrors the `LinkGoUpPGC` command exec (`fb=FB_NONE`). `goup_pgcn==0` (no authored parent — most discs, 16/22 in the library census) = strict no-op. HW: Atmosfear submenus return properly; Akira's goup targets its Root DISPATCHER whose fall-through is `RSM`, so Return there resumes the title (mid-film) or replays the boot warning (post-boot) — **authored**, identical under libdvdnav. Test: `dvd_vm_tb` [S18] |
 | `key_chedge` | The reader's **title-edge** chapter key (audit item 7, ✅ HW-CONFIRMED 2026-10-05 against libdvdnav). Pulsed only with Disc Menus on, in a title, when a chapter burst has nowhere left to go. **Next** (`key_chedge_dir`=1): run this PGC's POST as a **user** chain, shaped like a button's LinkTailPGC (`nat_src=0`, so the jump is immediate). A fall-through, or no POST, follows `next_pgcn` (`play_PGC_post`); a chain ending with no jump (Exit, `next_pgcn` 0) is a strict no-op. **Prev** (0): jump to `prev_pgcn` at its **last** program (`jump_pgn` 0xFF), `vm_jump_prev_pg`. `usr_edge` masks `vm_adv` for the chain, so a no-op can't answer a cell-command wait. Ignored while a menu is up. A natural `ev_pgcend`, or a new PGC's load, drops a pending press. See `docs/dvd_nav.md` "Chapter skip at the title's edges". Test: `dvd_vm_tb` [S27] |
 
@@ -764,10 +764,74 @@ Residents maze is enterable; Dinosaur's bonus-feature navigation, other menus an
 minigame all work; three of the six recovered discs confirmed booting. Expected to fix
 the box set's menu failures (sim-verified above, not yet run on hardware).
 
+## Title key on a disc with no Title menu — audit 10b (2026-10-09, `feature/title-noentry`)
+
+**The defect.** On 88 of 1,521 library discs (5.8 %) the VMGM PGCI_UT exists but has no
+entry-2 (Title) PGC; the Sony/Columbia authoring of SPIDER-MAN_2, PANIC_ROOM_SUPERBIT and
+TOKYO_GODFATHERS writes every VMGM entry id as 0x00. The Title key jumps `VMGM entry 2`;
+the reader's entry scan missed and fell back to SRP[0], VMGM PGC 1. That is the boot chain
+on 84 of the 88, so Title replayed the opening logos (14 s typical, up to 28 s) before the
+main menu; on 20 of them PGC 1 has no cells and Title acted like Menu.
+
+**What a player does.** The key is a no-op. libdvdnav's `vm_jump_menu` returns 0 and
+restores the domain when `get_PGCIT && set_MENU` fails, and also when the VMGM has no
+PGCI_UT at all; the book (3rd ed. p. 9-26, quoting the spec) says the transition "is not
+actually executed".
+
+**Why it is decided at mount, not at the press.** Any jump cuts the stream the cycle it
+executes (`jump_ack` → load_flush + vbuf_flush), before the reader's IFO walk can see the
+miss. A "miss → `pgc_error` → resume RSM" would flush and restart at the saved *cell*
+start, a visible jump back. So:
+
+- **The reader probes once per mount** (`S_FINALIZE`, Disc Menus on, VMGI present). It runs
+  the `DOM_VMGM` jump's own walk at entry 2 with `probe` set: the region-mask capture, the
+  .BUP header gate, VMGI@200, the PGCI_UT, the SPRM0 language-unit pick, the PGCIT and the
+  entry scan, so the probe and a real jump can never disagree about which unit they read.
+  The probe arms: `S_JMP_VMGI` skips `S_MENU_VATR` (it writes the live menu-aspect
+  outputs); `S_SRP_EVAL` takes the verdict first (match → `vmgm_title_ok`, exhaustion →
+  done, never the SRP[0] fallback); the error exits do not raise `pgc_error`; `dom` stays
+  `DOM_TT` so `menu_active` never rises, with `|| probe` on the one empty-PGCIT test that
+  would otherwise take the linear-title fallback. Every exit lands in `S_DONE`, the one
+  finish point, which sets `vmgm_probed` and raises `nav_ready`, so the VM boots exactly as
+  before, a few sector reads later.
+- **`emu.sv` drops the key** unless `vmgm_title_ok`. The VM never sees the press, so
+  `TITLE_RSM` saves no resume point and arms no Menu toggle: a true no-op. No microcode
+  change; `run_vm_ab.sh` still compares against the old FSM unchanged.
+- **Telemetry word 14** bit 13 = `vmgm_probed`, bit 14 = `vmgm_title_ok` (`flags.title_probed`
+  / `flags.title_menu` in the Main's JSON, `mister.py telem` → `title`, a `DVD_CTL` log line
+  per mount). Two bits so "the probe never ran" reads differently from "no Title menu".
+
+**Decisions and boundaries.**
+- An entry-2 SRP with a malformed `pgc_start` counts as a Title menu (libdvdnav's `get_ID`
+  needs only the entry); the real jump then fails into `FB_VMGM` as it always has.
+- A disc with **no VMGI, or no VMGM PGCI_UT**, also gets `title_ok` 0, so Title is a strict
+  no-op there too. Before, the jump failed and `FB_VMGM` resumed the title from its cell
+  start (or booted the auto title). That matches `vm_jump_menu`'s `vmgi == NULL` /
+  `pgci_ut == NULL` return; it is not a lost fallback.
+- **VM-command jumps keep the SRP[0] fallback** (a disc's own `JumpSS`/`CallSS VMGM` entry 2
+  is unchanged; bench arm G). Only the user key is gated.
+- **The Chapter Menu key keeps its fallback** to the main menu (HW-measured, in the manual;
+  1,387 discs author no chapter menu, so the strict no-op would make the key dead on most
+  discs). The Menu key's miss case is 0 discs in the library.
+- Title from the **First Play domain** (during the boot logos) still jumps; libdvdnav ignores
+  it there (`vm_jump_menu`'s FP case is a FIXME). Not changed: it is how users skip logos.
+- Side effect: the probe leaves the reader's PGCIT cursor (`pit_sec`/`pit_off`/`nr_srp_l`)
+  on the VMGM PGCIT instead of the previous disc's leftovers (they are not reset at mount).
+  Only an FP-domain LinkPGCN reads it, which the spec does not allow; it now resolves
+  through the VMGM PGCIT, as libdvdnav's `get_PGCIT` does for First Play.
+- Cost: the VMGI sector 0, the PGCI_UT and the PGCIT (often one sector) read before First
+  Play, tens of ms on SD, ≲ 100 ms on a physical drive.
+
+**Gates.** `bench/dvd/run_title_probe.sh --red` (`iso_reader_titleprobe_tb` arms A–H plus the
+reader benches that mount with a VMGI; 16 mutations, each failing exactly its arms);
+`tools/check_title_key_wiring.py --red` (the key gate, the port, word 14, the Main's reads).
+
 ## Reader coupling (`dvd_iso_reader.sv`, `vm_mode` input = O[1])
 
 - **Mount**: after the VIDEO_TS walk the reader **idles in S_DONE** (no auto-play);
-  the VM boots FP. With menus Off everything behaves exactly as Phase 3.
+  the VM boots FP. With menus Off everything behaves exactly as Phase 3. With a VMGI,
+  the reader first runs the **Title-entry probe** (audit 10b, below) and raises
+  `nav_ready` only when it ends.
 - **S_VM_WAIT**: cell end with `cell_cmd_nr != 0` → pulse + wait (the Phase-3
   armed-button cell-loop heuristic is bypassed — the VM executes the real command);
   PGC end → **drain the cache first, and (title domain) wait for the decoder VBUF
@@ -806,7 +870,7 @@ Karaoke/audio-mix modes, parental enforcement (SetTmpPML stores the level), NVTM
 (un-referenced — see "DVD-game entropy"), UOP enforcement (⛔ by decision, 2026-10-01,
 `docs/conformance.md` §1.5), TTN reverse-lookup on JumpSS_VTSM (SPRM4 kept).
 The open items from the 2026-10-01 3rd-edition audit are random PGC playback, the
-Title/Menu key edge cases and `auto_action`. They are ranked in `docs/roadmap.md`
+second-Title-press resume (10a) and `auto_action`. They are ranked in `docs/roadmap.md`
 "2026-10-01 spec-audit".
 *(Since shipped and removed from this list: angle blocks with SPRM3 from the VM, PTT
 exactness via `VTS_PTT_SRPT` (PR fj#127), and language-unit selection by SPRM0 (PR fj#176).)*

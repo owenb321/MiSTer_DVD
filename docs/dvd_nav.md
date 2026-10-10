@@ -4859,6 +4859,18 @@ the in-title PCI/HLI **button highlight** (the white-rabbit *icon* itself; `nav_
 in-title but the subpicture-graphic plumbing in `emu.sv` is menu-gated → renders "white on
 white"), and the transport-HUD-overlaps-subtitle bug (MiB visual commentary).
 
+## Mount-time VMGM Title-entry probe (audit 10b, 2026-10-09) — 🔧 sim-green, ⏳ HW (`feature/title-noentry`)
+
+With Disc Menus on and a VMGI present, the mount no longer raises `nav_ready` in
+`S_FINALIZE`. It first runs the `DOM_VMGM` jump's walk at entry 2 with `probe` set
+(VMGI s0 through the header gate → @200 → PGCI_UT → language unit → PGCIT → entry scan),
+records `vmgm_title_ok`, and raises `nav_ready` from `S_DONE`, which is the probe's only
+exit. Nothing live moves: `dom` stays `DOM_TT` (no `menu_active`), `S_MENU_VATR` is skipped,
+no `pgc_error`, no PGC taken. `emu.sv` uses the flag to make the Title key a no-op on a disc
+with no Title menu. The why, the decisions and the gates are in `docs/dvd_vm.md` "Title key
+on a disc with no Title menu"; the SRP[0] fallback in `S_SRP_EVAL` now serves VM-command
+jumps only.
+
 ## IFO header gate and .BUP fallback (audit item 8, 2026-10-06) — ✅ HW-CONFIRMED A/B vs `main`; the Main mirror ✅ HW on a physical disc; ✅ MERGED (PR #163)
 
 The 2026-10-01 *DVD Demystified* audit, item 8: *"No `.BUP` fallback when an IFO is

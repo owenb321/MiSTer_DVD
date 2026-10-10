@@ -154,6 +154,14 @@ module dvd_iso_reader #(
     output reg        ifo_bup_vmg,    // VIDEO_TS.IFO header bad -> VIDEO_TS.BUP in use
     output reg        ifo_bup_vts,    // a VTS_xx_0.IFO header bad -> its .BUP in use
     output reg        ifo_nogood,     // a header bad and no good .BUP: parsed as before
+    // Title-menu probe (audit 10b). With Disc Menus on, the mount walks the VMGM
+    // PGCI_UT once, before nav_ready rises, and records whether an entry-2 (Title)
+    // PGC exists. emu.sv drops the Title key without one: libdvdnav's vm_jump_menu
+    // returns without jumping, and a jump issued here would already have flushed the
+    // stream before the miss could be seen. Sticky per mount; telemetry word 14
+    // bits 13-14. probed = 0 says the probe never ran (no VMGI, or Disc Menus off).
+    output reg        vmgm_probed,    // the probe ran to its end this mount
+    output reg        vmgm_title_ok,  // ...and found a VMGM entry-2 (Title) PGC
     // Chapter (PTT) skip (Phase 8): jump to the previous/next chapter boundary.
     // Resolved in-fabric from the PGC program_map (chapter -> entry cell) against
     // the current cell, then executed via the seek_cell primitive. Title only.
@@ -1225,6 +1233,11 @@ reg [3:0]  want_entry;                // menu entry type to scan for
 reg [6:0]  want_ttn;                  // title number to scan for (TT domain)
 reg        scan_mode;                 // 1 = S_SRP_EVAL is entry-scanning
 reg        scan_title;                // 1 = the scan matches TITLE numbers
+// The mount's VMGM Title-entry probe (audit 10b, S_FINALIZE): the VMGM jump's
+// own walk (VMGI@200 -> PGCI_UT -> language unit -> PGCIT -> entry scan) run with
+// dom left at DOM_TT, so menu_active never rises. It never takes a PGC: the scan's
+// verdict sets vmgm_title_ok and every exit lands in S_DONE, which finishes it.
+reg        probe;
 // Auto (Disc Menus off) longest-PGC scan - see S_PGCIT_HDR. Walks the title
 // PGCIT reading each PGC's playback_time (PGC@4..7), then re-takes the longest.
 localparam DUR_SCAN_MAX = 16'd128;    // PGCs scanned; a feature is never past this
@@ -2562,6 +2575,9 @@ always @(posedge clk or negedge rst_n) begin
         ifo_bup_vmg  <= 1'b0;
         ifo_bup_vts  <= 1'b0;
         ifo_nogood   <= 1'b0;
+        probe        <= 1'b0;
+        vmgm_probed  <= 1'b0;
+        vmgm_title_ok <= 1'b0;
         // Phase-10: default to unconstrained (8) so pre-parse / linear playback
         // behaves exactly as before; the S_ATTR sweep tightens it per title.
         // Title-level state: reset ONLY here (rst_n), never on a per-seek pipe
@@ -3177,6 +3193,9 @@ always @(posedge clk or negedge rst_n) begin
             ifo_bup_vmg     <= 1'b0;   // sticky per mount (telemetry word 14)
             ifo_bup_vts     <= 1'b0;
             ifo_nogood      <= 1'b0;
+            probe           <= 1'b0;
+            vmgm_probed     <= 1'b0;   // sticky per mount (telemetry word 14)
+            vmgm_title_ok   <= 1'b0;
             grp_mnu_lba     <= 32'd0;
             grp_mnu_blk     <= 32'd0;
             pending_ifo_vts <= 8'hFF;
@@ -3838,7 +3857,11 @@ always @(posedge clk or negedge rst_n) begin
 
             // ------------------------------------------------------------
             S_FINALIZE: begin
-                nav_ready <= 1'b1;              // VM jumps accepted from here on
+                // VM jumps accepted from here on -- or, with Disc Menus on and a
+                // VMGI, once the Title-entry probe below has finished (S_DONE).
+                // The VM boots on nav_ready's rise, so the probe runs before First
+                // Play and nothing it touches is live yet.
+                nav_ready <= !(vm_mode && vmgi_found);
                 if (grp_valid && grp_total > best_total) begin
                     best_total   <= grp_total;
                     best_base    <= grp_base;
@@ -3879,7 +3902,34 @@ always @(posedge clk or negedge rst_n) begin
                 // DVD-VM boots the disc (First Play PGC) - nothing auto-plays.
                 // The VM's fallback chain ends in a TT jump to auto_vts, so a
                 // broken FP still reaches this same title selection.
-                if (vm_mode) begin
+                //
+                // ★ TITLE-ENTRY PROBE (audit 10b). Before it idles, the reader asks
+                // the VMGM whether it has a Title menu: the DOM_VMGM jump's own walk
+                // at entry 2, with `probe` set. On 88 of 1,521 library discs (5.8 %)
+                // the VMGM PGCI_UT has no entry-2 PGC; the jump's scan then fell back
+                // to SRP[0], VMGM PGC 1, which is the boot chain on 84 of them, so the
+                // Title key replayed the opening logos (or, with a cell-less PGC 1,
+                // acted like Menu). libdvdnav's vm_jump_menu and the book (3rd ed.
+                // p. 9-26) make the key a no-op instead. That cannot be decided when
+                // the key is pressed: jump_go cuts the stream before the IFO walk
+                // starts. So it is decided here, once per mount, and emu.sv drops
+                // the key when vmgm_title_ok is 0. dom stays DOM_TT throughout (so
+                // menu_active does not rise); the walk's `probe` arms are in
+                // S_JMP_VMGI, S_PGCIT_HDR and S_SRP_EVAL, and S_DONE finishes it.
+                // Cost: the VMGI sector 0, the PGCI_UT and the PGCIT (often one
+                // sector) read before First Play.
+                if (vm_mode && vmgi_found) begin
+                    probe       <= 1'b1;
+                    want_pgcn   <= 16'd0;
+                    want_entry  <= 4'd2;           // VMGM entry 2 = Title
+                    sec_base    <= vmgi_lba;
+                    sec_off     <= 32'd0;
+                    fetch_base  <= 11'd32;         // region mask first, as the jump does
+                    vmgcat_base <= 11'd200;        // then VMGI@200 = VMGM_PGCI_UT
+                    fetch_ret   <= S_VMG_CAT;
+                    hdr_chk     <= HC_VMG;         // VMGI sector 0: header gate
+                    state       <= S_SECREAD;
+                end else if (vm_mode) begin
                     state <= S_DONE;
                 end else if (title_sel != 7'd0) begin
                     target_vtsn <= {1'd0, title_sel};
@@ -4288,8 +4338,8 @@ always @(posedge clk or negedge rst_n) begin
             S_PGCIT_HDR: begin
                 nr_srp_l <= nr_pgci_srp;
                 if (nr_pgci_srp == 16'd0) begin
-                    if (dom != DOM_TT) begin
-                        pgc_error <= 1'b1;
+                    if (dom != DOM_TT || probe) begin  // probe: dom is TT, PGCIT a menu's
+                        if (!probe) pgc_error <= 1'b1;
                         state     <= S_DONE;
                     end else
                         state <= S_FINAL2;             // no PGCs -> linear title
@@ -4344,6 +4394,8 @@ always @(posedge clk or negedge rst_n) begin
                     // Phase-4: title PGCITs are scanned by TITLE number
                     // (entry bit7 + low7 == want_ttn), menu PGCITs by menu
                     // entry type (bit7 + low nibble == want_entry).
+                    // (The Title-entry probe runs with dom == DOM_TT; its own arm in
+                    // S_SRP_EVAL matches entry types and never reads scan_title.)
                     scan_title <= (dom == DOM_TT);
                     state      <= S_SRP_FETCH;
                 end
@@ -4364,8 +4416,28 @@ always @(posedge clk or negedge rst_n) begin
             // SRP with entry bit7 set and the low nibble == want_entry; if the
             // scan exhausts, fall back to SRP[0] (= PGCN 1). Taking: position
             // the PGC (pgc_start_byte@4 rel. PGCIT) and read its header.
+            // ⚠ Since audit 10b the SRP[0] fallback serves VM-command jumps only
+            // (a disc's own JumpSS/CallSS VMGM entry 2 keeps it). The Title KEY
+            // never reaches a miss: emu.sv drops it when the mount's probe (the
+            // `probe` arm below) found no entry-2 PGC.
             S_SRP_EVAL: begin
-                if (scan_mode && !(srp_entry_id[7] &&
+                if (probe) begin
+                    // Title-entry probe (S_FINALIZE): the same match rule as the
+                    // jump's menu scan, but its verdict is the whole answer -- no
+                    // SRP[0] fallback, no PGC taken. Ahead of the malformed-start arm
+                    // on purpose: an entry-2 SRP is a Title menu as far as the key is
+                    // concerned (libdvdnav's get_ID needs only the entry_id), and a
+                    // jump to a malformed one fails into the VM's FB_VMGM chain as it
+                    // always has.
+                    if (srp_entry_id[7] && srp_entry_id[3:0] == want_entry) begin
+                        vmgm_title_ok <= 1'b1;
+                        state         <= S_DONE;
+                    end else if (srp_i + 16'd1 < nr_srp_l && srp_i != 16'hFFFF) begin
+                        srp_i <= srp_i + 16'd1;
+                        state <= S_SRP_FETCH;
+                    end else
+                        state <= S_DONE;               // no Title entry
+                end else if (scan_mode && !(srp_entry_id[7] &&
                                    (scan_title ? (srp_entry_id[6:0] == want_ttn)
                                                : (srp_entry_id[3:0] == want_entry)))) begin
                     if (srp_i + 16'd1 < nr_srp_l && srp_i != 16'hFFFF) begin
@@ -6008,8 +6080,17 @@ always @(posedge clk or negedge rst_n) begin
                     fi_cap_v      <= 1'b0;
                     state         <= S_FETCH;          // parse_buf still holds VMGI_MAT
                 end else if (vts_pgcit_ptr == 32'd0 || vts_pgcit_ptr > 32'd1048575) begin
-                    pgc_error <= 1'b1;
+                    if (!probe) pgc_error <= 1'b1;     // probe: no PGCI_UT = no Title menu
                     state     <= S_DONE;
+                end else if (probe) begin
+                    // Title-entry probe: straight to the PGCI_UT. S_MENU_VATR is
+                    // skipped because it writes the menu aspect outputs.
+                    jmp_ut_lba <= vmgi_lba + vts_pgcit_ptr;
+                    sec_base   <= vmgi_lba + vts_pgcit_ptr;
+                    sec_off    <= 32'd0;
+                    fetch_base <= 11'd0;
+                    fetch_ret  <= S_UT_HDR;
+                    state      <= S_SECREAD;
                 end else if (dom == DOM_FP) begin
                     // FP PGC: byte offset rel. to the VMGI start
                     cur_pgcn   <= 8'd0;
@@ -6089,7 +6170,7 @@ always @(posedge clk or negedge rst_n) begin
             S_UT_HDR: begin
                 if (ut_nr_lus == 16'd0 || ut_nr_lus > 16'd99 ||
                     ut_lu0_start < 32'd8 || ut_lu0_start > 32'd2097151) begin
-                    pgc_error <= 1'b1;
+                    if (!probe) pgc_error <= 1'b1;     // probe: bad UT = no Title menu
                     state     <= S_DONE;
                 end else if (ut_nr_lus == 16'd1) begin
                     ld_pit     <= 1'b1;   // pit_sec <= this read's sector (loaded next cycle)
@@ -6143,7 +6224,16 @@ always @(posedge clk or negedge rst_n) begin
             end
 
             // ------------------------------------------------------------
-            S_DONE:  ;
+            // Every exit of the Title-entry probe (S_FINALIZE) lands here, found or
+            // not, error or not: this is its one finish point. nav_ready's rise then
+            // boots the VM exactly as it did when S_FINALIZE raised it. (The scan
+            // flags the probe leaves set need no clearing: jump_go clears them, and
+            // nothing reaches S_SRP_FETCH before the VM's first jump.)
+            S_DONE: if (probe) begin
+                probe       <= 1'b0;
+                vmgm_probed <= 1'b1;
+                nav_ready   <= 1'b1;
+            end
             S_ERROR: ;
             default: state <= S_IDLE;
             endcase

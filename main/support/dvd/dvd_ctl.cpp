@@ -178,8 +178,12 @@ static void telem_read()
 		// reader now reads its .BUP; flags.ifo_nogood = a header was bad with no
 		// good .BUP (docs/dvd_nav.md "IFO header gate"; word 14 bits 10/11/12,
 		// sticky per mount, 0 on a core without the feature).
+		// flags.title_probed = the mount's VMGM Title-entry probe ran; flags.title_menu
+		// = it found an entry-2 (Title) PGC, so the Title key is live -- 0 with
+		// title_probed 1 means the key is a no-op on this disc (audit 10b,
+		// docs/dvd_vm.md "Title key"; word 14 bits 13/14, sticky per mount).
 		"\"still\":%u,\"menu\":%u,\"blend\":%u,\"tmap\":%u,\"tmap_fb\":%u,\"bob\":%u,\"rgn_allp\":%u,"
-		"\"bup_vmg\":%u,\"bup_vts\":%u,\"ifo_nogood\":%u}}\n",
+		"\"bup_vmg\":%u,\"bup_vts\":%u,\"ifo_nogood\":%u,\"title_probed\":%u,\"title_menu\":%u}}\n",
 		t, duty, w[1], w[2], w[3], w[4],
 		(int)(int16_t)w[5],                       // vid_err is SIGNED
 		(int)((w[6] >> 11) & 0x1F) - (((w[6] >> 15) & 1) ? 32 : 0),
@@ -198,7 +202,8 @@ static void telem_read()
 		(unsigned)((w[7] >> 6) & 1), (unsigned)((w[7] >> 7) & 1),
 		(unsigned)((w[14] >> 8) & 1), (unsigned)((w[14] >> 9) & 1),
 		(unsigned)((w[14] >> 10) & 1), (unsigned)((w[14] >> 11) & 1),
-		(unsigned)((w[14] >> 12) & 1));
+		(unsigned)((w[14] >> 12) & 1),
+		(unsigned)((w[14] >> 13) & 1), (unsigned)((w[14] >> 14) & 1));
 	if (len <= 0 || len >= (int)sizeof(line)) return;
 
 	// The IFO header gate's flags are sticky per mount: log each one's rising edge
@@ -209,6 +214,15 @@ static void telem_read()
 	if (ifo_now & ~ifo_seen & 2) ctl_log("DVD_CTL: a VTS_xx_0.IFO header bad -- reading its .BUP");
 	if (ifo_now & ~ifo_seen & 4) ctl_log("DVD_CTL: an IFO header bad and no good .BUP -- parsed as is");
 	ifo_seen = ifo_now;
+
+	// The Title-entry probe's verdict, once per mount (audit 10b): a disc with no
+	// Title menu ignores the Title key, and the log says why.
+	static unsigned title_seen = 0;
+	unsigned title_now = (w[14] >> 13) & 3;
+	if ((title_now & 1) && !(title_seen & 1))
+		ctl_log((title_now & 2) ? "DVD_CTL: VMGM has a Title menu"
+		                        : "DVD_CTL: VMGM has no Title menu -- the Title key is ignored");
+	title_seen = title_now;
 
 	// Write via a temp file and rename, so a reader never sees a half-written
 	// object. The cost is one extra tmpfs metadata op per sample.
