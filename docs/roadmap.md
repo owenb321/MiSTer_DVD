@@ -678,6 +678,21 @@ game discs plus a seeded random 100; numbers and method in
    `0x07`: random first program among 8. Shuffle is on 0 discs. libdvdnav implements
    random only (`play.c:69`).
 
+**Open, from the 2026-10-10 pre-VM rules audit** (`docs/conformance.md` "Pre-VM rules
+still active"; exposure is a static IFO scan of 1,556 images; each item waits for a user
+pick):
+
+1. **What a failed title load or jump does (A2 + A5 + A8, one decision).** The reader
+   streams a whole VTS linearly when a title load fails (no `pgc_loaded`, no POST), and
+   the VM's `E_ERROR` chain falls back through own VTSM → `best_menu_vts` → VMGM → RSM →
+   auto title; libdvdnav Exits. Static exposure: 52 discs with 0-cell command-less title
+   PGCs, 4 decoy-VTS PTT tables, 2 dangling TT_SRPT entries, 1 `JumpTT 127` (DREAMER), 1
+   out-of-range `LinkPGCN` (Sweet Home Alabama). **Next:** drive DREAMER VMGM PGC 20 and
+   ALADDIN D2 TT 37 in `nav_offline` to see whether any is reachable.
+2. **Exit does not stop (A1), low.** 0 discs author a POST Exit with a `next_pgcn`; the
+   real cases are FAME's out-of-order title guards (14 PGCs) and 276 dummy `Exit` PGCs.
+3. **A malformed cell's command never runs (A9), low.** 2 discs.
+
 **Idea, not a gap:** WSS / CPR-1204 / SCART pin-8 widescreen signalling on the analog output,
 which would give auto 16:9 switching on PAL widescreen CRTs.
 **⛔ by decision 2026-10-01:** UOP enforcement, APS (Macrovision) and CGMS-A.
