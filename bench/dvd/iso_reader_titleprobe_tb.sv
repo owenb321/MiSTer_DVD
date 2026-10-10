@@ -20,8 +20,8 @@
 //   30..31 VIDEO_TS.BUP (a copy of 19..20)
 //
 // Arms (all scored with !==; every arm: no pgc_error, ifo_nogood 0, and in a
-// vm-mode arm menu_active 0 and menu_ar_wide 0 through the mount, and nav_ready
-// never high before vmgm_probed):
+// vm-mode arm menu_active 0 and menu_ar_wide 0 through the mount, nothing
+// streamed before nav_ready, and nav_ready never high before vmgm_probed):
 //   A  SRPs {0x00, 0x82}                    probed 1, ok 1; then a VMGM entry-2
 //                                           jump plays the Title PGC (0xC1)
 //   B  SRPs {0x00, 0x00} (Sony-style ids)   probed 1, ok 0; then a VMGM entry-2
@@ -117,18 +117,21 @@ module iso_reader_titleprobe_tb;
 
     // ---- monitors (cleared at each mount) ----
     integer n_pgc_error = 0;
-    reg     ma_seen = 0, wide_seen = 0, nav_early = 0;
+    reg     ma_seen = 0, wide_seen = 0, nav_early = 0, strm_early = 0;
     reg     await_first = 0, post_v = 0;
     reg [7:0] post_byte = 0;
     always @(posedge clk) begin
         if (start) begin
             n_pgc_error = 0; ma_seen <= 0; wide_seen <= 0; nav_early <= 0;
+            strm_early <= 0;
         end else begin
             if (pgc_error) n_pgc_error = n_pgc_error + 1;
             if (menu_active === 1'b1) ma_seen <= 1'b1;
             if (menu_ar_wide === 1'b1) wide_seen <= 1'b1;
             if (vm_mode && nav_ready_w === 1'b1 && vmgm_probed !== 1'b1 &&
                 dut.vmgi_found) nav_early <= 1'b1;
+            // with Disc Menus on, nothing streams before the VM's first jump
+            if (vm_mode && nav_ready_w !== 1'b1 && stream_valid) strm_early <= 1'b1;
         end
         if (jump_ack || start) begin await_first <= 1'b1; post_v <= 1'b0; end
         else if (stream_valid && await_first) begin
@@ -266,7 +269,7 @@ module iso_reader_titleprobe_tb;
         end
     endtask
 
-    task mount(input integer shape, input vmm);
+    task mount(input [127:0] arm, input integer shape, input vmm);
         integer t;
         begin
             build(shape);
@@ -279,7 +282,7 @@ module iso_reader_titleprobe_tb;
             t = 0;
             while (nav_ready_w !== 1'b1 && t < 2000000) begin @(posedge clk); t = t + 1; end
             if (nav_ready_w !== 1'b1) begin
-                $display("FAIL: nav_ready never rose (st=%0d)", dut.state);
+                $display("FAIL %0s: nav_ready never rose (st=%0d)", arm, dut.state);
                 errors = errors + 1;
             end
             repeat (50) @(posedge clk);
@@ -310,6 +313,10 @@ module iso_reader_titleprobe_tb;
             end
             if (nav_early !== 1'b0) begin
                 $display("FAIL %0s: nav_ready rose before the probe finished", arm);
+                errors = errors + 1;
+            end
+            if (strm_early !== 1'b0) begin
+                $display("FAIL %0s: the reader streamed before nav_ready", arm);
                 errors = errors + 1;
             end
         end
@@ -343,38 +350,38 @@ module iso_reader_titleprobe_tb;
         file_size = IMG_BYTES;
         repeat (5) @(negedge clk);
 
-        e0 = errors; mount(0, 1); expect_flags("A", 1, 1, 0);
+        e0 = errors; mount("A", 0, 1); expect_flags("A", 1, 1, 0);
         jump_title_menu; expect_stream("A jump", 8'hC1);
         if (errors == e0) $display("A  entry 2 present -> ok, then the jump plays it  PASS");
 
-        e0 = errors; mount(1, 1); expect_flags("B", 1, 0, 0);
+        e0 = errors; mount("B", 1, 1); expect_flags("B", 1, 0, 0);
         if (errors == e0) $display("B  no entry 2 -> ok 0, no pgc_error  PASS");
         e0 = errors; jump_title_menu; expect_stream("G", 8'hC0);
         if (errors == e0) $display("G  a command jump to entry 2 still takes SRP[0]  PASS");
 
-        e0 = errors; mount(2, 1); expect_flags("C", 1, 0, 0);
+        e0 = errors; mount("C", 2, 1); expect_flags("C", 1, 0, 0);
         if (errors == e0) $display("C  no PGCI_UT -> ok 0, no pgc_error  PASS");
 
-        e0 = errors; mount(7, 1); expect_flags("C2", 1, 0, 0);
+        e0 = errors; mount("C2", 7, 1); expect_flags("C2", 1, 0, 0);
         if (errors == e0) $display("C2 a bad PGCI_UT -> ok 0, no pgc_error  PASS");
 
-        e0 = errors; mount(8, 1); expect_flags("C3", 1, 0, 0);
+        e0 = errors; mount("C3", 8, 1); expect_flags("C3", 1, 0, 0);
         if (errors == e0) $display("C3 an empty PGCIT -> ok 0, no pgc_error  PASS");
 
-        e0 = errors; mount(3, 1); expect_flags("D", 1, 0, 0);
+        e0 = errors; mount("D", 3, 1); expect_flags("D", 1, 0, 0);
         if (errors == e0) $display("D  entry 2 only in the fr unit -> ok 0  PASS");
 
-        e0 = errors; mount(4, 1); expect_flags("D2", 1, 1, 0);
+        e0 = errors; mount("D2", 4, 1); expect_flags("D2", 1, 1, 0);
         if (errors == e0) $display("D2 entry 2 in the en unit -> ok 1  PASS");
 
-        e0 = errors; mount(0, 0); expect_flags("E", 0, 0, 0);
+        e0 = errors; mount("E", 0, 0); expect_flags("E", 0, 0, 0);
         expect_stream("E auto", 8'hB0);
         if (errors == e0) $display("E  Disc Menus off -> no probe, Auto plays  PASS");
 
-        e0 = errors; mount(5, 1); expect_flags("F", 1, 1, 1);
+        e0 = errors; mount("F", 5, 1); expect_flags("F", 1, 1, 1);
         if (errors == e0) $display("F  zeroed VMGI -> the probe reads the BUP  PASS");
 
-        e0 = errors; mount(6, 1); expect_flags("H", 1, 1, 0);
+        e0 = errors; mount("H", 6, 1); expect_flags("H", 1, 1, 0);
         if (errors == e0) $display("H  entry 2 with a malformed start -> ok 1  PASS");
 
         if (errors == 0) $display("ISO_READER_TITLEPROBE_TB: ALL TESTS PASSED");

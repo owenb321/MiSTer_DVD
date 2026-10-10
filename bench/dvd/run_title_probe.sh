@@ -19,7 +19,8 @@
 #   T3d nr0-final2      : an empty PGCIT takes the linear-title
 #                         fallback (dom is TT during the probe)  -> C3
 #   T4  vatr-in-probe   : the probe writes the menu aspect       -> A B C2 C3 D D2 F H
-#   T5  nav-early       : nav_ready rises at S_FINALIZE          -> A B C C2 C3 D D2 F H
+#   T5  nav-early       : nav_ready rises at S_FINALIZE          -> A B C C2 C3 D D2 F G H
+#                         (G: its jump lands mid-probe and is lost)
 #   T6  no-lu-walk      : the probe takes LU[0], not the en unit -> D D2
 #   T7  probe-always    : the probe runs with Disc Menus off     -> E
 #   T8  malformed-not-ok: a malformed start hides the entry      -> H
@@ -106,7 +107,7 @@ if [ $RED -eq 1 ]; then
         's/if \(dom != DOM_TT \|\| probe\) begin/if (dom != DOM_TT) begin/'
     mutate T4_vatr_in_probe "A B C2 C3 D D2 F H" \
         's/end else if \(probe\) begin(\n\s*\/\/ Title-entry probe: straight to the PGCI_UT)/end else if (1\x27b0) begin$1/'
-    mutate T5_nav_early "$ALLVM" \
+    mutate T5_nav_early "A B C C2 C3 D D2 F G H" \
         's/nav_ready <= !\(vm_mode && vmgi_found\);/nav_ready <= 1\x27b1;/'
     mutate T6_no_lu_walk "D D2" \
         's/end else if \(ut_nr_lus == 16.d1\) begin/end else if (ut_nr_lus == 16\x27d1 || probe) begin/'
