@@ -57,9 +57,12 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     - Build (`dev-titlenoop`, SEED 17, clk_dec 92.6/89.8, clk_mem 98.6/100.3,
       `clock_check` PASS, 38,589 ALM vs `main`'s 38,669): boot identical; telemetry
       `title_probed 1, title_menu 0`; Title at 1:03 of the feature → nothing, the clock runs
-      on 1:12 → 1:27, no flush, `menu` 0, and the Main logs `VMGM has no Title menu --
-      the Title key is ignored`. PANIC_ROOM_SUPERBIT: `title_menu 0`, Title in its VMGM
-      main menu ignored (the loop clock runs on).
+      on 1:12 → 1:27, no flush, `menu` 0. PANIC_ROOM_SUPERBIT: `title_menu 0`, Title in its
+      VMGM main menu ignored (the loop clock runs on). The key reached the core: Menu and
+      Select worked in the same launches, and T2 below acts on it. The Main's
+      `DVD_CTL: VMGM has [no] Title menu` line comes from the probe's flag, once per mount
+      (it never sees the key): one line per launch, no / has / no, so the edge re-arms on
+      a remount.
     - Positive control: ULTIMATE_T2 reports `title_menu 1`, and Title from inside the
       Theatrical title opens the disc's menu (`menu` 0 → 1).
   - **Sim regression:** `run_reader_regress.sh` against `main`: all 52 arms' verdicts
