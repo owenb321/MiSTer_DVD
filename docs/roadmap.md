@@ -644,21 +644,18 @@ Each item is its own feature branch.
    `emu.sv` drops the key without one. Chapter Menu keeps its fallback to the main menu.
    Design: `docs/dvd_vm.md` "Title key on a disc with no Title menu"; gate
    `bench/dvd/run_title_probe.sh --red`.
+10. Indefinite still + a cell command (audit class C residual): every 0xFF still now holds
+    before its cell command, in every domain, as in libdvdnav (branch
+    `feature/still-hold`, ⏳ HW-confirm pending). PR #169 had already held 5 of the 7
+    title discs; this removes the pre-VM "loop commands run first" exception, whose
+    MiB/Matrix premise the IFOs refute. 40 library images change, 36 in menus only. Design:
+    `docs/dvd_nav.md` "An indefinite still and its cell command".
 
 **Open, re-ranked by the 2026-10-06 census** (1,521 discs IFO; deep HLI scan of the 24
 game discs plus a seeded random 100; numbers and method in
 [conformance.md § The open items, re-ranked](conformance.md#the-open-items-re-ranked-2026-10-06)):
 
-1. **Indefinite still + a non-loop cell command in a title (audit class C residual): 7
-   discs, 5 of them games.** The discs are Thayer's Quest, Deal or No Deal, Tomb Raider,
-   HP Hogwarts Challenge, Space Pirates, BEAST_MASTER and Land Before Time.
-   - **What happens.** The reader runs the cell command first (after serving any unspent
-     cell duration). Often that command is `LinkTailPGC`, the "no answer" branch.
-   - **What a player does.** libdvdnav holds the still until a button or Still off.
-   - **Verify before fixing.** Run a `nav_diff` A/B against libdvdnav on Thayer's Quest and
-     Deal or No Deal, and play the "wait at the question" path. Thayer's timed choices are
-     HW-confirmed, and they are finite stills, a separate path.
-2. **A second Title press resumes (audit 10a): 1,428 discs author a Title menu.**
+1. **A second Title press resumes (audit 10a): 1,428 discs author a Title menu.**
    - The book (p. 9-26) says a second Title or Menu press resumes playback. The core
      already does that for Menu.
    - **libdvdnav does not** (`dvdnav_menu_call` resumes only on `DVD_MENU_Escape`), so this
@@ -666,7 +663,7 @@ game discs plus a seeded random 100; numbers and method in
    - The fix is one arm in `dvd_vm.sv` `ev_title`.
    - Rebase onto the unmerged `feature/vm-state-ram` if it lands first. It reworks the VM's
      state, and this touches the key arms.
-3. **`auto_action` (audit 11): no measured exposure. Record, and close unless a disc
+2. **`auto_action` (audit 11): no measured exposure. Record, and close unless a disc
    appears.**
    - The audit's premise was wrong. libdvdnav fires auto-action only after a D-pad press
      (`highlight.c:243-291`), as `nav_pci` does. It does not fire on a forced or VM-set
@@ -677,7 +674,7 @@ game discs plus a seeded random 100; numbers and method in
    - The only *visible* case is an auto-action button that is the initial selection and
      that no other button links to (`aa_init_orphan`). It shows on 0/24 game discs and
      0/100 random discs. Mode 2/3 shows on 0.
-4. **Random program playback (audit 9): 1 disc.** ROBOTS_43 has one title PGC with mode
+3. **Random program playback (audit 9): 1 disc.** ROBOTS_43 has one title PGC with mode
    `0x07`: random first program among 8. Shuffle is on 0 discs. libdvdnav implements
    random only (`play.c:69`).
 

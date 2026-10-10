@@ -308,6 +308,10 @@ pauses and Select still activates the highlighted button there. Right after a me
 appears, its buttons can take a moment to show up. Until they do, the keys wait for them
 rather than skipping the menu.
 
+An animated menu can end the same way. Many discs play the menu's animation once and then
+hold its last frame, with the buttons still live: that is how the disc is authored, and a
+set-top player does the same. The menu has not frozen; pick a button as usual.
+
 !!! note "When the keys do nothing on a still"
     - **Disc Menus is Off.** The core is then not running the disc's own instructions, so
       there is nothing to continue to.

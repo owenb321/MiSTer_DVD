@@ -463,7 +463,7 @@ columns are as written on 2026-10-01.
 | Rank | Item | Exposure | What the user sees | Verdict |
 |---|---|---|---|---|
 | 1 | **10b Title key, no Title menu** | **88/1,521 (5.8 %)** VMGM PGCI_UTs lack entry 2. Menu key (VTSM lacks Root): **0**. Chapter key lands on a non-Root PGC 1: **1** (THE_RED_FURY) | The reader takes SRP[0] = VMGM PGC 1. On **84/88** that replays the boot chain to the main menu. On **64** of them, opening logos play first (14 s typical, up to 28 s); on 20, PGC 1 has no cells and Title acts like Menu. On 2 it lands on another menu, on 1 in a title-domain menu, and on 1 the model stops (MEN_IN_BLACK, unverified) | **Defect**: the book (p. 9-26) and libdvdnav both no-op. Fix user-key misses only, and keep the documented Chapter → main-menu fallback (1,387 discs author no chapter menu). **✅ Fixed, HW A/B vs `main`, MERGED PR #173** (the reader probes the VMGM at mount, `emu.sv` drops the key); the probe's offline model re-counts 88 misses, plus 5 discs with no VMGM PGCI_UT and 1 with no VMGI that also become no-ops |
-| 2 | **Indefinite still + non-loop cell command (title)** | **7 discs, 5 of them games**: BEAST_MASTER (`CallSS VTSM`) and the others: Thayer's Quest and Deal or No Deal (`LinkTailPGC`), HP Hogwarts (`LinkPGCN 6`), Tomb Raider and Land Before Time (`LinkPGN 1`), Space Pirates (`Nop`). Menu domain: 15 | We run the command at the cell's end, where libdvdnav holds the still until a button press. On a game, that can take the "no answer" branch without waiting | **Unverified.** `nav_diff` A/B against libdvdnav first. `Nop` and a `LinkPGN` to the still's own program may be harmless |
+| 2 | **Indefinite still + non-loop cell command (title)** | **7 discs, 5 of them games**: BEAST_MASTER (`CallSS VTSM`) and the others: Thayer's Quest and Deal or No Deal (`LinkTailPGC`), HP Hogwarts (`LinkPGCN 6`), Tomb Raider and Land Before Time (`LinkPGN 1`), Space Pirates (`Nop`). Menu domain: 15 | We run the command at the cell's end, where libdvdnav holds the still until a button press. On a game, that can take the "no answer" branch without waiting | **✅ Resolved.** PR #169 (2026-10-08) already held 5 of the 7. The other 2 (`LinkPGN 1`, a self-loop) and every menu case hold since 2026-10-10: every 0xFF still holds before its command ([§C](#c--deliberate-or-acceptable-deviations-recorded), `docs/dvd_nav.md` "An indefinite still and its cell command") |
 | 3 | **10a A second Title press resumes** | **1,428/1,521** author a Title menu | A second Title press restarts the Title menu; Menu already toggles back | **Book-only**: libdvdnav resumes only on `DVD_MENU_Escape`. A user decision |
 | 4 | **11 `auto_action`** | `aa_any` 15/24 games and **65/100 random**: auto-action buttons are common on ordinary movie discs. `aa_deadlink` 14/24 and 56/100, which is near-universal and moot (authored auto buttons self-link in all four directions, and arriving already fired them). **Visible case `aa_init_orphan`: 0/24 games, 0/100 random.** `aa_mode23`: 0 | Nothing measured | **Premise corrected** (below). Record and close unless a disc appears |
 | 5 | **9 Random playback** | **1/1,521** (ROBOTS_43, one title PGC, mode `0x07`: random first program of 8). Shuffle: 0 | Program 1 always plays first | Real but one vehicle |
@@ -507,16 +507,16 @@ LPCM 96 kHz and multichannel on 1 (SpacePirates); PGC still time on 0.
   - `dialnorm` and `compr` are ignored.
   - DVD's 448 kbps cap is not enforced, which is harmless: A/52's full 640 kbps table is
     accepted.
-- **Indefinite cell still with a cell command:** the command runs first. This is deliberate
-  ("HW-proven Phase-3 heuristic — MiB/Matrix interactive cells carry both").
-  - 2026-10-01 wrote: 41/1,430 discs author it, in 40 of them the command is a loop
-    (`LinkTopC`, `LinkCN`, `LinkTopPG`), and the one residual is BEAST_MASTER (`CallSS VTSM`).
-  - **Re-measured 2026-10-06 with the command classified, that undercounted.** 9 discs have
-    it in a title and 42 in a menu. The command is *not* a loop on **7 title discs** and
-    **15 menu discs** (`LinkTailPGC`, `LinkPGN n`, `LinkPGCN`, `Nop`).
-  - The title-domain residual is the open item ranked 2 in
-    [§ The open items, re-ranked](#the-open-items-re-ranked-2026-10-06). The menu-domain cases
-    remain the deliberate heuristic.
+- **Indefinite cell still with a cell command — ✅ no longer a deviation (2026-10-10).** The
+  still always holds first, and the command runs on Still off, as in libdvdnav.
+  - The earlier "command first" order was a pre-VM leftover, justified as "HW-proven
+    Phase-3 heuristic — MiB/Matrix interactive cells carry both". The IFOs refute that:
+    MiB, The Matrix and its sequels author no cell with both a 0xFF still and a cell command
+    (their motion menus loop with `still = 0`).
+  - PR #169 (2026-10-08) narrowed it to looping commands; 2026-10-10 removed it. On the
+    1,556-image library, 40 images change: 36 in VTSM menus (motion clips now play once and
+    hold), and 4 in a title (Tomb Raider, Land Before Time, Ransom, Bad Company).
+  - Design and history: `docs/dvd_nav.md` "An indefinite still and its cell command".
 - **PGC still time** is never timed and is applied after the POST commands; the book
   (p. 9-29) puts it before them. **0/1,430 discs author a PGC still time**, so this is
   evidence-deferred.

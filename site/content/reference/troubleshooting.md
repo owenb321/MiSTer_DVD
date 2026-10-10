@@ -652,6 +652,18 @@ Removing it did expose a separate problem on one kind of screen, fixed separatel
 [The first picture of a menu slideshow is blocky](#the-first-picture-of-a-menu-slideshow-is-blocky)
 below.
 
+### A menu's animation plays once, then stops on its last frame
+
+That is the disc's own instruction. A menu screen can be authored to play its animation and
+then hold the last frame until you choose something, and a set-top player shows it the same
+way. The buttons stay live: move between them and select one as usual.
+
+Earlier builds replayed the animation on a loop on some of these discs instead of holding
+it. If a menu now holds where it used to loop, that is the change, and nothing is wrong. If
+a menu holds and **no** button responds, press **B1 (Play/Pause)** or **B4 (Select)**, which
+moves the disc on (see [still pictures](../playback/controls.md#still-pictures)). If that
+does nothing either, [report it](reporting-a-bug.md) with the disc's name and the screen.
+
 ### The first picture of a menu slideshow is blocky
 
 Some discs present a set of stills you step through with the arrow keys — cast and crew

@@ -22,6 +22,39 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ⏳ **AN INDEFINITE STILL HOLDS BEFORE EVERY CELL COMMAND (audit class C residual,
+  2026-10-10, branch `feature/still-hold`; sim-proven, ⏳ HW-confirm pending).**
+  - **The audit item was mostly closed already.** Its roadmap text ("the reader runs the
+    cell command first", 7 title discs) came from the 2026-10-06 census, before PR #169.
+    Re-measured against #169's rule, 5 of the 7 already held: Thayer's Quest and Deal or No
+    Deal (`LinkTailPGC`), HP Hogwarts (`LinkPGCN 6`), Space Pirates (`Nop`) and BEAST_MASTER
+    (`CallSS VTSM`). Tomb Raider (7 in-title button menus) and Land Before Time still ran
+    `LinkPGN 1` first, a self-loop in a 1-program PGC, so the core replayed a clip that
+    libdvdnav freezes.
+  - **The exception was a pre-VM leftover with a false premise.** Phase 3 replayed a
+    button-armed menu cell with a cell command because it had no VM. The Phase-4 VM kept
+    that branch ahead of the 0xFF-still one, later justified as "MiB/Matrix interactive cells
+    carry both". The IFOs of MiB, The Matrix, both Matrix Reloaded discs and Matrix
+    Revolutions have **zero** cells with a 0xFF still and a cell command, in any domain:
+    their menus loop with `still = 0`. By user decision every 0xFF still now holds first, as
+    libdvdnav does (`play_Cell_post`), and Still off runs the command. A malformed `cmd_nr`
+    holds, then plays the next cell. `ccls_mem`/`cc_loops` are deleted (−1 M10K).
+  - **Library (1,556 images):** 40 change, 36 in VTSM menus only (Fox-style 26–60 s motion
+    menus now play once and hold) and 4 in a title (Tomb Raider, Land Before Time, Ransom,
+    Bad Company). None has a malformed `cmd_nr`. Bad Company VTS 4 PGC 1 holds five 5 s
+    clips with no HLI found, so Still off moves it on, as in libdvdnav.
+  - **Gates:** `iso_reader_fpnone_tb` G/H/B2, `iso_reader_stilloff_tb` I/J (new, title
+    domain); `run_sprm67.sh --red` R8/R9 and `run_still_off.sh --red` R8–R10, each failing
+    exactly its arms. On `main`'s reader, I, J, H and B2 fail. Tools: `nav_offline.py`
+    holds every 0xFF still; the census's loop/non-loop axes are retired (`inf_still_badcmd`
+    added).
+  - **Also found:** an audit of the other pre-VM rules still active with Disc Menus on, in
+    `docs/conformance.md` "Pre-VM rules still active".
+  - **Next:** HW A/B against `main` on The Muppets VTSM, Tomb Raider, Thayer's Quest and a
+    Fox menu (Marley & Me), with MiB as the unchanged control. Then the compile, with
+    M10K −1 in the fit summary.
+  - Design: `docs/dvd_nav.md` "An indefinite still and its cell command".
+
 - ✅ **TITLE KEY ON A DISC WITH NO TITLE MENU IS A NO-OP (audit 10b, 2026-10-09,
   ✅ MERGED PR #173; sim-proven, ✅ HW A/B against its own control).**
   - **The defect.** 88 of 1,521 library discs author a VMGM PGCI_UT with no entry-2 (Title)
