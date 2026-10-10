@@ -199,6 +199,20 @@ the debug page to see whether a fixed correction lines it up, then
 started — and say whether a chapter skip changes anything, because that distinguishes two
 quite different faults.
 
+### Sound runs ahead of the picture after a pause
+
+Affects decoded audio (`Audio Out = Decode PCM`) from Dolby Digital, DTS and MPEG audio
+tracks. After pausing for more than a second or so, sound came back slightly ahead of the
+picture and stayed that way until a chapter skip or seek. The longer the pause, the bigger
+the gap: about half a second after a ten-second pause, and up to a few seconds after a long one.
+A very long pause could also leave a few seconds of silence after resuming.
+
+The audio decoder has a safety check that restarts it if it seems stuck. While paused,
+the decoder is deliberately waiting, and the check took that for a fault. Each restart
+threw away a short piece of the soundtrack. The check now stands down while playback is
+paused, so audio resumes exactly where it stopped. On a build without the fix, a chapter
+skip or seek after resuming puts sync right.
+
 ### Speech is cut off on a game disc's question or selection screen
 
 !!! info "Fixed in v0.5.0"
