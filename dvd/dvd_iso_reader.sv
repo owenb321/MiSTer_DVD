@@ -304,10 +304,13 @@ module dvd_iso_reader #(
     // playing title's own VTSM root dead-ends: on VM-heavy discs (MiB) the
     // feature VTS's root entry is a JumpSS trampoline into the VMG dispatcher
     // and the REAL menu lives in another VTS's VTSM - which is invariably the
-    // one with the big menu VOB. Heuristic until the Phase-4 VM executes the
-    // trampoline for real.
+    // one with the big menu VOB. Written as a pre-VM heuristic; the VM now
+    // executes trampolines, and this survives only as the boot-chain Menu
+    // shortcut and a hop of the E_ERROR fallback chain (docs/conformance.md
+    // "Pre-VM rules still active", B1 and A5).
     output     [7:0]  best_menu_vts,
-    // CELL-LOOP heuristic (Phase 3): while a menu cell is ENDING with a
+    // CELL-LOOP heuristic (Phase 3, Disc Menus OFF only; with them on the VM runs
+    // the real cell command): while a menu cell is ENDING with a
     // nonzero cell_cmd_nr AND nav_pci holds an armed button HLI, REPLAY the
     // cell instead of advancing. Authored menus keep their interactive screen
     // looping via a cell command (MiB cell 1: LinkTailPGC-class, 7 buttons;

@@ -646,7 +646,7 @@ Each item is its own feature branch.
    `bench/dvd/run_title_probe.sh --red`.
 10. Indefinite still + a cell command (audit class C residual): every 0xFF still now holds
     before its cell command, in every domain, as in libdvdnav (branch
-    `feature/still-hold`, ⏳ HW-confirm pending). PR #169 had already held 5 of the 7
+    `feature/still-hold`, ✅ HW A/B vs `main`: Muppets, Marley & Me, Tomb Raider; MiB unchanged). PR #169 had already held 5 of the 7
     title discs; this removes the pre-VM "loop commands run first" exception, whose
     MiB/Matrix premise the IFOs refute. 40 library images change, 36 in menus only. Design:
     `docs/dvd_nav.md` "An indefinite still and its cell command".

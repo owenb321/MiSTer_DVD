@@ -22,8 +22,8 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- ⏳ **AN INDEFINITE STILL HOLDS BEFORE EVERY CELL COMMAND (audit class C residual,
-  2026-10-10, branch `feature/still-hold`; sim-proven, ⏳ HW-confirm pending).**
+- ✅ **AN INDEFINITE STILL HOLDS BEFORE EVERY CELL COMMAND (audit class C residual,
+  2026-10-10, branch `feature/still-hold`; sim-proven, ✅ HW A/B against `main`).**
   - **The audit item was mostly closed already.** Its roadmap text ("the reader runs the
     cell command first", 7 title discs) came from the 2026-10-06 census, before PR #169.
     Re-measured against #169's rule, 5 of the 7 already held: Thayer's Quest and Deal or No
@@ -50,9 +50,22 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     added).
   - **Also found:** an audit of the other pre-VM rules still active with Disc Menus on, in
     `docs/conformance.md` "Pre-VM rules still active".
-  - **Next:** HW A/B against `main` on The Muppets VTSM, Tomb Raider, Thayer's Quest and a
-    Fox menu (Marley & Me), with MiB as the unchanged control. Then the compile, with
-    M10K −1 in the fit summary.
+  - **HW A/B** on the rig against `main`'s RTL (`dev-titlenoop`, same RTL as `main`) with `dev-stillhold` (SEED 17, timing PASS, M10K 529 → 528, ALM −92). Telemetry over a 30–60 s window on the changed cell:
+    - **The Muppets** VTSM 6 PGC 39 (boot menu, 0xFF + `LinkCN 1`): control `still` 0.00
+      and 77 pictures decoded; branch `still` 0.90 and 21 (all at boot). The held picture is
+      the same language menu; Down + Select from the hold starts the chosen title.
+    - **Marley & Me** VTSM 1 PGC 9 (Menu, then button 4; 0xFF + `LinkTopPG`, a 119-sector
+      cell with a 26 s timeline): control re-decoded the same picture 611 times in 30 s with
+      12 clock re-anchors; branch decodes nothing and holds. The frames are pixel-identical,
+      and neither build plays audio in that window (the clip's sound is a short sting).
+    - **Tomb Raider** TT VTS 3 PGC 6 ("2", "1" from the first park; in-title 0xFF +
+      `LinkPGN 1`): branch holds in the title domain (`still` 1.00, `menu` 0). Button 1
+      re-enters PGC 6 (the code-entry screen), as libdvdnav does for "2 1 1".
+    - **MiB** VTSM 2 PGC 5 (control for "unchanged"): 922 vs 914 pictures in 30 s, `still`
+      0 on both; the motion menu plays as before.
+    - Offline: `nav_offline` on the 40 changed images gives the same statuses with `main`'s
+      model and the branch's (38 `ok`, 2 `oracle-err`). As expected, it cannot tell a hold
+      from a loop, because both are a park.
   - Design: `docs/dvd_nav.md` "An indefinite still and its cell command".
 
 - ✅ **TITLE KEY ON A DISC WITH NO TITLE MENU IS A NO-OP (audit 10b, 2026-10-09,

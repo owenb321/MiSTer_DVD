@@ -1066,7 +1066,11 @@ timer read them).
     command; J a malformed `cmd_nr` held, then Still off → the next cell, no command);
   - mutations: `run_sprm67.sh --red` R8/R9 and `run_still_off.sh --red` R8–R10. On `main`'s
     reader, I, J, H and B2 fail and G passes.
-- **HW:** see `docs/status_log.md` "An indefinite still holds before every cell command".
+- **HW (✅ A/B vs `main`, 2026-10-10):** The Muppets and Marley & Me menus and Tomb Raider's
+  in-title code screen hold where `main` replayed them (`main` re-decoded Marley's single
+  picture 611 times in 30 s), with the same picture and live buttons; MiB's motion menus are
+  unchanged. Evidence: `docs/status_log.md` "An indefinite still holds before every cell
+  command".
 
 **Holds the key ignores (`still_act = 0`).** These are the holds with no continuation of
 their own, and the key is a no-op there, as it is at a dead end on a real player:
