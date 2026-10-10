@@ -700,6 +700,15 @@ game discs plus a seeded random 100; numbers and method in
 which would give auto 16:9 switching on PAL widescreen CRTs.
 **⛔ by decision 2026-10-01:** UOP enforcement, APS (Macrovision) and CGMS-A.
 
+### ✅ Pause no longer loses audio (2026-10-09, branch `feature/pause-wdog`; ✅ HW A/B vs `main` — `docs/status_log.md` "Pause loses audio")
+
+- [x] The AC-3/engine stall watchdog is held while paused (it dumped ~1 frame per 0.65 s, so
+      audio resumed early). `run_pause_wdog.sh --red`; 10 s pause on the rig: +525 → +7 ms.
+- [ ] Open, found on the way: after a mid-play audio underrun, late audio is released at
+      once, and `head_catchup` only trims it above 300 ms, so 50–300 ms of lateness can
+      persist until a flush (a NAS read-stall could hit it). Candidate: a stale-trim at the
+      underrun re-arm gated on `arr_agree`. No field report yet; reproduce before building.
+
 ### ✅ clk_mem retime: the speculative pop off the critical path (2026-10-09, ✅ MERGED PR #171; HW A/B = `main` — `docs/status_log.md` "clk_mem retime")
 
 - [x] `mem_shim_burst`: pk merged into sk, one comparator per consumer, data loads off the
