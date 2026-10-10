@@ -623,7 +623,7 @@ in `CONF_STR`. Design: `docs/cdda.md` "`.cue` sheets". ⛔ CHD still not support
 > **top gap confirmed = exact chapters/PTT (7/7 discs); interactive GPRM-counter/NVTMR promoted
 > above parental on measured prevalence (3/7 game discs).** Phase 3 = close gaps in that order.
 
-### ⏳ 2026-10-01 spec-audit: DVD Demystified 3rd-edition follow-ups (items 1–8 ✅, 10b 🔧; the rest re-ranked 2026-10-06, PR #165)
+### ⏳ 2026-10-01 spec-audit: DVD Demystified 3rd-edition follow-ups (items 1–8 ✅, 10b ✅ HW, ⏳ merge; the rest re-ranked 2026-10-06, PR #165)
 
 The audit, with evidence and the user's decisions, is in
 [`docs/conformance.md` § 3rd-edition audit](conformance.md#dvd-demystified-3rd-edition-audit-2026-10-01).
@@ -639,8 +639,8 @@ Each item is its own feature branch.
 6. BT.601 as the default colour matrix: PR #156.
 7. Next/Prev at the title's edges: PR #158.
 8. `.BUP` fallback: PR #163.
-9. 🔧 Title key on a disc with no Title menu (10b): `feature/title-noentry`, sim-green,
-   ⏳ HW. The reader probes the VMGM for an entry-2 PGC at mount (before First Play) and
+9. Title key on a disc with no Title menu (10b): `feature/title-noentry`, ✅ HW A/B vs
+   `main` (2026-10-10), ⏳ merge. The reader probes the VMGM for an entry-2 PGC at mount (before First Play) and
    `emu.sv` drops the key without one. Chapter Menu keeps its fallback to the main menu.
    Design: `docs/dvd_vm.md` "Title key on a disc with no Title menu"; gate
    `bench/dvd/run_title_probe.sh --red`.

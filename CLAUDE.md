@@ -390,7 +390,7 @@ otherwise; `--red` runs its mutation arms).
 | Chapter skip at the title's edges: Next → POST, Prev → `prev_pgcn` (audit 7) | ✅ HW (vs libdvdnav), MERGED PR #158 | `dvd_nav.md` | `run_chap_edge.sh --red`, `check_chap_edge_wiring.py` |
 | `.BUP` fallback (audit 8): fabric IFO header gate; Main mirrors unreadable IFO sectors | ✅ HW (fabric A/B vs `main`; Main mirror on a physical disc), MERGED PR #163 | `dvd_nav.md` "IFO header gate" | `run_bup.sh --red`, `main/tests` [21]–[29] |
 | Library sweep vs libdvdnav found SPRM6/7 frozen + no-FP-PGC boot: both fixed (+ 0xFF still holds before a non-loop cell command) | ✅ HW, MERGED PR #169 | `nav_engine.md` §5a | `run_sprm67.sh --red` |
-| Title key on a disc with no Title menu is a no-op (audit 10b): mount-time VMGM probe, `emu.sv` key gate | 🔧 sim-green, ⏳ HW (`feature/title-noentry`) | `dvd_vm.md` "Title key on a disc with no Title menu" | `run_title_probe.sh --red`, `check_title_key_wiring.py` |
+| Title key on a disc with no Title menu is a no-op (audit 10b): mount-time VMGM probe, `emu.sv` key gate | ✅ HW A/B vs `main` (SPIDER-MAN_2, PANIC_ROOM; T2 positive control), ⏳ merge (`feature/title-noentry`) | `dvd_vm.md` "Title key on a disc with no Title menu" | `run_title_probe.sh --red`, `check_title_key_wiring.py` |
 
 ### Transport, HUD and input
 

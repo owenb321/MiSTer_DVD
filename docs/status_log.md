@@ -22,8 +22,8 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **TITLE KEY ON A DISC WITH NO TITLE MENU IS A NO-OP (audit 10b, 2026-10-09,
-  `feature/title-noentry`; sim-green, ⏳ HW).**
+- ✅ **TITLE KEY ON A DISC WITH NO TITLE MENU IS A NO-OP (audit 10b, 2026-10-09,
+  `feature/title-noentry`; sim-green, ✅ HW A/B against its own control; ⏳ merge).**
   - **The defect.** 88 of 1,521 library discs author a VMGM PGCI_UT with no entry-2 (Title)
     PGC (Sony/Columbia authoring writes every VMGM entry id as 0x00: SPIDER-MAN_2,
     PANIC_ROOM_SUPERBIT, TOKYO_GODFATHERS). The reader's entry scan missed and took SRP[0],
@@ -51,8 +51,21 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
   - **Gates.** `bench/dvd/run_title_probe.sh --red` (`iso_reader_titleprobe_tb` arms A–H, the
     VMGI-mounting reader benches, 16 mutations); `tools/check_title_key_wiring.py --red`;
     `tools/check_bup_wiring.py` updated for the new word-14 top bits.
-  - **Next:** HIL — control arm on `main` (Title mid-feature on SPIDER-MAN_2 replays the
-    logos), then the build (Title does nothing; a disc with a Title menu unchanged).
+  - **HW (rig, 2026-10-10; same Main in both arms, the core the only change).**
+    - Control (`dev-pausewdog` = `main`): SPIDER-MAN_2, Title at 0:34 of the feature →
+      the TriStar logo, then the boot chain's 2:27 trailer. The defect, reproduced.
+    - Build (`dev-titlenoop`, SEED 17, clk_dec 92.6/89.8, clk_mem 98.6/100.3,
+      `clock_check` PASS, 38,589 ALM vs `main`'s 38,669): boot identical; telemetry
+      `title_probed 1, title_menu 0`; Title at 1:03 of the feature → nothing, the clock runs
+      on 1:12 → 1:27, no flush, `menu` 0, and the Main logs `VMGM has no Title menu --
+      the Title key is ignored`. PANIC_ROOM_SUPERBIT: `title_menu 0`, Title in its VMGM
+      main menu ignored (the loop clock runs on).
+    - Positive control: ULTIMATE_T2 reports `title_menu 1`, and Title from inside the
+      Theatrical title opens the disc's menu (`menu` 0 → 1).
+  - **Sim regression:** `run_reader_regress.sh` against `main`: all 52 arms' verdicts
+    identical (traces differ only by the later boot, as intended). Four arms fail on `main`
+    too, with the same text: `iso_reader_atmos`, `iso_reader_auddrain_noaudio`,
+    `iso_reader_tpsw_boot`, `mode_realign_chain_prefix` (pre-existing, not this change).
 
 - ✅ **PAUSE LOSES AUDIO: THE DECODE-STALL WATCHDOG FIRED WHILE PAUSED (2026-10-09, ✅ MERGED
   PR #172; sim-proven, ✅ HW A/B against its own control).**
