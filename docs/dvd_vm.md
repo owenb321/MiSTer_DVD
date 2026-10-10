@@ -652,7 +652,7 @@ one of `vm_adv` (continue authored behaviour), `vm_replay` (replay the current c
 - JumpSS FP / VMGM menu / VTSM (vts,title,menu) / VMGM pgc → the four reader domains.
 - CallSS_* → save RSM {cur_vts, cur_pgcn, cell (command's rsm_cell field − 1, else
   cur_cell), SPRM4-8} first, then like JumpSS.
-- Exit / LinkNoLink → `vm_adv` (the reader parks: menu → still hold, title → done).
+- Exit / LinkNoLink → `vm_adv`, which the reader treats as a fall-through: a POST Exit follows `next_pgcn` (else holds: menu → still, title → done), a cell Exit plays the next cell, a PRE Exit lets the PGC play. libdvdnav stops on Exit; the measured exposure is small (`docs/conformance.md` "Pre-VM rules still active" A1).
 - Any link's button field ≠ 0 → SPRM8 = btn<<10 + nav_pci `sel_force`.
 
 **Guards**: 4096-instruction fuse per activation; 63-jump chain guard (authored
