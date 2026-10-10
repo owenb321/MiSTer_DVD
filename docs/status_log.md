@@ -56,8 +56,10 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
       the same language menu; Down + Select from the hold starts the chosen title.
     - **Marley & Me** VTSM 1 PGC 9 (Menu, then button 4; 0xFF + `LinkTopPG`, a 119-sector
       cell with a 26 s timeline): control re-decoded the same picture 611 times in 30 s with
-      12 clock re-anchors; branch decodes nothing and holds. The frames are pixel-identical,
-      and neither build plays audio in that window (the clip's sound is a short sting).
+      12 clock re-anchors; branch decodes nothing and holds. The frames are pixel-identical.
+      Audio: neither build played any in a 30 s window starting ~40 s after the press; on
+      the branch, captured across the press, it stopped ~5 s in, when the cell's data ran
+      out (the cell is one picture and a few seconds of sound).
     - **Tomb Raider** TT VTS 3 PGC 6 ("2", "1" from the first park; in-title 0xFF +
       `LinkPGN 1`): branch holds in the title domain (`still` 1.00, `menu` 0). Button 1
       re-enters PGC 6 (the code-entry screen), as libdvdnav does for "2 1 1".
