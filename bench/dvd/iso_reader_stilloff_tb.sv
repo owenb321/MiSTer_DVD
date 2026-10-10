@@ -13,6 +13,11 @@
 //     PGC3  cell  A3 (still 200 s, cell_cmd 1)          timed, command
 //     PGC4  cells A4 (still 3 s) A5                    timed, no command
 //     PGC5  cell  A6 (still 5 s, cell_cmd 1)            timed, left by a jump
+//     PGC6  cell  A7 (still 0xFF, cell_cmd 1 = LinkPGN 1)   indefinite + a command
+//                 (Tomb Raider's in-title menus: a looping command)
+//     PGC7  cells A8 (still 0xFF, cell_cmd 1, NO command table) A9
+//                 (a cmd_nr past the PGC's cell commands: malformed)
+//   PGC6/PGC7 sit in the PGCIT's second sector (it spans 21-22).
 //   VTS_01 VTSM PGCI_UT (one LU):
 //     PGC1  cell  D0 (still 0), next_pgcn 0            -> POST falls through -> dead-end hold
 //     PGC2  cell  D1 (still 0xFF)                      a menu indefinite still
@@ -28,6 +33,11 @@
 //   G  Disc Menus off (vm_mode=0): VTSM PGC2's indefinite still + press -> nothing
 //   H  PGC1 again, press WHILE A0 is still streaming (not parked) -> nothing: A0
 //      still parks normally afterwards
+//   I  PGC6: park on A7 (indefinite + a command): the command waits out the still
+//      (libdvdnav play_Cell_post), press -> vm_cell_cmd. docs/dvd_nav.md "An
+//      indefinite still and its cell command"
+//   J  PGC7: park on A8 (indefinite + a malformed cmd_nr), press -> A9 streams with
+//      no vm_cell_cmd (libdvdnav "Invalid Cell command": the next cell)
 `timescale 1ns/1ps
 
 module iso_reader_stilloff_tb;
@@ -184,8 +194,17 @@ module iso_reader_stilloff_tb;
     task put_cell(input integer pa, input integer idx, input [7:0] still, input [7:0] cmdnr);
         begin img[pa+256+idx*24+2] = still; img[pa+256+idx*24+3] = cmdnr; end
     endtask
+    // a command table @off holding ONE cell command (0 pre, 0 post)
+    task put_cellcmd(input integer pa, input [15:0] off, input [63:0] c);
+        integer k; begin
+            be16(pa+228, off);
+            be16(pa+off+0, 16'd0); be16(pa+off+2, 16'd0); be16(pa+off+4, 16'd1);
+            be16(pa+off+6, 16'd15);
+            for (k = 0; k < 8; k = k + 1) img[pa+off+8+k] = c[8*(7-k) +: 8];
+        end
+    endtask
 
-    // Title VOB VTS_01_1.VOB at sector 30 (7 cells A0..A6), menu VOB VTS_01_0.VOB
+    // Title VOB VTS_01_1.VOB at sector 30 (10 cells A0..A9), menu VOB VTS_01_0.VOB
     // at sector 26 (2 cells D0, D1).
     task build;
         integer j, b;
@@ -202,30 +221,35 @@ module iso_reader_stilloff_tb;
             put_rec(cur, 17, 2048, 8'h02, 128'h00, 1, cur);
             put_rec(cur, 17, 2048, 8'h02, 128'h01, 1, cur);
             put_rec(cur, 19, 2048, 8'h00, "VIDEO_TS.IFO;1", 14, cur);
-            put_rec(cur, 20, 6144, 8'h00, "VTS_01_0.IFO;1", 14, cur);      // 20..22
+            put_rec(cur, 20, 8192, 8'h00, "VTS_01_0.IFO;1", 14, cur);      // 20..23
             put_rec(cur, 26, 2*2048, 8'h00, "VTS_01_0.VOB;1", 14, cur);    // 26..27
-            put_rec(cur, 30, 7*2048, 8'h00, "VTS_01_1.VOB;1", 14, cur);    // 30..36
+            put_rec(cur, 30, 10*2048, 8'h00, "VTS_01_1.VOB;1", 14, cur);   // 30..39
 
             be32(19*2048+196, 32'd0);                 // no TT_SRPT
             be32(20*2048+204, 32'd1);                 // vts_pgcit    -> 21
-            be32(20*2048+208, 32'd2);                 // vtsm_pgci_ut -> 22
+            be32(20*2048+208, 32'd3);                 // vtsm_pgci_ut -> 23
 
-            // title VTS_PGCIT @21: 5 SRPs
+            // title VTS_PGCIT @21 (spans 21-22): 7 SRPs
             b = 21*2048;
-            be16(b+0, 16'd5);
-            be32(b+8+4,  32'd48);
+            be16(b+0, 16'd7);
+            be32(b+8+4,  32'd64);
             be32(b+16+4, 32'd448);
             be32(b+24+4, 32'd848);
             be32(b+32+4, 32'd1248);
             be32(b+40+4, 32'd1648);
-            put_pgc(b+48,   8'd2, 16'd0, 32'd0);  put_cell(b+48,   0, 8'd255, 8'd0);  // A0 A1
+            be32(b+48+4, 32'd2048);
+            be32(b+56+4, 32'd2448);
+            put_pgc(b+64,   8'd2, 16'd0, 32'd0);  put_cell(b+64,   0, 8'd255, 8'd0);  // A0 A1
             put_pgc(b+448,  8'd1, 16'd0, 32'd2);  put_cell(b+448,  0, 8'd255, 8'd0);  // A2
             put_pgc(b+848,  8'd1, 16'd0, 32'd3);  put_cell(b+848,  0, 8'd200, 8'd1);  // A3
             put_pgc(b+1248, 8'd2, 16'd0, 32'd4);  put_cell(b+1248, 0, 8'd3,   8'd0);  // A4 A5
             put_pgc(b+1648, 8'd1, 16'd0, 32'd6);  put_cell(b+1648, 0, 8'd5,   8'd1);  // A6
+            put_pgc(b+2048, 8'd1, 16'd0, 32'd7);  put_cell(b+2048, 0, 8'd255, 8'd1);  // A7
+            put_cellcmd(b+2048, 16'd300, 64'h2006000000000001);                   // LinkPGN 1
+            put_pgc(b+2448, 8'd2, 16'd0, 32'd8);  put_cell(b+2448, 0, 8'd255, 8'd1);  // A8 A9
 
-            // VTSM PGCI_UT @22: one LU -> PGCIT @16 with 2 SRPs
-            b = 22*2048;
+            // VTSM PGCI_UT @23: one LU -> PGCIT @16 with 2 SRPs
+            b = 23*2048;
             be16(b+0, 16'd1);
             be32(b+4, 32'd2000);
             be16(b+8, 16'h656E); img[b+10] = 0; img[b+11] = 8'h80;
@@ -241,7 +265,7 @@ module iso_reader_stilloff_tb;
                 img[26*2048 + j] = 8'hD0;
                 img[27*2048 + j] = 8'hD1;
             end
-            for (j = 0; j < 7*2048; j = j + 1)
+            for (j = 0; j < 10*2048; j = j + 1)
                 img[30*2048 + j] = 8'hA0 + (j / 2048);
         end
     endtask
@@ -428,6 +452,35 @@ module iso_reader_stilloff_tb;
         wait_park(8'hA0, "H0 park on A0");
         snap;
         check_held(20000, "H: press while A0 streamed, then park");
+
+        // ---- I: indefinite still + a cell command -> held, then the command -----
+        repeat (2000) @(negedge clk);
+        do_jump(2'd3, 16'd6);
+        wait_park(8'hA7, "I0 park on A7");
+        if (dut.still_act !== 1'b1)
+            begin $display("FAIL I0: no Still off on an indefinite still with a command"); errors = errors + 1; end
+        snap;
+        check_held(20000, "I1: the command waits out the still");
+        snap; press;
+        t = 0; while (n_cmd == s_cmd && t < 20000) begin @(posedge clk); t = t + 1; end
+        if (n_cmd != s_cmd + 1 || n_pgend != s_pgend || n_bytes != s_bytes)
+            begin $display("FAIL I: press on A7 -> cmd+%0d pgend+%0d bytes+%0d (expected 1, 0, 0)",
+                            n_cmd-s_cmd, n_pgend-s_pgend, n_bytes-s_bytes); errors = errors + 1; end
+        else $display("I: indefinite still + command -> held, press -> the command  PASS");
+        answer_adv;
+
+        // ---- J: indefinite still + a malformed cmd_nr -> held, then next cell --
+        repeat (2000) @(negedge clk);
+        do_jump(2'd3, 16'd7);
+        wait_park(8'hA8, "J0 park on A8");
+        snap;
+        check_held(20000, "J1: a malformed cmd_nr still holds");
+        snap; press;
+        t = 0; while (last_byte !== 8'hA9 && t < 200000) begin @(posedge clk); t = t + 1; end
+        if (last_byte !== 8'hA9 || n_cmd != s_cmd || n_seek != s_seek || n_jump != s_jump)
+            begin $display("FAIL J: press on A8 -> last=%02x cmd+%0d seek+%0d jump+%0d (expected A9, 0, 0, 0)",
+                            last_byte, n_cmd-s_cmd, n_seek-s_seek, n_jump-s_jump); errors = errors + 1; end
+        else $display("J: malformed cmd_nr -> held, press -> next cell A9, no command  PASS");
 
         if (errors == 0) begin
             $display("ISO_READER_STILLOFF_TB: ALL TESTS PASSED");

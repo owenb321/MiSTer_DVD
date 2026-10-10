@@ -188,17 +188,20 @@ def census_iso(path, captions=False):
     # pg_playback_mode@162 != 0 = random/shuffle programs (reader ignores it);
     # prohibited_ops@8 (u32) != 0 = PGC-level UOPs (not honoured, by decision);
     # still_time@163 != 0 = PGC still (untimed in the reader); an indefinite
-    # (0xFF) cell still that also carries a cell command (the reader runs the
-    # command first -- deliberate for menus, see conformance.md).
+    # (0xFF) cell still that also carries a cell command (the reader holds the
+    # still and runs the command on Still off, as libdvdnav does, since
+    # 2026-10-10 -- docs/dvd_nav.md "An indefinite still and its cell command";
+    # the axis stays as the exposure count of that path).
     #
     # Re-rank pass (2026-10-06) splits two of them:
     #   * @162 is random when non-zero with bit 7 CLEAR (libdvdnav play.c:69
     #     picks a random first program among (mode & 0x7F) + 1) and shuffle when
     #     bit 7 is SET (libdvdnav does not implement shuffle either).
-    #   * the 0xFF-still + cell-command cells are classed by what the command
-    #     does. A loop (LinkTopC / LinkCN / LinkTopPG / LinkTopPGC) looks the
-    #     same whether it runs before or after the still; anything else is the
-    #     BEAST_MASTER residual, a still we skip where libdvdnav holds it.
+    #   * the 0xFF-still + cell-command cells used to be classed loop / non-loop
+    #     (the reader ran a looping command before the still); since the reader
+    #     holds every one, the class no longer drives behaviour and was retired.
+    #     A cmd_nr past the PGC's cell commands is counted instead (libdvdnav:
+    #     "Invalid Cell command", the still holds and the next cell plays).
     pgc_ax = collections.Counter()
     pb_list, still_cmds = [], []
     for dom, abs_byte, pgc in _iter_all_pgcs(nav):
@@ -225,11 +228,9 @@ def census_iso(path, captions=False):
                 if 0 < c["cmd_nr"] <= len(cellc):
                     m = decode_vmcmd(cellc[c["cmd_nr"] - 1])
                 else:
-                    m = "?"
-                if not any(k in m for k in _STILL_LOOP_LINKS):
-                    pgc_ax["inf_still_nonloop_tt" if dom == DOM_TT
-                           else "inf_still_nonloop_menu"] += 1
-                    still_cmds.append("%s:%s" % (_DOM_NAME.get(dom, dom), m))
+                    m = "cmd_nr %d > %d" % (c["cmd_nr"], len(cellc))
+                    pgc_ax["inf_still_badcmd"] += 1
+                still_cmds.append("%s:%s" % (_DOM_NAME.get(dom, dom), m))
     f["pgc_random_mode"]     = pgc_ax["pbmode"] > 0
     f["pgc_random"]          = pgc_ax["pb_random"] > 0
     f["pgc_shuffle"]         = pgc_ax["pb_shuffle"] > 0
@@ -239,9 +240,8 @@ def census_iso(path, captions=False):
     f["pgc_still_time"]      = pgc_ax["pgc_still"] > 0
     f["inf_still_cmd_title"] = pgc_ax["inf_still_cmd_tt"] > 0
     f["inf_still_cmd_menu"]  = pgc_ax["inf_still_cmd_menu"] > 0
-    f["inf_still_nonloop_title"] = pgc_ax["inf_still_nonloop_tt"] > 0
-    f["inf_still_nonloop_menu"]  = pgc_ax["inf_still_nonloop_menu"] > 0
-    f["inf_still_nonloop_cmds"]  = still_cmds
+    f["inf_still_badcmd"]    = pgc_ax["inf_still_badcmd"] > 0
+    f["inf_still_cmds"]      = still_cmds
 
     # --- menu-key entries (3rd-edition audit item 10, 2026-10-06) -------------
     # The VM's Title / Menu / Chapter Menu keys jump to entry 2 (VMGM Title),
@@ -337,9 +337,6 @@ def census_iso(path, captions=False):
 _DOM_NAME = {DOM_FP: "FP", DOM_VMGM: "VMGM", DOM_VTSM: "VTSM", DOM_TT: "TT"}
 # Cell commands that keep a 0xFF still's cell (or its PGC) looping: running
 # them before the still looks the same as holding it (conformance.md, class C).
-_STILL_LOOP_LINKS = ("LinkTopC", "LinkCN", "LinkTopPG", "LinkTopPGC")
-
-
 def _iter_all_pgcs(nav):
     """Yield (domain, pgc_abs_byte, parsed_pgc) for every menu and title PGC.
     Best-effort like _iter_all_commands (FP is not in a PGCIT, so not here)."""
@@ -429,10 +426,9 @@ PREVALENCE_ROWS = [
     ("key_pgc1_cmenu_nonroot","  ...and that PGC 1 is not the Root menu","audit #10b (open)"),
     ("pgc_uop_title", "Title PGC authors UOP prohibitions",        "not honoured (decision)"),
     ("pgc_still_time","PGC still time authored",                   "audit C (deferred)"),
-    ("inf_still_cmd_title","0xFF cell still + cell command (title)","audit C"),
-    ("inf_still_nonloop_title","  ...command is not a loop (title)","audit C residual (open)"),
-    ("inf_still_cmd_menu", "0xFF cell still + cell command (menu)", "audit C (deliberate)"),
-    ("inf_still_nonloop_menu","  ...command is not a loop (menu)",  "audit C residual (open)"),
+    ("inf_still_cmd_title","0xFF cell still + cell command (title)","holds, then the command"),
+    ("inf_still_cmd_menu", "0xFF cell still + cell command (menu)", "holds, then the command"),
+    ("inf_still_badcmd",   "  ...its cmd_nr is past the cell commands","holds, then the next cell"),
     ("vm_callss",     "CallSS (menu call w/ resume)",              "supported"),
     ("vm_jumpss",     "JumpSS (system-space jump)",                "supported"),
     ("has_menu_goup", "Menu GoUp authored (B13 Return acts)",      "supported (B13)"),
@@ -479,8 +475,8 @@ def report(vectors):
         if f["vm_rnd"]:          flags.append("rnd")
         if f["vm_unknown_bits"]: flags.append("UNKBITS=%d" % f["vm_unknown_bits"])
         if f["pgc_pbmode_list"]: flags.append("PBMODE(%s)" % ",".join(f["pgc_pbmode_list"]))
-        if f["inf_still_nonloop_cmds"]:
-            flags.append("STILLCMD(%s)" % "; ".join(f["inf_still_nonloop_cmds"][:4]))
+        if f["inf_still_cmds"]:
+            flags.append("STILLCMD(%s)" % "; ".join(f["inf_still_cmds"][:4]))
         if f.get("cc_present"):  flags.append("CC608(%d/%d pairs%s)"
                                               % (f["cc_nonnull"], f["cc_pairs"],
                                                  ",f2" if f.get("cc_field2") else ""))

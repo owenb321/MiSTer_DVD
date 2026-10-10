@@ -14,7 +14,7 @@
 #   iso_reader_ptt_tb         the reader publishes the GLOBAL part on every chapter move
 #   iso_reader_fpnone_tb      A/B/F First Play with no FP PGC; C/D/E which title's table
 #                             a PGCN-only title jump reads; G/H an indefinite still and
-#                             its cell command (hold first unless the command loops)
+#                             its cell command (always holds first; Still off runs it)
 #   check_sprm67_wiring.py    emu.sv, which has no bench
 set -u
 cd "$(dirname "$0")/../.."
@@ -80,18 +80,13 @@ if [ "${1:-}" = "--red" ]; then
     # the part off by one (the 0-based index)
     mut R7-part-0based iso_reader_ptt_tb "T-I" \
         "s/                    ptt_cur <= {1'b0, g_best} + 11'd1;/                    ptt_cur <= {1'b0, g_best};/"
-    # every cell command counts as a loop: the old command-first order everywhere
-    mut R8-all-loop iso_reader_fpnone_tb "G:" \
-        "s/^wire        cc_loops   = (ccls_q\[20\] \&\& ((cc_lt == 4'd1 \&\& cc_subloop) ||/wire        cc_loops   = 1'b1 || (ccls_q[20] \&\& ((cc_lt == 4'd1 \&\& cc_subloop) ||/"
-    # no command counts as a loop: a motion menu would freeze
-    mut R9-none-loop iso_reader_fpnone_tb "H:" \
-        "s/^wire        cc_loops   = (ccls_q\[20\] \&\& ((cc_lt == 4'd1 \&\& cc_subloop) ||/wire        cc_loops   = 1'b0 \&\& (ccls_q[20] \&\& ((cc_lt == 4'd1 \&\& cc_subloop) ||/"
-    # types 2/3 decoded as LinkSubIns-only (the first version's mistake)
-    mut R11-type3-subins iso_reader_fpnone_tb "B2:" \
-        "s/                                    cmd_b0\[7:5\] == 3'd2 || cmd_b0\[7:5\] == 3'd3,/                                    1'b0,/"
-    # the class table written one entry off (cmd_nr is 1-based)
-    mut R10-class-off-by-one iso_reader_fpnone_tb "[GH]:" \
-        "s/                        ccls_wa <= walk_idx\[10:3\] - nr_pre16\[7:0\] - nr_post16\[7:0\] + 8'd1;/                        ccls_wa <= walk_idx[10:3] - nr_pre16[7:0] - nr_post16[7:0];/"
+    # the old command-first order: a 0xFF still with a cell command runs the command at
+    # once (before PR #169 for every command, after it for a looping one)
+    mut R8-cmd-first iso_reader_fpnone_tb "H:" \
+        "s/^\( *\)end else if (vm_mode \&\& cm_rd\[7:0\] != 8'd0 \&\&\$/\1end else if (1'b0 \&\&/"
+    # the hold forgets its command: Still off plays on instead of running it
+    mut R9-hold-drops-cmd iso_reader_fpnone_tb "B2:" \
+        "s/still_next  <= (cm_rd\[7:0\] <= cmd_nr_cell) ? STILL_CMD :/still_next  <= (1'b0) ? STILL_CMD :/"
 fi
 
 [ $rc -eq 0 ] && echo "run_sprm67: ALL GREEN" || echo "run_sprm67: FAILURES"
