@@ -909,6 +909,10 @@ def telem_summary(rows):
     # reading (docs/dvd_nav.md "IFO header gate"; absent on an older core = 0).
     s['ifo'] = {f: max(_flag(x, f) for x in rows)
                 for f in ('bup_vmg', 'bup_vts', 'ifo_nogood')}
+    # The mount's VMGM Title-entry probe (audit 10b): sticky per mount like the
+    # above. title_probed 1 + title_menu 0 = the Title key is a no-op on this disc.
+    s['title'] = {f: max(_flag(x, f) for x in rows)
+                  for f in ('title_probed', 'title_menu')}
     # Field parity (word 31, docs/field_parity.md "Strict first field"): two wrapping
     # counters, 7 and 8 bits, pin-reset only, so a window sums its per-row deltas.
     # fb_heals = the corrector's feedback insertions (each one is ~0.5 s of a misaligned

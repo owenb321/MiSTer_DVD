@@ -22,8 +22,11 @@
 #   R7  no-revert      : a bad BUP is parsed instead of the IFO -> F
 #   R8  ten-bytes      : only magic bytes 0-9 compared          -> F G H
 #   R9  any-kind       : a VTS IFO may carry the VMG letters    -> H
-#   R10 chk-stuck      : hdr_chk not cleared at completion      -> A B C D G H I
-#                        (E has no BUP to swap to, F's revert clears it itself)
+#   R10 chk-stuck      : hdr_chk not cleared at completion      -> A B C D E G H I
+#                        (F's revert clears it itself. E joined with audit 10b: its
+#                        menus-on mount now runs the Title-entry probe, whose VMGI
+#                        read leaves the gate stuck at HC_VMG, so the probe's next
+#                        read -- the PGCI_UT, no magic -- swaps to VIDEO_TS.BUP)
 #   R11a no-flag-vmg   : ifo_bup_vmg never set                  -> C
 #   R11b no-flag-vts   : ifo_bup_vts never set                  -> B D G H I
 #   R11c no-flag-nobup : ifo_nogood not set when there is no BUP-> E
@@ -114,7 +117,7 @@ if [ $RED -eq 1 ]; then
         's/hdr_ba < 4.d12 &&/hdr_ba < 4\x27d10 \&\&/'
     mutate R9_any_kind "H" \
         's/sd_buff_dout != hdr_exp;/sd_buff_dout != hdr_exp \&\& !(hdr_ba >= 4\x27d10 \&\& (sd_buff_dout == "M" || sd_buff_dout == "G"));/'
-    mutate R10_chk_stuck "A B C D G H I" \
+    mutate R10_chk_stuck "A B C D E G H I" \
         's/(ifo_nogood <= 1.b1;       \/\/ header bad, no .BUP to try\n\s*)hdr_chk      <= HC_NONE;/$1/'
     mutate R11a_no_flag_vmg "C" \
         's/if \(hdr_vmg\) ifo_bup_vmg <= 1.b1;/if (hdr_vmg) ifo_bup_vmg <= 1\x27b0;/'

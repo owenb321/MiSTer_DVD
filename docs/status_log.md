@@ -22,6 +22,54 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ✅ **TITLE KEY ON A DISC WITH NO TITLE MENU IS A NO-OP (audit 10b, 2026-10-09,
+  ✅ MERGED PR #173; sim-proven, ✅ HW A/B against its own control).**
+  - **The defect.** 88 of 1,521 library discs author a VMGM PGCI_UT with no entry-2 (Title)
+    PGC (Sony/Columbia authoring writes every VMGM entry id as 0x00: SPIDER-MAN_2,
+    PANIC_ROOM_SUPERBIT, TOKYO_GODFATHERS). The reader's entry scan missed and took SRP[0],
+    VMGM PGC 1, the boot chain on 84 of them: Title replayed the opening logos (14 s typical,
+    up to 28 s), or on the 20 with a cell-less PGC 1 acted like Menu. libdvdnav
+    (`vm_jump_menu`) and the book (3rd ed. p. 9-26) make it a no-op.
+  - **Why the fix is at mount.** A jump flushes the stream the cycle it executes, before
+    its IFO walk can see the miss, so "miss → resume" would visibly jump back to the cell
+    start. The reader now probes the VMGM for entry 2 in `S_FINALIZE` (Disc Menus on, VMGI
+    present) using the VMGM jump's own walk, and raises `nav_ready` (the VM's boot) only when
+    it ends. `emu.sv` drops the Title key unless `vmgm_title_ok`. Design:
+    `docs/dvd_vm.md` "Title key on a disc with no Title menu".
+  - **Behaviour changes beyond the 88.** 5 discs with no VMGM PGCI_UT (A_LEAGUE_OF_THEIR_OWN,
+    BILLY_JACK_4X3_FF_SIDE_A, DVDVolume, Hornblower_Vol_1, McLintock_US_Vers) and 1 with no
+    VMGI (MILLIONAIRERUS) also get a strict no-op. Before, the jump failed and `FB_VMGM`
+    resumed the title from its cell start or booted the auto title. libdvdnav returns 0 there
+    too, so this is not a lost fallback. Unchanged by decision: VM-command jumps to VMGM
+    entry 2 keep the SRP[0] fallback; the Chapter Menu key keeps its fallback to the main
+    menu; Title during First Play still jumps (libdvdnav ignores it; users skip logos with it).
+  - **Measured offline** (`IsoNav.pgcit`, the probe's LU pick and match rule, scratch tool):
+    1,428 Title menus, 88 misses, 5 no PGCI_UT, 1 no VMGI, matching the 2026-10-06 census.
+  - **Telemetry.** Word 14 bit 13 `vmgm_probed`, bit 14 `vmgm_title_ok`; JSON
+    `flags.title_probed` / `flags.title_menu`; `mister.py telem` → `title`; a `DVD_CTL` log
+    line per mount.
+  - **Gates.** `bench/dvd/run_title_probe.sh --red` (`iso_reader_titleprobe_tb` arms A–H, the
+    VMGI-mounting reader benches, 16 mutations); `tools/check_title_key_wiring.py --red`;
+    `tools/check_bup_wiring.py` updated for the new word-14 top bits.
+  - **HW (rig, 2026-10-10; same Main in both arms, the core the only change).**
+    - Control (`dev-pausewdog` = `main`): SPIDER-MAN_2, Title at 0:34 of the feature →
+      the TriStar logo, then the boot chain's 2:27 trailer. The defect, reproduced.
+    - Build (`dev-titlenoop`, SEED 17, clk_dec 92.6/89.8, clk_mem 98.6/100.3,
+      `clock_check` PASS, 38,589 ALM vs `main`'s 38,669): boot identical; telemetry
+      `title_probed 1, title_menu 0`; Title at 1:03 of the feature → nothing, the clock runs
+      on 1:12 → 1:27, no flush, `menu` 0. PANIC_ROOM_SUPERBIT: `title_menu 0`, Title in its
+      VMGM main menu ignored (the loop clock runs on). The key reached the core: Menu and
+      Select worked in the same launches, and T2 below acts on it. The Main's
+      `DVD_CTL: VMGM has [no] Title menu` line comes from the probe's flag, once per mount
+      (it never sees the key): one line per launch, no / has / no, so the edge re-arms on
+      a remount.
+    - Positive control: ULTIMATE_T2 reports `title_menu 1`, and Title from inside the
+      Theatrical title opens the disc's menu (`menu` 0 → 1).
+  - **Sim regression:** `run_reader_regress.sh` against `main`: all 52 arms' verdicts
+    identical (traces differ only by the later boot, as intended). Four arms fail on `main`
+    too, with the same text: `iso_reader_atmos`, `iso_reader_auddrain_noaudio`,
+    `iso_reader_tpsw_boot`, `mode_realign_chain_prefix` (pre-existing, not this change).
+
 - ✅ **PAUSE LOSES AUDIO: THE DECODE-STALL WATCHDOG FIRED WHILE PAUSED (2026-10-09, ✅ MERGED
   PR #172; sim-proven, ✅ HW A/B against its own control).**
   - **Field report:** a user playing from a NAS: after a pause, A/V is out of sync until a

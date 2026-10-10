@@ -704,6 +704,11 @@ feature.
 You pressed **Menu** to skip the intro, and that disc puts its randomisation setup in the
 boot sequence. Let the intro play. A real player behaves the same way.
 
+### Title does nothing
+
+The disc has no title menu. About one disc in twenty is authored without one, and a set-top
+player ignores the key on those discs too. Press **Menu** for the disc's main menu.
+
 ### A scratched disc has no menus or chapters
 
 A DVD keeps its menus, chapters and track lists in small navigation files (`.IFO`), with

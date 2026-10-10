@@ -132,9 +132,13 @@ def check(emu_raw, ctl_raw):
         if got != want:
             bad.append("word 14 bits [12:10] are %s, want {%s} (nogood, bup_vts, bup_vmg)"
                        % (got, ', '.join(want)))
+        # Bits [15:13] above: {1'b0, title_ok, probed} since audit 10b, which
+        # tools/check_title_key_wiring.py checks net by net; here only that the
+        # word still totals 16 bits.
         pad = parts[:-6]
-        if pad != ["3'd0"]:
-            bad.append("word 14 pad above bit 12 is %s, want 3'd0 (16 bits total)" % pad)
+        if pad != ["1'b0", 'vmgm_title_ok_w', 'vmgm_probed_w']:
+            bad.append("word 14 above bit 12 is %s, want {1'b0, vmgm_title_ok_w, "
+                       "vmgm_probed_w} (16 bits total)" % pad)
 
     csrc = strip_comments(ctl_raw)
     for key, bit in (('bup_vmg', 10), ('bup_vts', 11), ('ifo_nogood', 12)):
@@ -161,7 +165,7 @@ MUTATIONS = [
      'wire        ifo_bup_vmg_w, ifo_bup_vts_w;'),
     ('vmg/vts swapped', 'emu', r'ifo_nogood_w, ifo_bup_vts_w, ifo_bup_vmg_w, pr_rmask_allp',
      'ifo_nogood_w, ifo_bup_vmg_w, ifo_bup_vts_w, pr_rmask_allp'),
-    ('flag off telemetry', 'emu', r"\{3'd0, ifo_nogood_w, ", "{4'd0, "),
+    ('flag off telemetry', 'emu', r"vmgm_probed_w, ifo_nogood_w, ", "vmgm_probed_w, 1'b0, "),
     ('ctl wrong bit', 'ctl', r'\(w\[14\] >> 11\) & 1\)', '(w[14] >> 13) & 1)'),
     ('ctl key dropped', 'ctl', r'\\"ifo_nogood\\":%u', '\\"nogood\\":%u'),
 ]

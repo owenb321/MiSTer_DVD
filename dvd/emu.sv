@@ -704,7 +704,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-pausewdog"
+`define CORE_VERSION "dev-titlenoop"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -1245,7 +1245,7 @@ dvd_telem dvd_telem_inst (
     .disp_lag   (av_disp_lag[19:4]),     // clk_sys: displayed PTS - STC (word 11)
     .play_err   (dbg_aud_play_err),      // clk_sys: audio position vs anchor (word 12)
     .av_drift   (av_drift[19:4]),        // clk_sys: dispatched audio PTS - STC (word 13)
-    .sched_flags({3'd0, ifo_nogood_w, ifo_bup_vts_w, ifo_bup_vmg_w, pr_rmask_allp, core_bob_act, core_sched_flags}),   // [12] = an IFO header was bad with no good .BUP, [11] = a VTSI / [10] = the VMGI is read from its .BUP (audit 8, sticky per mount), [9] = disc prohibits every region (SPRM20 fell back), [8] = progressive bob active   // clk_dec: what the scheduler saw (word 14)
+    .sched_flags({1'b0, vmgm_title_ok_w, vmgm_probed_w, ifo_nogood_w, ifo_bup_vts_w, ifo_bup_vmg_w, pr_rmask_allp, core_bob_act, core_sched_flags}),   // [14] = the VMGM has a Title menu / [13] = the mount's Title-entry probe ran (audit 10b, sticky per mount), [12] = an IFO header was bad with no good .BUP, [11] = a VTSI / [10] = the VMGI is read from its .BUP (audit 8, sticky per mount), [9] = disc prohibits every region (SPRM20 fell back), [8] = progressive bob active   // clk_dec: what the scheduler saw (word 14)
     .sched_dur  (core_sched_dur),             // clk_dec: the duration it applied (word 15)
     // words 16..19, clk_dec: dec_duty's cycle counts /4096 (docs/decode_pacing.md)
     .dec_disp   (core_duty_disp),
@@ -1756,6 +1756,10 @@ wire        vm_link_fail;      // pulse: menu link failed -> re-entered menu (HU
 wire [7:0]  vm_link_fail_pgcn; // the PGCN that failed to resolve (HUD digits)
 wire [7:0]  rdr_play_vtsn;
 reg         key_menu_p, key_title_p, key_return_p, key_cmenu_p;
+// The reader's mount-time Title-entry probe (audit 10b, dvd_iso_reader S_FINALIZE):
+// probed = the probe ran to its end, title_ok = the VMGM has an entry-2 (Title) PGC.
+// Sticky per mount, telemetry word 14 bits 13-14. title_ok gates the Title key below.
+wire        vmgm_probed_w, vmgm_title_ok_w;
 
 wire menus_on  = ~status[1];                       // O[1] Disc Menus (index 0 = On, default)
 wire hud_dbg   = status[2];                         // O[2]: HUD shows reader PGCN/VTS (nav diagnostic)
@@ -2178,7 +2182,17 @@ always @(posedge clk_sys or negedge reset_n) begin
         if (menus_on && menu_edge)
             key_menu_p <= 1'b1;
         // B12 Title = the real-remote "Top Menu" key -> VMGM Title menu.
-        if (menus_on && title_edge)
+        // ★ A STRICT NO-OP ON A DISC WITH NO TITLE MENU (audit 10b): the key is
+        // dropped here, before the VM sees it, unless the reader's mount probe found
+        // a VMGM entry-2 PGC. libdvdnav's vm_jump_menu returns without jumping when
+        // set_MENU finds no entry (and the book, 3rd ed. p. 9-26: the transition "is
+        // not actually executed"). It cannot be left to the jump: the reader's scan
+        // used to miss and fall back to VMGM PGC 1, the boot chain on 84 of the 88
+        // library discs with no entry 2, so Title replayed the opening logos -- and
+        // any jump flushes the stream before its IFO walk can see the miss. Dropping
+        // it here also skips TITLE_RSM, so no resume point or Menu toggle is armed.
+        // Gated by tools/check_title_key_wiring.py.
+        if (menus_on && title_edge && vmgm_title_ok_w)
             key_title_p <= 1'b1;
         // B13 Return = GoUp (the loaded PGC's authored goup_pgcn; no-op
         // without one - the VM does the check).
@@ -3685,6 +3699,8 @@ dvd_iso_reader dvd_iso_reader_inst (
     .ifo_bup_vmg    (ifo_bup_vmg_w),
     .ifo_bup_vts    (ifo_bup_vts_w),
     .ifo_nogood     (ifo_nogood_w),
+    .vmgm_probed    (vmgm_probed_w),      // audit 10b: the Title-entry probe ran
+    .vmgm_title_ok  (vmgm_title_ok_w),    // ...and found a VMGM Title menu
     .chap_pulse     (chap_pulse),         // gamepad chapter skip (B2/B3)
     .chap_dir       (chap_dir),
     .chap_mag       (chap_mag),           // debounced burst magnitude (# chapters)
