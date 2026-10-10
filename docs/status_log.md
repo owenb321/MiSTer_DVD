@@ -22,8 +22,8 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- ✅ **PAUSE LOSES AUDIO: THE DECODE-STALL WATCHDOG FIRED WHILE PAUSED (2026-10-09, branch
-  `feature/pause-wdog`; sim-proven, ✅ HW A/B against its own control).**
+- ✅ **PAUSE LOSES AUDIO: THE DECODE-STALL WATCHDOG FIRED WHILE PAUSED (2026-10-09, ✅ MERGED
+  PR #172; sim-proven, ✅ HW A/B against its own control).**
   - **Field report:** a user playing from a NAS: after a pause, A/V is out of sync until a
     seek. The reporter confirmed a seek clears it.
   - **The first theory was wrong, and the rig said so.** The theory was a NAS spin-up

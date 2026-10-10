@@ -700,7 +700,7 @@ game discs plus a seeded random 100; numbers and method in
 which would give auto 16:9 switching on PAL widescreen CRTs.
 **⛔ by decision 2026-10-01:** UOP enforcement, APS (Macrovision) and CGMS-A.
 
-### ✅ Pause no longer loses audio (2026-10-09, branch `feature/pause-wdog`; ✅ HW A/B vs `main` — `docs/status_log.md` "Pause loses audio")
+### ✅ Pause no longer loses audio (2026-10-09, ✅ MERGED PR #172; ✅ HW A/B vs `main` — `docs/status_log.md` "Pause loses audio")
 
 - [x] The AC-3/engine stall watchdog is held while paused (it dumped ~1 frame per 0.65 s, so
       audio resumed early). `run_pause_wdog.sh --red`; 10 s pause on the rig: +525 → +7 ms.
