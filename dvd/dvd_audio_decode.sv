@@ -54,6 +54,9 @@ module dvd_audio_decode #(
     // the ring head (for the old tail to play out AND for the clock to reach its
     // timeline) before it is dispatched anyway. 24 -> ~0.62 s. TBs shrink it.
     parameter int HOLD_W = 24,
+    // AC-3/engine decode-stall watchdog width: 2^W / CLK_HZ s with no decode
+    // progress while fed before a self-heal reset. 24 -> ~0.62 s. TBs shrink it.
+    parameter int WDOG_W = 24,
     // D4 (docs/dts_decoder.md): the codebook halves the LPCM and MP2 PCM FIFOs carry as
     // their power-up contents (the core passes dvd/dts/cb_host_*.mem; "" = none)
     parameter     LPCM_INIT = "",
@@ -777,7 +780,7 @@ module dvd_audio_decode #(
     // boundary. rsthold gives a clean multi-cycle reset and a one-shot.
     // ---------------------------------------------------------------------
     logic [4:0]  ac3_rsthold;
-    logic [23:0] ac3_wdog;                 // 2^24/27e6 ~= 0.62 s
+    logic [WDOG_W-1:0] ac3_wdog;           // 2^24/27e6 ~= 0.62 s
     wire         ac3_wdog_to = (&ac3_wdog);
     // Distinguish a genuinely STUCK decoder (fed bytes but produced no output) from
     // mere INPUT STARVATION (a governor/demux delivery GAP: no bytes arriving). The
@@ -801,7 +804,15 @@ module dvd_audio_decode #(
             // the decoder is then OUTPUT-blocked on the full pcm fifo by design —
             // not stuck — and a self-heal reset would dump the very bytes queued
             // for the scheduled playback start.
-            if (imdct_done || eng_frame_ok || !((cur_codec == T_AC3) || eng_pcm) || !drain_en)
+            // ★ AND while PAUSED, for the same reason: `pause` withholds the play
+            // tick (aud_ce_play), so the decoder blocks on the full pcm fifo by
+            // design. Without this term (issue: "out of sync after a pause",
+            // 2026-10-09) the watchdog fired every ~0.62 s of pause, each reset
+            // dumped the frame in the engine and the dispatcher fed it the next --
+            // ~one 32 ms frame lost per 0.65 s paused, so audio resumed EARLY by
+            // about 5% of the pause (measured on the rig: a 10 s pause -> +480 ms
+            // av_drift, a long one ~2.9 s lost). Gate: bench/dvd/run_pause_wdog.sh.
+            if (imdct_done || eng_frame_ok || !((cur_codec == T_AC3) || eng_pcm) || !drain_en || pause)
                 ac3_wdog <= '0;
             else                           ac3_wdog <= ac3_wdog + 1'b1;
             // input-activity tracker: cleared on decode progress, set when a byte is fed

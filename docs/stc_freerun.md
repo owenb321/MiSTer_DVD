@@ -210,8 +210,8 @@ persistence visit while `sched_next_due` holds is a late (`frame_late` →
 `frame_drop_ctl`, unchanged).
 
 **Discontinuity**: a tagged picture more than one frame BEHIND the timeline or
-more than 0.5 s AHEAD of it, or more than `LATE_MAX` (350 ms) behind the clock,
-re-anchors. Small gaps are waited out (an authored dropped frame); small
+more than 0.5 s AHEAD of it, or more than `LATE_MAX` (2.7 s since §3.7(2); it was
+350 ms when this was written) behind the clock, re-anchors. Small gaps are waited out (an authored dropped frame); small
 lateness is displayed now and recovered by the frame-drop governor, which
 makes the decoder run early so later pictures WAIT — the closed loop the
 refresh ledger could only approximate. `LATE_MAX` covers a reader-held still

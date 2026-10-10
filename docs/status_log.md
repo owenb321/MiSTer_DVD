@@ -22,6 +22,65 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ✅ **PAUSE LOSES AUDIO: THE DECODE-STALL WATCHDOG FIRED WHILE PAUSED (2026-10-09, ✅ MERGED
+  PR #172; sim-proven, ✅ HW A/B against its own control).**
+  - **Field report:** a user playing from a NAS: after a pause, A/V is out of sync until a
+    seek. The reporter confirmed a seek clears it.
+  - **The first theory was wrong, and the rig said so.** The theory was a NAS spin-up
+    stalling reads after resume. The audio ring runs dry first, because the video front
+    leads the audio front by the mux skew: measured 50–370 ms median over 10 library discs
+    (scratch tool, not kept). Late audio is released at once, and `head_catchup` only acts
+    above 300 ms. That gap in the design is real (a mid-play underrun leaves 50–300 ms of
+    lateness unworked) but was NOT this report. The telemetry put the loss **inside the
+    pause, before any stall**.
+  - **Measured (ALEXANDER from the NAS share, decoded AC-3, `main` build):** `eng_frames`
+    reset to 0 about 0.7 s into the pause. `av_drift` (dispatched audio PTS − STC) then
+    climbed in 32 ms steps, one AC-3 frame per ~0.65 s.
+    - 10 s pause, NAS awake: +480 ms, audio EARLY, held after resume.
+    - ~7 min pause: the ring emptied and the VBUF filled (~2.9 s lost). The re-armed gate
+      waited, the 2.5 s `arm_timer` fallback released it, and audio ran 330 ms early.
+  - **Cause:** `dvd_audio_decode`'s AC-3/engine stall watchdog (`ac3_wdog`, 0.62 s) is held
+    clear on `!drain_en` but was not held on `pause`. `pause` gates `aud_ce_play`, so the
+    engine blocks on its full PCM FIFO by design.
+    - Every watchdog period, `ac3_stall_rst` reset the engine (dumping its frame), and the
+      dispatcher fed it the next frame.
+    - Audio then resumed sample-continuously past the hole, so it was early by about 5% of
+      the pause. Nothing re-times early audio mid-play.
+    - The term predates the shared engine (the old `ac3_front` had the same hold), so this
+      is long-standing. It hit every `pause_aud` source: pause, Stop and a held seek gesture
+      (a seek ends in a flush, so only pause and Stop could show it). AC-3, DTS and MP2 were
+      affected; LPCM and passthrough do not count the watchdog.
+  - ⚠ **`play_err` cannot see this class.** It is position since the last release, so a
+    hole in the CONTENT reads 38 ms throughout. `av_drift` is the instrument.
+  - **Fix:** `|| pause` on the watchdog's hold, and a `WDOG_W` parameter (default 24 = the
+    old literal) so a bench can shorten it. A genuinely hung decoder now waits for the
+    resume before it self-heals.
+  - **Gate:** `bench/dvd/run_pause_wdog.sh --red`. `pause_wdog_tb` feeds six whole AC-3
+    frames and scores the listener: every sample latched by the output mux (`tgt_upd`; NOT
+    `dbg_play_cnt`, which counts ticks that found the FIFO empty), no self-heal reset and no
+    re-arm while paused, plus a no-pause control that must reach the same 9216.
+    - R1 removes the term: 5 resets in a 5-period pause and 4096 samples lost. The control
+      still passes.
+    - The run takes ~12 min (real AC-3 decode at 27 MHz).
+  - ✅ **HW A/B (second rig, same disc, same Main, same script):** launch ALEXANDER from
+    the NAS share (decoded AC-3), chapter skip to resync, play 10 s, pause, resume, then
+    watch telemetry for 25 s.
+
+    | build | pause | `av_drift` before → after | during the pause | engine reset |
+    |---|---|---|---|---|
+    | control `dev-memretime` (`main`) | 10 s | +6.9 → **+525 ms** | 26 → 506 ms | yes |
+    | fix `dev-pausewdog` (SEED 17) | 10 s | +12.0 → +7.3 ms | flat 12.6 ms | no |
+    | fix | 120 s | +7.8 → +7.1 ms | flat 6.0 ms | no |
+
+    No re-arm in any arm, and audio played after every resume. Fit: `clk_dec` 90.13/86.27,
+    `clk_mem` 101.32/101.93 MHz.
+  - **Not covered:** the frame-step session (it releases backpressure while paused, and the
+    decoder stays gated, so the hold covers it by construction; not run on HW), and Stop.
+  - **A second, separate gap found on the way (not fixed):** after a mid-play audio
+    underrun, the re-armed gate releases late audio at once. Only `head_catchup` trims it,
+    and only above 300 ms, so 50–300 ms of lateness can persist until a flush. A NAS
+    read-stall could hit it. No field report yet.
+
 - ✅ **CLK_MEM RETIME: THE SPECULATIVE POP OFF THE CRITICAL PATH (2026-10-09, ✅ MERGED
   PR #171; sim-proven, every seed of a 7-seed sweep clears 90 MHz, HW A/B equal to `main`
   on the rig).** The follow-up PR #157 left open ("retime the
