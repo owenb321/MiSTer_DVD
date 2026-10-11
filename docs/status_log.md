@@ -23,7 +23,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 ## Hardware status (THIS fork, verified 2026-06-21)
 
 - ✅ **AN INDEFINITE STILL HOLDS BEFORE EVERY CELL COMMAND (audit class C residual,
-  2026-10-10, branch `feature/still-hold`; sim-proven, ✅ HW A/B against `main`).**
+  2026-10-10, ✅ MERGED PR #174; sim-proven, ✅ HW A/B against `main`).**
   - **The audit item was mostly closed already.** Its roadmap text ("the reader runs the
     cell command first", 7 title discs) came from the 2026-10-06 census, before PR #169.
     Re-measured against #169's rule, 5 of the 7 already held: Thayer's Quest and Deal or No
