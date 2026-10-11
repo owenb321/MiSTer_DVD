@@ -27,11 +27,18 @@
 // for free — including through governor drops and repeats, because the caption
 // clock and the raster are then literally the same clock.
 //
-// Pairs carry their own field bit (marker bit 0: 1 = field 1 = CC1/CC2), so they
-// are de-interleaved into two slots and each field serves its own. A disc that
-// only ever emits field 1 (every disc measured) simply leaves the field-2 slot
-// empty, and field 2 transmits nothing. An empty slot blanks line 21 rather than
-// inventing a null pair — we transmit exactly the fields the disc provides.
+// Each pair arrives tagged with its field (1 = field 1 = CC1/CC2), so they are
+// de-interleaved into two slots and each field serves its own. The VLD derives
+// that tag from the entry's POSITION in the block, not from its marker bit
+// (issue #166, rtl/mpeg2/vld.v): entries alternate field by field, so each slot
+// receives one pair per frame and drains one per frame. ⚠ That alternation is
+// this module's input contract. A tag stream that puts both of a frame's pairs
+// on one field (the pre-#166 marker rule on discs that mark every entry 0xFF)
+// fills that slot twice as fast as it drains, the skid holds, the FIFO fills
+// and refuses writes, and whole runs of caption bytes are lost.
+// Field 2 carries padding (80 80, or 00 00) on almost every disc; an empty slot
+// blanks line 21 rather than inventing a null pair — we transmit exactly the
+// fields the disc provides.
 //
 // -----------------------------------------------------------------------------
 // WAVEFORM (EIA-608-B)
@@ -123,7 +130,7 @@ localparam [7:0]  LVL_HI    = 8'd128;      // 50 IRE at 255 = 100 IRE
 // ---------------------------------------------------------------------------
 // Cross the pairs from clk_dec into clk_sys.
 //
-// Depth 128 against a worst case of 62 pairs per GOP block: the block arrives as
+// Depth 128 against a worst case of 63 pairs per GOP block: the block arrives as
 // one burst when the VLD parses the GOP header and then drains at 2 pairs per
 // frame, so steady-state occupancy is about one GOP's worth. On overflow fifo_dc
 // simply refuses the write — a lost caption line, self-healing on the next block,

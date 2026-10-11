@@ -315,7 +315,7 @@ def census_iso(path, captions=False):
     # --- line-21 closed captions (video ES, opt-in) --------------------------
     f["cc_scanned"] = False
     if captions:
-        from cc_scan import scan_iso as cc_scan_iso, verdict as cc_verdict
+        from cc_scan import scan_iso as cc_scan_iso, verdict as cc_verdict, framing as cc_framing
         try:
             res, err = cc_scan_iso(path)
         except Exception:                                        # noqa: BLE001
@@ -327,7 +327,11 @@ def census_iso(path, captions=False):
             f["cc_carrier"]   = acc["cc_blocks"] > 0 and acc["nonnull"] == 0
             f["cc_pairs"]     = acc["pairs"]
             f["cc_nonnull"]   = acc["nonnull"]
+            # by POSITION since issue #166; census files written before it say
+            # False for every disc, because the marker rule put everything on f1
             f["cc_field2"]    = acc["nonnull_field"][0] > 0
+            # "A" = markers alternate fe/ff, "B" = every marker ff (issue #166)
+            f["cc_framing"]   = cc_framing(acc)[0] if acc["cc_blocks"] else None
             f["cc_708"]       = acc["ga94_cc"] > 0
             f["cc_verdict"]   = cc_verdict(acc)[0]
 

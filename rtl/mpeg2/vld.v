@@ -1107,13 +1107,31 @@ module vld(clk, clk_en, rst,
   /* ------------------------------------------------------------------------
    * DVD-FORK (line-21 closed captions): user_data byte snoop -> EIA-608 pairs
    * ------------------------------------------------------------------------
-   * Format (verified against real discs by tools/cc_scan.py, which checks every
-   * filler bit and the 608 odd parity of every data byte -- see
-   * docs/closed_captions.md §1):
+   * Format (docs/closed_captions.md §1; tools/cc_scan.py checks every filler bit
+   * and the 608 odd parity of every data byte):
    *
-   *   00 00 01 B2  43 43 01 F8  <flags>  { <marker> <b1> <b2> } x 2*cc_count
+   *   00 00 01 B2  43 43 01 F8  <flags>  { <marker> <b1> <b2> } x (2*cc_count + extra_field)
    *      flags: bit7 odd_field_first | bit6 filler | bit5:1 cc_count | bit0 extra_field
-   *      marker: bits 7:1 = 0x7F filler, bit 0 = 1 -> field 1 (CC1/CC2)
+   *      marker: bits 7:1 = 0x7F filler, bit 0 = "field_odd" -- NOT USED, see below
+   *
+   * DVD-FORK FIX (issue #166): THE FIELD IS THE ENTRY'S POSITION. Entries
+   * alternate field by field starting on odd_field_first, so entry k is field 1
+   * iff odd_field_first ^ k[0]. The marker bit cannot be trusted for this: 161 of
+   * 847 captioned discs in the 2026-10-10 library sweep (I_ROBOT,
+   * CASTLE_IN_THE_SKY, ...) write marker 0xFF on EVERY entry. The original cut
+   * took the field from the marker; on those discs every pair, padding included,
+   * went to field 1 at two pairs per frame, cc_line21's field-1 slot drained one,
+   * the CDC FIFO filled and refused writes, and CC1 came out garbled. On the
+   * other 686 discs (MEN_IN_BLACK, THE_MATRIX: markers alternate fe/ff) the two
+   * rules agree entry for entry, which is why the HW confirmation never saw it.
+   *
+   * Rejected alternative -- ffmpeg's mpeg12dec.c also requires marker 0xFF for
+   * field 1 (field 2 otherwise). In the sweep that condition differs from
+   * position alone on ONE disc, 193 entries, every one 80 80 padding; and here it
+   * would steer those entries into the field-2 slot, unbalancing the
+   * one-pair-per-field-per-slot alternation cc_line21's drain depends on -- the
+   * very overflow this fix removes. (ffmpeg also counts 6-byte entry PAIRS by
+   * marker scan, so it drops the extra entry; we do not, see ud_left.)
    *
    * WHY HERE AND NOT IN ps_demux: ps_demux sits IN FRONT of the VBUF, which runs
    * up to ~1 s ahead of the screen, so a demux-side sniff is the stale-display-
@@ -1129,9 +1147,9 @@ module vld(clk, clk_en, rst,
   reg        ud_active;                           // inside a user_data byte walk
   reg  [1:0] ud_hit;                              // 0=matching sig, 1=flags, 2=groups, 3=done
   reg  [3:0] ud_sig;                              // signature match progress / group phase
-  reg  [5:0] ud_left;                             // caption_field_blocks remaining (2*cc_count)
+  reg  [5:0] ud_left;                             // caption_field_blocks remaining (2*cc_count + extra_field)
   reg  [7:0] ud_b1;                               // first caption byte, held for the pair
-  reg        ud_fld;                              // marker's field bit
+  reg        ud_fld;                              // this entry's field: odd_field_first, toggled per entry
 
   wire       ud_walk  = (state == STATE_NEXT_START_CODE) && (getbits != 24'h000001);
   wire [7:0] ud_byte  = getbits[23:16];
@@ -1166,18 +1184,24 @@ module vld(clk, clk_en, rst,
               default: ud_active <= 1'b0;
             endcase
           end
-          2'd1: begin                             // flags byte -> 2*cc_count groups
-            ud_left <= {ud_byte[5:1], 1'b0};      // 2 * cc_count, saturating at 62
-            ud_hit  <= (ud_byte[5:1] == 5'd0) ? 2'd3 : 2'd2;
+          2'd1: begin                             // flags byte -> 2*cc_count + extra_field groups
+            // DVD-FORK FIX (issue #166): flags[5:0] = {cc_count, extra_field} IS
+            // 2*cc_count + extra_field, max 63 -- the format's own maximum, so
+            // 6 bits cannot truncate. The original cut loaded {cc_count, 0} and
+            // dropped the extra entry, which carries caption bytes on 105 of 847
+            // discs (a doubled control code's first copy, typically).
+            ud_left <= ud_byte[5:0];
+            ud_hit  <= (ud_byte[5:0] == 6'd0) ? 2'd3 : 2'd2;
             ud_sig  <= 4'd0;
+            ud_fld  <= ud_byte[7];                // odd_field_first: entry 0's field
           end
           2'd2: begin                             // { marker, b1, b2 } groups
             case (ud_sig)
               4'd0: begin
                 // marker filler must be 0x7F; anything else means we have lost
-                // sync inside the block -- stop rather than emit garbage.
+                // sync inside the block -- stop rather than emit garbage. Bit 0
+                // is deliberately ignored (issue #166, header above).
                 if (ud_byte[7:1] == 7'h7f) begin
-                  ud_fld <= ud_byte[0];
                   ud_sig <= 4'd1;
                 end else begin
                   ud_active <= 1'b0;
@@ -1188,6 +1212,7 @@ module vld(clk, clk_en, rst,
                 cc_pair       <= {ud_b1, ud_byte};
                 cc_pair_field <= ud_fld;
                 cc_pair_valid <= 1'b1;
+                ud_fld        <= ~ud_fld;         // fields alternate entry by entry
                 ud_sig        <= 4'd0;
                 ud_left       <= ud_left - 6'd1;
                 if (ud_left == 6'd1) ud_hit <= 2'd3;

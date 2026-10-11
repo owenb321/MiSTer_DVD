@@ -9,16 +9,26 @@
  * pipeline's timing, not about the format — so it is tested against the REAL
  * getbits_fifo + vld over REAL disc bytes rather than a hand-driven model.
  *
- * Fixture (tools/cc_scan.py --fixture, from MEN_IN_BLACK):
- *   cc_es.hex     — real GOP-header + user_data runs, 64-bit BE words
- *   cc_golden.hex — the pairs an independent Python parse found in those blocks
+ * Fixtures (tools/cc_scan.py --fixture, bench/dvd/test_vobs/<name>_{es,golden}.hex),
+ * chosen with +fixture=<name> (default cc):
+ *   cc    MEN_IN_BLACK       framing A: markers alternate fe/ff
+ *   cc_b  CASTLE_IN_THE_SKY  framing B: every marker ff (issue #166); both
+ *                            odd_field_first values, extra_field entries on
+ *                            each field, the last one carrying caption bytes
+ *   <name>_es.hex     — real GOP-header + user_data runs, 64-bit BE words
+ *   <name>_golden.hex — the pairs an independent Python parse found in those blocks
  * The golden side is the same code path that decodes readable English from the
  * disc (docs/closed_captions.md §3), so agreement here is agreement with the disc.
  *
- * Build:
- *   iverilog -g2012 -D__IVERILOG__ -I rtl/mpeg2 -o bench/dvd/cc_extract_sim \
- *       rtl/mpeg2/vld.v rtl/mpeg2/getbits.v bench/dvd/cc_extract_tb.sv
- *   vvp bench/dvd/cc_extract_sim
+ * ★ Fixture A alone cannot fail the pre-#166 marker rule: on framing A marker
+ * and position agree entry for entry. Run both (bench/dvd/run_cc_extract.sh).
+ *
+ * Besides the golden, one check does NOT come from the Python parse: the
+ * CONSUMER's contract. dvd/cc_line21.sv drains one pair per field from each of
+ * two slots, so the emitted field-1 and field-2 counts must balance to within
+ * one extra entry per block. The #166 defect read 168/0 here.
+ *
+ * Build/run: bench/dvd/run_cc_extract.sh [--red]
  */
 `timescale 1ns/1ps
 
@@ -53,6 +63,8 @@ module cc_extract_tb;
   integer    n_golden = 0;
   integer    n_seen   = 0;
   integer    errors   = 0;
+  integer    n_f1     = 0;            // emitted pairs tagged field 1
+  integer    n_f2     = 0;
 
   // ---- DUT ----
   wire  [4:0] advance;
@@ -127,24 +139,41 @@ module cc_extract_tb;
       end
     end
     n_seen = n_seen + 1;
+    if (cc_pair_field === 1'b1) n_f1 = n_f1 + 1;
+    else if (cc_pair_field === 1'b0) n_f2 = n_f2 + 1;
   end
 
   integer i, fh, code;
   reg [7:0] tb1, tb2;
   integer   tfld;
+  reg [8*64-1:0] fx;                  // fixture name
+  integer   nblk;                     // CC blocks in the ES (balance tolerance)
 
   initial begin
+    if (!$value$plusargs("fixture=%s", fx)) fx = "cc";
     for (i = 0; i < MAXW; i = i + 1) es[i] = 64'hx;
-    $readmemh("bench/dvd/test_vobs/cc_es.hex", es);
+    $readmemh($sformatf("bench/dvd/test_vobs/%0s_es.hex", fx), es);
     i = 0;
     while (i < MAXW && es[i] !== 64'hx) i = i + 1;
     es_words = i;
+    if (es_words == 0) begin
+      $display("FAIL: fixture %0s: no ES words", fx);
+      $fatal(1);
+    end
+    // count user_data blocks: 00 00 01 B2 on any byte alignment
+    nblk = 0;
+    for (i = 0; i < es_words * 8 - 3; i = i + 1)
+      if ((es[i/8]       >> (8*(7 - i%8))     & 8'hff) == 8'h00 &&
+          (es[(i+1)/8]   >> (8*(7 - (i+1)%8)) & 8'hff) == 8'h00 &&
+          (es[(i+2)/8]   >> (8*(7 - (i+2)%8)) & 8'hff) == 8'h01 &&
+          (es[(i+3)/8]   >> (8*(7 - (i+3)%8)) & 8'hff) == 8'hb2)
+        nblk = nblk + 1;
 
     // golden list is "<fld> <b1> <b2>" per line -- read it with $fscanf so the
     // three columns stay legible in the file rather than being packed for $readmemh
-    fh = $fopen("bench/dvd/test_vobs/cc_golden.hex", "r");
+    fh = $fopen($sformatf("bench/dvd/test_vobs/%0s_golden.hex", fx), "r");
     if (fh == 0) begin
-      $display("FAIL: cannot open cc_golden.hex");
+      $display("FAIL: cannot open %0s_golden.hex", fx);
       $fatal(1);
     end
     n_golden = 0;
@@ -157,7 +186,8 @@ module cc_extract_tb;
       code = $fscanf(fh, "%d %h %h\n", tfld, tb1, tb2);
     end
     $fclose(fh);
-    $display("cc_extract_tb: %0d ES words, %0d golden pairs", es_words, n_golden);
+    $display("cc_extract_tb [%0s]: %0d ES words, %0d CC blocks, %0d golden pairs",
+             fx, es_words, nblk, n_golden);
 
     #100 rst = 1;
     #200000;
@@ -166,11 +196,18 @@ module cc_extract_tb;
       $display("FAIL: extracted %0d pairs, expected %0d", n_seen, n_golden);
       errors = errors + 1;
     end
+    // consumer contract: one pair per displayed field, fields alternating, so the
+    // counts differ by at most one (extra_field entry) per block
+    if (n_f1 == 0 || n_f2 == 0 || n_f1 - n_f2 > nblk || n_f2 - n_f1 > nblk) begin
+      $display("FAIL: field balance %0d field-1 vs %0d field-2 over %0d blocks",
+               n_f1, n_f2, nblk);
+      errors = errors + 1;
+    end
     if (errors == 0)
-      $display("PASS: cc_extract_tb — %0d/%0d caption pairs recovered byte-exact",
-               n_seen, n_golden);
+      $display("PASS: cc_extract_tb [%0s] — %0d/%0d caption pairs recovered byte-exact, fields %0d/%0d",
+               fx, n_seen, n_golden, n_f1, n_f2);
     else begin
-      $display("FAIL: cc_extract_tb — %0d error(s)", errors);
+      $display("FAIL: cc_extract_tb [%0s] — %0d error(s)", fx, errors);
       $fatal(1);
     end
     $finish;
