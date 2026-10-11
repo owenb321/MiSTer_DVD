@@ -501,12 +501,12 @@ from the OSD. See [Analog and CRT output](../video/analog-crt.md#turning-it-on).
 
 Work through it in this order — the middle step is the one that resolves the ambiguity:
 
-1. Does the disc have captions? Only about **1 disc in 6** does, and **no PAL disc** does.
+1. Does the disc have captions? About **6 discs in 10** do, and **no PAL disc** does.
 2. Turn on **`CC Test Line`** (Debug page). A band of dashes that changes with dialogue
    means the core side is entirely working and the problem is TV-side. Nothing at all means
    the analog raster is not engaged, or this disc has no captions.
 3. Your TV must be set to **`C1`** — not the disc's subtitle menu. `C2`, `T1` and `T2` will
-   show nothing on any real disc.
+   show nothing on practically every disc.
 4. Captions are **analog only**, and the connection matters: composite and S-video always
    carry them, component does on many sets, and consumer sets generally **do not** slice
    them from RGB.

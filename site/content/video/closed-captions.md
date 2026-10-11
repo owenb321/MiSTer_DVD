@@ -21,8 +21,9 @@ core.
 
 ## What you need
 
-1. **An NTSC disc that actually has captions.** Only about **1 disc in 6** does. Every PAL
-   disc scanned has none — line 21 is an NTSC construct, and PAL discs use subtitles instead.
+1. **An NTSC disc that actually has captions.** About **6 discs in 10** in a survey of
+   some 1,400 discs do. Every PAL disc scanned has none — line 21 is an NTSC construct, and
+   PAL discs use subtitles instead.
 2. **The analog output engaged** — `Video Output = Interlaced`, or Auto with the analog
    ini bits set; see [Analog and CRT output](analog-crt.md).
 3. **A connection that carries line 21.** Composite and S-video always do. Component does
@@ -31,7 +32,7 @@ core.
 4. **`Line-21 CC` on** — Debug page, default On.
 5. **Your television set to `C1`.** Not the DVD's own subtitle menu — the TV's caption
    setting. `C1` is the correct choice: CC1 and CC2 both ride field 1, and field 2 is empty
-   on every disc surveyed, so `C2`, `T1` and `T2` will show nothing on any real disc.
+   on practically every disc surveyed, so `C2`, `T1` and `T2` will show nothing.
 
 Every US television 13 inches and larger sold since 1993 has a caption decoder.
 
@@ -64,8 +65,8 @@ dashed line at the top of the captured image.
 
 - **Analog output only.** Nothing appears on HDMI.
 - **NTSC only.**
-- **CC1 only in practice.** Field 2 is empty on every disc surveyed, so there is no CC3/CC4
-  second-language stream and no XDS program metadata to display.
+- **CC1 only in practice.** Field 2 is empty on practically every disc surveyed, so there
+  is no CC3/CC4 second-language stream and no XDS program metadata to display.
 - A disc can emit well-formed but **empty** caption blocks — one concert disc in the survey
   sends a caption block on every GOP in which every byte pair is null padding. A disc like
   that will correctly show nothing.

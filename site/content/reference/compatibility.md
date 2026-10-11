@@ -148,7 +148,7 @@ earlier than the bar showed if the target falls in a gap between two parts.
     play.
 
 **Closed captions are analog-only** and need a television that decodes them — see
-[Closed captions](../video/closed-captions.md). Roughly 1 disc in 6 carries them.
+[Closed captions](../video/closed-captions.md). About 6 NTSC discs in 10 carry them.
 
 **Changing the audio track inside a disc menu** silences the menu's audio until you leave
 the menu.

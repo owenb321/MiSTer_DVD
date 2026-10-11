@@ -2,6 +2,9 @@
 
 **Status: ✅ HW-CONFIRMED 2026-08-26 (round 5, user report — C1 captions complete and
 readable on MiB and The Matrix, real TV via the YC active encoder board over composite).**
+**Issue #166 (2026-10-10): the field of each caption entry is now its POSITION, not its
+marker bit, and the `extra_field` entry is read — sim-proven on both framings (§8),
+⏳ HW-confirm pending on I_ROBOT / CASTLE_IN_THE_SKY (a TV's C1, by eye).**
 Implemented as line-21 re-insertion on the analog raster. The core now strips the disc's EIA-608 caption bytes out of the
 MPEG-2 video stream and re-modulates them onto **line 21 of the analog output**, exactly
 as a real DVD player does, so the *television's* own caption decoder renders them. There
@@ -113,15 +116,21 @@ re-inject them onto line 21 of its *analog* output for the TV to decode.
 01               user_data_type_code
 F8               caption_block_size
      bit7 odd_field_first | bit6 filler | bit5:1 cc_count | bit0 extra_field
-then 2 * cc_count caption_field_blocks of 3 bytes each:
-     bit7:1 filler 0x7F | bit0 field_odd ,  cc_byte_1 , cc_byte_2
+then 2 * cc_count + extra_field caption_field_blocks of 3 bytes each:
+     bit7:1 filler 0x7F | bit0 "field_odd" ,  cc_byte_1 , cc_byte_2
 ```
 
-Layout per ffmpeg's `mpeg12dec.c`. **This was verified, not assumed** — `cc_scan.py`
-checks every filler bit and the EIA-608 odd parity of every data byte and reports the
-pass rate. On all six captioned discs in the local library: `bad_marker=0`,
-`parity_ok(nonnull)=100.0%`. The decoder also emits readable English text (§3), which is
-the end-to-end proof that the field layout above is right.
+Layout per ffmpeg's `mpeg12dec.c`. `cc_scan.py` checks every filler bit and the EIA-608
+odd parity of every data byte and reports the pass rate: on all six captioned discs of the
+original census, `bad_marker=0`, `parity_ok(nonnull)=100.0%`.
+
+> ⛔ **CORRECTED 2026-10-10 (issue #166).** The text here used to say readable CC1 text
+> was "the end-to-end proof that the field layout above is right". It proved the BYTES
+> were right, not the FIELDS: `decode_608_text` skips nulls and de-duplicates doubled
+> control codes, so it reads cleanly whichever field each entry is assigned to. The field
+> of entry *k* is its **position** — field 1 iff `odd_field_first XOR (k odd)` — and the
+> marker's bit 0 must not be used for it. A fifth of captioned discs write marker `0xFF`
+> on every entry (§8). Count `2·cc_count + extra_field` entries; the extra one is real.
 
 ### The three findings that decide the RTL design
 
@@ -204,6 +213,9 @@ Notes that matter:
   language, and **no XDS** (`xds=0`), so no program-name metadata to harvest. Only the
   CC1 stream carries anything. A v1 decoder can implement CC1 alone and lose nothing
   measurable here.
+  *(2026-10-10: this was measured under the marker rule, which #166 showed is wrong for
+  framing-B discs — but it survives the correct position rule: on these six discs field 2
+  is still empty. Across the 847-disc sweep in §8, 845 have no data on field 2.)*
 - **No CEA-708 anywhere** (`ga94_cc=0` on all 34). The GA94/A/53 path is a broadcast-era
   format; these discs predate it or ignore it. 708 can be dropped from scope with evidence.
 - Confirmed real negatives, not sampling misses: ULTIMATE_T2 (5082 pictures scanned,
@@ -281,7 +293,7 @@ field 2 transmits nothing. An empty slot **blanks** line 21 rather than inventin
 pair: we transmit exactly the fields the disc provides.
 
 Crossing `clk_dec` → `clk_sys` is a `fifo_dc` inside the inserter, 128 entries against a
-worst case of 62 pairs per GOP block. `load_flush` — the same event that resets `ps_demux`
+worst case of 63 pairs per GOP block (2 × 31 + the extra entry). `load_flush` — the same event that resets `ps_demux`
 and re-anchors `av_sync` — drops the backlog, so a seek cannot paint the pre-seek sentence
 onto the new scene.
 
@@ -335,7 +347,7 @@ number can only ever cost one blanking line — it can never punch a hole in the
 
 | Bench | What it proves |
 |---|---|
-| `bench/dvd/cc_extract_tb.sv` | **180/180 caption pairs recovered byte-exact** by the real `vld` + `getbits_fifo` over real MEN_IN_BLACK bytes, against a golden list from the independent Python parse. This is the leg with a real assumption in it — that the payload streams past in `getbits[23:16]` — so it is tested against the real getbits pipeline, not a model. |
+| `bench/dvd/cc_extract_tb.sv` | **180/180 caption pairs recovered byte-exact** by the real `vld` + `getbits_fifo` over real MEN_IN_BLACK bytes, against a golden list from the independent Python parse. This is the leg with a real assumption in it — that the payload streams past in `getbits[23:16]` — so it is tested against the real getbits pipeline, not a model. Since #166 it runs on a second, framing-B fixture too (`cc_b`, CASTLE_IN_THE_SKY, 168/168) and checks the consumer's field balance; gate `bench/dvd/run_cc_extract.sh --red` (§8). |
 | `bench/dvd/cc_line21_tb.sv` | A **demodulator**, not a register-toggle check: slices the emitted luma at 25 IRE, locks to the run-in the way a television does, samples at the bit centres and reassembles the byte pair. Plus field-parity routing, one-pair-per-field pacing, empty-slot blanking, flush, and disabled. 5/5 green. |
 | `bench/dvd/re_interlace_tb.sv` | Unchanged and still green (9/9, pixel-exact content checks) with `cc_enable` held low — which is itself the assertion that captions cannot touch active video. |
 
@@ -562,10 +574,83 @@ blocks, all-null payload, so line 21 should stay blank on it.
 - **Sampled, not exhaustive.** Default 12 windows × 1200 sectors ≈ 29 MB per disc. A disc
   captioned only in one short stretch could read as clean. Raise `--windows` when a
   negative matters.
-- **Field-2 / XDS handling is counted, not decoded.** No disc in the library exercises it,
-  so the path is unproven; `--text` decodes CC1 only.
+- **Field-2 / XDS handling is counted, not decoded.** Two discs in the 847-disc sweep put
+  bytes on field 2 (§8) and neither is a CC3 caption track or XDS, so the path is
+  unproven; `--text` decodes CC1 only.
 - **`decode_608_text` is deliberately light** — printable characters with control pairs as
   separators, no roll-up/pop-on state machine. It exists to prove the bytes are real text,
   not to be a reference renderer. If Leg 3 is ever built, this is the natural place to grow
   a proper golden model to cosim against (the `tools/mp2_ref.py` / `tools/dvd_vm_ref.py`
   pattern).
+
+---
+
+## 8. Two caption framings — the field is the position (issue #166, 2026-10-10)
+
+**Field report:** CC1 garbled on I, Robot (`I_ROBOT_16X9`). Castle in the Sky, in the
+original census but never HW-tested, has the same framing.
+
+**Root cause.** A `CC` block interleaves one entry per displayed field. Discs label those
+entries two ways:
+
+| Framing | Markers | Which entry is field 1 | Library (2026-10-10 sweep) |
+|---|---|---|---|
+| A | alternate `fe` / `ff` | the `ff` one, which is also its position | 686 / 847 captioned discs (MEN_IN_BLACK, THE_MATRIX) |
+| B | **every entry `ff`** | position only: `odd_field_first`, then alternating | **161 / 847** (I_ROBOT, CASTLE_IN_THE_SKY, FERRIS_BUELLER, …) |
+
+The VLD snoop took the field from the marker bit, so on framing B every pair, padding
+included, was tagged field 1. `dvd/cc_line21.sv` routed them all to the field-1 slot,
+which drains one pair per frame while two arrived. The skid held, the 128-entry
+`fifo_dc` filled within seconds and refused writes, and whole runs of pairs were lost,
+control codes among them. What survived played at half rate with padding between pairs,
+breaking 608's back-to-back control-code redundancy.
+
+A second defect: the snoop read `2·cc_count` entries and ignored `extra_field`, dropping
+the last entry of every odd-length block. That entry carries caption bytes at least once
+in the sample on **105 / 847** discs (CASTLE_IN_THE_SKY's fixture block ends `94 52`, a
+PAC whose second copy opens the next block).
+
+**Fix** (`rtl/mpeg2/vld.v`, `DVD-FORK FIX (issue #166)`): `ud_fld` loads
+`odd_field_first` at the flags byte and toggles after every entry; `ud_left` loads
+`flags[5:0]`, which *is* `2·cc_count + extra_field` (max 63, the format's own maximum, so
+6 bits cannot truncate). The marker's filler bits are still checked, so a corrupt block
+still stops the walk. No port, no state and no `emu.sv` seam changed.
+
+**Rejected: ffmpeg's extra marker condition.** `mpeg12dec.c` labels an entry field 1 only
+if its position says so **and** its marker is `ff`. In the sweep that differs from
+position alone on exactly one disc (`nuclear_dvd_disc`, 193 entries) and every one is
+`80 80` padding. In this design it would also do harm: those entries would go to the
+field-2 slot, two pairs per frame, which is the overflow being fixed. (ffmpeg also counts
+6-byte entry *pairs* by marker scan, `i += 6`, so it drops a trailing extra entry. Do not
+cite it as honouring `extra_field`.) In the sweep, `2·cc_count + extra_field` equals the
+marker-scanned entry count on every block, so the declared count is used and the
+overhang question never arises.
+
+**Outliers seen, none of which needs handling:**
+- **CERBERUS** writes each pair to *both* field positions. Under the position rule CC1
+  decodes cleanly with doubled control codes, as 608 expects. Under the marker rule it
+  read "IITT''  SS". Field 2 gets an identical copy.
+- **WILD_WESTERNS_1A** has no field-1 data at all; field 2 carries a constant `40 80`
+  with no control code, which a TV ignores (no caption mode is ever set).
+
+**How it was missed:** the bench fixture was carved from MEN_IN_BLACK (framing A, where
+both rules agree entry for entry), and `cc_scan.py` sorted fields by the same marker bit,
+so it printed I_ROBOT as `f1=77 f2=0` without noticing that a field-1 count equal to the
+total is impossible. `cc_scan.py` now prints `framing A/B` and the field-1 share, and
+warns when the share is not about one half. `dvd_census.py` records `cc_framing`.
+Census JSONs written before this say `cc_field2: False` for every disc.
+
+**Verification:** `bench/dvd/run_cc_extract.sh --red`. Green: fixture A (`cc`, MiB) 180/180
+fields 90/90, which is byte-identical when regenerated under the new rule, the framing-A
+control. Fixture B (`cc_b`, CASTLE_IN_THE_SKY: both `odd_field_first` values, an extra
+entry on each field, the last carrying data) 168/168, fields 84/84. Red: M1 marker rule
+→ fails B only (`field balance 168 field-1 vs 0 field-2`, the field symptom
+reproduced). M2 dropping the extra entry → B. M3 no toggle and M4 ignoring
+`odd_field_first` → A and B.
+
+**Next step:** HW. A TV on C1 over composite/S-video: I_ROBOT and CASTLE_IN_THE_SKY readable;
+MEN_IN_BLACK and THE_MATRIX unchanged. To repeat the sweep, run
+`tools/cc_scan.py --windows 4 --win-sectors 600 "$DVD_ISO_DIR"` and tally the
+`framing` lines. The figures above came from exactly that sampling, so a disc's
+`extra_field` data count is a lower bound.
+
