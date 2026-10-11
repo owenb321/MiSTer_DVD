@@ -425,9 +425,10 @@ the fix is described after the list.
     chapter 10, opens "Chapters 7-12" with chapter 10 lit; the control opens "Chapters
     1-6" with chapter 1.
   - The First Play fix boots ISLAM_TRAILER's menu but ran into the reader's
-    command-before-0xFF-still order. That order is now narrowed to looping commands, by
-    user decision (`docs/dvd_nav.md` "An indefinite still and its cell command"); the
-    model mirrors it.
+    command-before-0xFF-still order. That order was narrowed to looping commands here,
+    and removed on 2026-10-10: every 0xFF still now holds before its command, as in
+    libdvdnav (`docs/dvd_nav.md` "An indefinite still and its cell command"); the model
+    mirrors it.
 - **Offline:** T3, D050818_01 and ISLAM_TRAILER now agree with libdvdnav.
 
 **Pass 2 (1,531 discs, the fixed model and oracle, a fresh run):**

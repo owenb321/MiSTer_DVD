@@ -106,7 +106,7 @@ Reference: `libdvdnav/src/vm/{decoder.c,vm.c,vmcmd.c,getset.c,play.c}`. Our impl
 | JumpVTS_TT / JumpVTS_PTT | ✅ | exact `VTS_PTT_SRPT[ttn][part-1] → {pgcn,pgn}` (Phase 6, `S_PTT_*` + `jump_ptt`); was ptt≈pg |
 | JumpSS_FP / VMGM_MENU / VTSM / VMGM_PGC | ✅ | MiB trampoline verified (PR fj#80/#84) |
 | CallSS_FP / VMGM_MENU / VTSM / VMGM_PGC (w/ resume cell) | ✅ | |
-| Exit | 🟡 | stops; no player-level "eject"/auto-stop semantics |
+| Exit | 🟡 | does **not** stop: `vm.uasm` sends Exit to `WV_IDLE`, which answers a cell or POST wait with `vm_adv`. A POST Exit then takes the fall-through path (`next_pgcn`, else a hold), a cell Exit plays the next cell, and a PRE Exit lets the PGC play. libdvdnav stops (`vm.c:964`). Measured exposure is small; see [§ Pre-VM rules still active](#pre-vm-rules-still-active-2026-10-10-audit) A1 |
 
 ### 1.3 Compare & set-op ALU
 
@@ -463,7 +463,7 @@ columns are as written on 2026-10-01.
 | Rank | Item | Exposure | What the user sees | Verdict |
 |---|---|---|---|---|
 | 1 | **10b Title key, no Title menu** | **88/1,521 (5.8 %)** VMGM PGCI_UTs lack entry 2. Menu key (VTSM lacks Root): **0**. Chapter key lands on a non-Root PGC 1: **1** (THE_RED_FURY) | The reader takes SRP[0] = VMGM PGC 1. On **84/88** that replays the boot chain to the main menu. On **64** of them, opening logos play first (14 s typical, up to 28 s); on 20, PGC 1 has no cells and Title acts like Menu. On 2 it lands on another menu, on 1 in a title-domain menu, and on 1 the model stops (MEN_IN_BLACK, unverified) | **Defect**: the book (p. 9-26) and libdvdnav both no-op. Fix user-key misses only, and keep the documented Chapter → main-menu fallback (1,387 discs author no chapter menu). **✅ Fixed, HW A/B vs `main`, MERGED PR #173** (the reader probes the VMGM at mount, `emu.sv` drops the key); the probe's offline model re-counts 88 misses, plus 5 discs with no VMGM PGCI_UT and 1 with no VMGI that also become no-ops |
-| 2 | **Indefinite still + non-loop cell command (title)** | **7 discs, 5 of them games**: BEAST_MASTER (`CallSS VTSM`) and the others: Thayer's Quest and Deal or No Deal (`LinkTailPGC`), HP Hogwarts (`LinkPGCN 6`), Tomb Raider and Land Before Time (`LinkPGN 1`), Space Pirates (`Nop`). Menu domain: 15 | We run the command at the cell's end, where libdvdnav holds the still until a button press. On a game, that can take the "no answer" branch without waiting | **Unverified.** `nav_diff` A/B against libdvdnav first. `Nop` and a `LinkPGN` to the still's own program may be harmless |
+| 2 | **Indefinite still + non-loop cell command (title)** | **7 discs, 5 of them games**: BEAST_MASTER (`CallSS VTSM`) and the others: Thayer's Quest and Deal or No Deal (`LinkTailPGC`), HP Hogwarts (`LinkPGCN 6`), Tomb Raider and Land Before Time (`LinkPGN 1`), Space Pirates (`Nop`). Menu domain: 15 | We run the command at the cell's end, where libdvdnav holds the still until a button press. On a game, that can take the "no answer" branch without waiting | **✅ Resolved.** PR #169 (2026-10-08) already held 5 of the 7. The other 2 (`LinkPGN 1`, a self-loop) and every menu case hold since 2026-10-10: every 0xFF still holds before its command ([§C](#c--deliberate-or-acceptable-deviations-recorded), `docs/dvd_nav.md` "An indefinite still and its cell command") |
 | 3 | **10a A second Title press resumes** | **1,428/1,521** author a Title menu | A second Title press restarts the Title menu; Menu already toggles back | **Book-only**: libdvdnav resumes only on `DVD_MENU_Escape`. A user decision |
 | 4 | **11 `auto_action`** | `aa_any` 15/24 games and **65/100 random**: auto-action buttons are common on ordinary movie discs. `aa_deadlink` 14/24 and 56/100, which is near-universal and moot (authored auto buttons self-link in all four directions, and arriving already fired them). **Visible case `aa_init_orphan`: 0/24 games, 0/100 random.** `aa_mode23`: 0 | Nothing measured | **Premise corrected** (below). Record and close unless a disc appears |
 | 5 | **9 Random playback** | **1/1,521** (ROBOTS_43, one title PGC, mode `0x07`: random first program of 8). Shuffle: 0 | Program 1 always plays first | Real but one vehicle |
@@ -507,16 +507,28 @@ LPCM 96 kHz and multichannel on 1 (SpacePirates); PGC still time on 0.
   - `dialnorm` and `compr` are ignored.
   - DVD's 448 kbps cap is not enforced, which is harmless: A/52's full 640 kbps table is
     accepted.
-- **Indefinite cell still with a cell command:** the command runs first. This is deliberate
-  ("HW-proven Phase-3 heuristic — MiB/Matrix interactive cells carry both").
-  - 2026-10-01 wrote: 41/1,430 discs author it, in 40 of them the command is a loop
-    (`LinkTopC`, `LinkCN`, `LinkTopPG`), and the one residual is BEAST_MASTER (`CallSS VTSM`).
-  - **Re-measured 2026-10-06 with the command classified, that undercounted.** 9 discs have
-    it in a title and 42 in a menu. The command is *not* a loop on **7 title discs** and
-    **15 menu discs** (`LinkTailPGC`, `LinkPGN n`, `LinkPGCN`, `Nop`).
-  - The title-domain residual is the open item ranked 2 in
-    [§ The open items, re-ranked](#the-open-items-re-ranked-2026-10-06). The menu-domain cases
-    remain the deliberate heuristic.
+- **Indefinite cell still with a cell command — ✅ no longer a deviation (2026-10-10).** The
+  still always holds first, and the command runs on Still off, as in libdvdnav.
+  - The earlier "command first" order was a pre-VM leftover, justified as "HW-proven
+    Phase-3 heuristic — MiB/Matrix interactive cells carry both". The IFOs refute that:
+    MiB, The Matrix and its sequels author no cell with both a 0xFF still and a cell command
+    (their motion menus loop with `still = 0`).
+  - PR #169 (2026-10-08) narrowed it to looping commands; 2026-10-10 removed it. On the
+    1,556-image library, 40 images change: 36 in VTSM menus (motion clips now play once and
+    hold), and 4 in a title (Tomb Raider, Land Before Time, Ransom, Bad Company).
+  - Design and history: `docs/dvd_nav.md` "An indefinite still and its cell command".
+- **Navigation rules that differ from libdvdnav on purpose** (recorded 2026-10-10 by the
+  pre-VM audit above; each has its own design note):
+  - B1 the boot-chain Menu shortcut (`docs/dvd_vm.md`);
+  - B2 a failed user menu link re-enters the last good menu (Blade Runner);
+  - B3 a First Play or title failure plays the auto title (libdvdnav Exits);
+  - B4 Menu inside a menu reached by the Menu key resumes the title (the book's behaviour);
+  - B5 Chapter Menu falls back to the main menu (1,387 discs author no chapter menu);
+  - B6 Title during First Play still jumps (how users skip logos);
+  - B7 the chapter-skip edge rules (cross-PGC through the PTT table; user decision 2026-10-05);
+  - B8 SPRM7 kept on a reverse-map miss (`docs/nav_engine.md`);
+  - B9 the angle resets to 1 on each PGC unless the VM owns it;
+  - B10 `auto_action` only on a move and mode 1; B11 `foac` as a one-shot forced select.
 - **PGC still time** is never timed and is applied after the POST commands; the book
   (p. 9-29) puts it before them. **0/1,430 discs author a PGC still time**, so this is
   evidence-deferred.
@@ -545,6 +557,48 @@ LPCM 96 kHz and multichannel on 1 (SpacePirates); PGC still time on 0.
     per-block reading in `docs/spec_hardening.md` (cmem 512).
   - p. 9-24 lists SPRM8 as "1 to 36". Players store `button << 10`, as libdvdnav and
     `sprm8_eff` do.
+
+### Pre-VM rules still active (2026-10-10 audit)
+
+Disc menus were built in phases, and Phases 2–3 had no VM, so the reader and `emu.sv`
+grew rules that approximated what the disc's commands would do. One of them, "a cell
+command runs before an indefinite still", survived the Phase-4 VM, was justified by a
+claim about MiB/Matrix that the IFOs refute, and was removed on 2026-10-10
+(`docs/dvd_nav.md` "An indefinite still and its cell command"). This audit lists every
+other rule that is still active with Disc Menus on and is not straight libdvdnav
+semantics, with its **measured** library exposure (1,556 images, IFO scan, 26
+unparseable; the scan is static, so "reachable" is not proven unless a row says so).
+Rules gated to Disc Menus off are out of scope.
+
+**Verdicts:** *leftover* = a candidate fix, ranked into `docs/roadmap.md`; *deliberate* =
+recorded in §C below; *needed* = it fills a timing or hardware gap the VM cannot.
+
+**Leftovers**
+
+| # | Rule (where) | libdvdnav | Measured exposure | Verdict |
+|---|---|---|---|---|
+| A1 | **Exit does not stop** (`vm.uasm` Exit → `WV_IDLE` → `vm_adv`; reader `S_VM_WAIT`). A POST Exit takes the fall-through path, a cell Exit plays the next cell, a PRE Exit plays the PGC. | Stops (`vm.c:964`). | POST Exit **with** a `next_pgcn`: **0 discs** (the case that would really diverge). POST Exit without one: 60 discs, where the reader holds (menu: `S_STILL`) or idles (title: `S_DONE`, which nothing in `emu.sv` acts on; it is the state every title reaches at its natural end), ≈ a stop. Cell Exit: 1 (BORG). PRE Exit in a PGC with cells: 30 discs. 276 of those are dummy PGCs whose PRE is a bare `Exit`, and 14 are FAME's title guards (`if (g[9] == n) Break; Exit`), which libdvdnav stops on and we play when entered out of order. The 2026-10-08 libdvdnav sweep found no Exit-caused difference. | Leftover, **low**. Fix if a disc shows it. |
+| A2 | **A failed title load streams a whole VTS linearly**: a 0-cell, command-less title PGC (`:4932`); PGCN out of range (`:4390`); an empty PGCIT (`:4345`); bad pointers (`:4068`, `:4322`); a VTS miss → the largest VTS (`:3994`). No `pgc_loaded`, so the POST never runs. | Exit / `play_PGC_post`. | 0-cell command-less title PGCs: 52 discs (Sony's VTS 8 PGC 2 pattern), no measured path into them. JumpTT out of range: 1 (DREAMER `JumpTT 127`, VMGM PGC 20). JumpVTS_PTT out of range: 4 (all conditional). TT_SRPT naming a missing VTS/title: 2 (ALADDIN D2, DragBal2). | Leftover, **medium risk on physical/protected discs** (a decoy reached by mistake plays the wrong VTS). Next: drive DREAMER's VMGM PGC 20 and ALADDIN TT 37 in `nav_offline`. |
+| A5 | **The jump-failure fallback chain** `E_ERROR` (`vm.uasm:283-344`): own VTSM → `best_menu_vts` Root → VMGM Title → RSM → auto title. Its stated reason ("until Phase 4 executes the trampoline") is gone. | Exit / undefined. | LinkPGCN out of range: 1 disc (Sweet Home Alabama, VTSM 1 PGC 1 `LinkPGCN 35` of 22). Reached by any A2/A6/A8 miss. | Leftover; decide together with A2 (one "what does a failed jump do" rule). |
+| A6 | **A 0-cell, command-less menu PGC is a dead end** (`vm.uasm:219` DEADEND, reader `pgc_error` `:4891`), never `next_pgcn`. | `play_PGC_post`: `next_pgcn`, else Exit. | 508 discs carry one (10,470 PGCs, mostly VMGM dummies). Every one counted has no commands at all (so its POST is empty) and **none has a `next_pgcn`**: libdvdnav runs the empty POST and Exits, and the core's DEADEND ends in the same place by a different path. | Effectively parity. Record. |
+| A8 | **Title-resolve fallbacks**: a PTT miss → entry scan → SRP[0]; a PTT entry naming PGCN 0 → 1 (`:4156-4209`). | Exit ("No such pgcN"). | PTT naming a missing PGC: 4 discs (Casino Royale VTS 9 and Pursuit of Happyness VTS 23 are 0-PGC decoy VTSs; DragBal1/2). PTT naming a missing program: 2 (THOMAS AND THE MAGIC RAILROAD part 29, Deal or No Deal VTS 2 TT 4). | Leftover, low; same decision as A2. |
+| A9 | **A malformed cell is skipped and its command never runs** (`:4932`, `:5456`). | Plays it (or read-errors) and still runs its commands. | `first > last`: 2 discs (DaVinci Code TT 1 cell 12, Employee of the Month TT 11 cell 28). | Leftover, low. |
+| A10 | **PRE runs while cell 0 already streams** (`S_PGC_DONE` pulses `pgc_loaded` and streams at once, `:4949`); only an angle block waits for the PRE. | PRE before play. | A PGC with cells whose PRE jumps unconditionally: 1,378 discs. This has been the shape of every menu trampoline since Phase 4 (MiB, T2) and has no field report. | Architectural. Recorded; look here first if a jump ever shows a flash of the PGC it leaves. |
+| — | Out-of-range link targets that land on the reader's own clamp/skip: `LinkPGN` past the PGC's programs 8 discs, `LinkCN` past its cells 3. | Undefined (assert / `play_PG` miss). | as stated | Record only. |
+
+**Deliberate, now listed in §C:** B1–B11 below.
+
+**Needed** (each fills a gap the VM cannot, so it is not a deviation to fix):
+- C1 the authored cell-duration hold (`dur_hold_w`; the reader is not paced by the SCR);
+- C2 the tail drain before a natural jump;
+- C3 the watchdogs and fuses (the `vmw_tmr` advance, `W_TIMEOUT`, the 4,096-command fuse, the 63-jump guard);
+- C4 the HLI promotion model (`nav_pci`);
+- C5 `fosl` applied on a new HLI;
+- C6 `in_title_menu` (who owns the D-pad).
+
+**Parity, docs fixed:**
+- The title-domain 0xFF hold rested on a comment that "movies never author an in-title 0xFF still"; the behaviour does not depend on it, and the comment is corrected.
+- `docs/dvd_menu_refinements.md`'s "the still heuristic only fires in `menu_dom`" is stale (title cells take it with Disc Menus on).
 
 ### Appendix B — "Standards Related to DVD", against this core
 

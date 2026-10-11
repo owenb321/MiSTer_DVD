@@ -11,13 +11,15 @@
 //   F  ... and VMGI@200 = 0 too -> pgc_error, as before
 //
 // AN INDEFINITE STILL AND ITS CELL COMMAND (ISLAM_TRAILER's menu cell: still 0xFF and
-// 'g1 = 1; LinkTailPGC'). The reader ran every cell command before the still (the
-// Phase-3 order, for MiB/Matrix motion menus), so the disc linked on and stopped at
-// Exit. Now only a command that LOOPS the cell runs first:
+// 'g1 = 1; LinkTailPGC'). The reader ran every cell command before the still, so the
+// disc linked on and stopped at Exit. PR #169 held the still for a command that does
+// not loop the cell and kept command-first for one that does; since 2026-10-10 EVERY
+// command waits out the still, as libdvdnav does (docs/dvd_nav.md "An indefinite still
+// and its cell command"). Still off then runs the command:
 //   G  PGC 1's cell: 0xFF + LinkTailPGC -> the still holds, no vm_cell_cmd
-//   H  PGC 2's cell: 0xFF + LinkCN 1 (itself) -> vm_cell_cmd at once, no still
-//   B2 PGC 3's cell: 0xFF + type-3 'g1 = 1; LinkPGCN 3' (itself) -> the same (types 2/3
-//      carry the full link set; only 4-6 are LinkSubIns-only)
+//   H  PGC 2's cell: 0xFF + LinkCN 1 (itself, a motion-menu loop) -> the same; Still
+//      off -> vm_cell_cmd
+//   B2 PGC 3's cell: 0xFF + type-3 'g1 = 1; LinkPGCN 3' (itself) -> the same
 //
 // SPRM7 FOLLOWS PLAYBACK: the reader publishes the playing cell's GLOBAL part (ptt_upd
 // / ptt_cur) from its title's PTT table. A VM title jump that names a PGCN but no
@@ -70,6 +72,7 @@ module iso_reader_fpnone_tb;
     reg  [6:0]  jump_ttn = 0;
     reg  [8:0]  jump_pgn = 0;
     reg  [9:0]  jump_ptt = 0;
+    reg         still_off = 0;
     wire        jump_ack, pgc_loaded, pgc_error, menu_active, still_active;
     wire        seek_ack, nav_ready_w, keep_vbuf, jump_cross;
     wire [7:0]  cur_vts, best_menu_vts, auto_vts_w, cell_count_w;
@@ -86,7 +89,7 @@ module iso_reader_fpnone_tb;
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(7'd0),
         .aud_drained(1'b1), .vbuf_empty(1'b1),
         .jump_ttn(jump_ttn), .jump_pgn(jump_pgn[7:0]), .jump_ptt(jump_ptt),
-        .still_off(1'b0), .vm_mode(1'b1), .vm_adv(1'b0), .vm_replay(1'b0),
+        .still_off(still_off), .vm_mode(1'b1), .vm_adv(1'b0), .vm_replay(1'b0),
         .vm_cell_cmd(vm_cell_cmd_w), .vm_pgc_end(), .nav_ready_o(nav_ready_w),
         .auto_vts(auto_vts_w), .cell_count_o(cell_count_w), .res_ttn(res_ttn_w),
         .pm_we(), .pm_waddr(), .pm_wdata(), .cmd_nr_pgm(),
@@ -354,6 +357,28 @@ module iso_reader_fpnone_tb;
     end
     endtask
 
+    // The cell parks on its 0xFF still with no vm_cell_cmd; a Still off press then
+    // runs the command (vm_cell_cmd), and only then.
+    task hold_then_cmd(input [15:0] arm);
+        integer t; begin
+            t = 0;
+            while (n_ccmd == 0 && !still_active && t < 2000000) begin @(posedge clk); t = t + 1; end
+            repeat (2000) @(posedge clk);
+            if (!still_active || n_ccmd != 0) begin
+                fail({arm, ": 0xFF still + a looping cell command did not hold first"});
+                $display("  still_active=%0d vm_cell_cmd x%0d cm_rd=%0x", still_active, n_ccmd, dut.cm_rd);
+            end else begin
+                @(negedge clk); still_off = 1; @(negedge clk); still_off = 0;
+                t = 0;
+                while (n_ccmd == 0 && t < 20000) begin @(posedge clk); t = t + 1; end
+                if (n_ccmd != 1) begin
+                    fail({arm, ": Still off on the hold did not run the cell command"});
+                    $display("  still_active=%0d vm_cell_cmd x%0d", still_active, n_ccmd);
+                end else $display("%0s: 0xFF still + a looping command holds; Still off runs it  PASS", arm);
+            end
+        end
+    endtask
+
     initial begin
         build; file_size = IMG_BYTES;
         repeat (5) @(negedge clk); rst_n = 1; repeat (5) @(negedge clk);
@@ -387,25 +412,12 @@ module iso_reader_fpnone_tb;
             $display("  keep_vbuf=%0d jump_cross=%0d", kv_at_ack, jc_at_ack);
         end
         if (errors == 0) $display("B: First Play LinkPGCN 3 -> VMGM PGC 3, VBUF held  PASS");
-        begin : wb2 integer t; t = 0;
-            while (n_ccmd == 0 && !still_active && t < 2000000) begin @(posedge clk); t = t + 1; end
-        end
-        if (n_ccmd == 0 || still_active) begin
-            fail("B2: 0xFF still + type-3 LinkPGCN to itself did not run its command first");
-            $display("  still_active=%0d vm_cell_cmd x%0d cur_pgcn=%0d ccls_q=%06x cm_rd=%0x",
-                     still_active, n_ccmd, dut.cur_pgcn, dut.ccls_q, dut.cm_rd);
-        end else $display("B2: 0xFF still + type-3 'g1 = 1; LinkPGCN 3' (itself) -> command first  PASS");
+        hold_then_cmd("B2");
 
-        // H: a motion-menu loop (0xFF + LinkCN to itself) keeps the command-first order
+        // H: a motion-menu loop (0xFF + LinkCN to itself) holds too
         jump(2'd0, 8'd0, 16'd2, 7'd0);
         wait_byte(8'hC2, "H");
-        begin : wh integer t; t = 0;
-            while (n_ccmd == 0 && !still_active && t < 2000000) begin @(posedge clk); t = t + 1; end
-        end
-        if (n_ccmd == 0 || still_active) begin
-            fail("H: 0xFF still + LinkCN-self did not run its command first");
-            $display("  still_active=%0d vm_cell_cmd x%0d", still_active, n_ccmd);
-        end else $display("H: 0xFF still + LinkCN to itself -> command first (loop)  PASS");
+        hold_then_cmd("H");
 
         // C: title jump to PGC 2 (title 2 only): title 2's table, parts 1 then 2
         jump(2'd3, 8'd1, 16'd2, 7'd0);

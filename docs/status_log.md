@@ -22,6 +22,63 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ✅ **AN INDEFINITE STILL HOLDS BEFORE EVERY CELL COMMAND (audit class C residual,
+  2026-10-10, ✅ MERGED PR #174; sim-proven, ✅ HW A/B against `main`).**
+  - **The audit item was mostly closed already.** Its roadmap text ("the reader runs the
+    cell command first", 7 title discs) came from the 2026-10-06 census, before PR #169.
+    Re-measured against #169's rule, 5 of the 7 already held: Thayer's Quest and Deal or No
+    Deal (`LinkTailPGC`), HP Hogwarts (`LinkPGCN 6`), Space Pirates (`Nop`) and BEAST_MASTER
+    (`CallSS VTSM`). Tomb Raider (7 in-title button menus) and Land Before Time still ran
+    `LinkPGN 1` first, a self-loop in a 1-program PGC, so the core replayed a clip that
+    libdvdnav freezes.
+  - **The exception was a pre-VM leftover with a false premise.** Phase 3 replayed a
+    button-armed menu cell with a cell command because it had no VM. The Phase-4 VM kept
+    that branch ahead of the 0xFF-still one, later justified as "MiB/Matrix interactive cells
+    carry both". The IFOs of MiB, The Matrix, both Matrix Reloaded discs and Matrix
+    Revolutions have **zero** cells with a 0xFF still and a cell command, in any domain:
+    their menus loop with `still = 0`. By user decision every 0xFF still now holds first, as
+    libdvdnav does (`play_Cell_post`), and Still off runs the command. A malformed `cmd_nr`
+    holds, then plays the next cell. `ccls_mem`/`cc_loops` are deleted (−1 M10K).
+  - **Library (1,556 images):** 40 change, 36 in VTSM menus only (Fox-style 26–60 s motion
+    menus now play once and hold) and 4 in a title (Tomb Raider, Land Before Time, Ransom,
+    Bad Company). None has a malformed `cmd_nr`. Bad Company VTS 4 PGC 1 holds five 5 s
+    clips with no HLI found, so Still off moves it on, as in libdvdnav.
+  - **Gates:** `iso_reader_fpnone_tb` G/H/B2, `iso_reader_stilloff_tb` I/J (new, title
+    domain); `run_sprm67.sh --red` R8/R9 and `run_still_off.sh --red` R8–R10, each failing
+    exactly its arms. On `main`'s reader, I, J, H and B2 fail. Tools: `nav_offline.py`
+    holds every 0xFF still; the census's loop/non-loop axes are retired (`inf_still_badcmd`
+    added).
+  - **Also found:** an audit of the other pre-VM rules still active with Disc Menus on, in
+    `docs/conformance.md` "Pre-VM rules still active".
+  - **HW A/B** on the rig against `main`'s RTL (`dev-titlenoop`, same RTL as `main`) with `dev-stillhold` (SEED 17, timing PASS, M10K 529 → 528, ALM −92). Telemetry over a 30–60 s window on the changed cell:
+    - **The Muppets** VTSM 6 PGC 39 (boot menu, 0xFF + `LinkCN 1`): control `still` 0.00
+      and 77 pictures decoded; branch `still` 0.90 and 21 (all at boot). The held picture is
+      the same language menu; Down + Select from the hold starts the chosen title.
+    - **Marley & Me** VTSM 1 PGC 9 (Menu, then button 4; 0xFF + `LinkTopPG`, a 119-sector
+      cell with a 26 s timeline): control re-decoded the same picture 611 times in 30 s with
+      12 clock re-anchors; branch decodes nothing and holds. The frames are pixel-identical.
+      Audio: neither build played any in a 30 s window starting ~40 s after the press; on
+      the branch, captured across the press, it stopped ~5 s in, when the cell's data ran
+      out (the cell is one picture and a few seconds of sound).
+    - **Tomb Raider** TT VTS 3 PGC 6 ("2", "1" from the first park; in-title 0xFF +
+      `LinkPGN 1`): branch holds in the title domain (`still` 1.00, `menu` 0). Button 1
+      re-enters PGC 6 (the code-entry screen), as libdvdnav does for "2 1 1".
+    - **MiB** VTSM 2 PGC 5 (control for "unchanged"): 922 vs 914 pictures in 30 s, `still`
+      0 on both; the motion menu plays as before.
+    - **Maintainer by eye and ear (2026-10-10, same build):**
+      - ELF's VTSM 1 PGC 15 menu (main menu 2, then 3): the clip and its music play once and
+        end with no pop; the last frame holds cleanly.
+      - Bad Company's VTS 4 title, the THX Optimizer (main menu 2, 3, 2): each 5 s clip
+        holds on its last frame, Play/Select replays it (the disc's `LinkTopC`, as in
+        libdvdnav), and Next Chapter and Menu leave.
+      - Land Before Time's Bonus Materials item 5 (VTSM 1 PGC 22): the 50 s clip plays once
+        and holds, and its button still works.
+      - No picture or audio issues on any of them.
+    - Offline: `nav_offline` on the 40 changed images gives the same statuses with `main`'s
+      model and the branch's (38 `ok`, 2 `oracle-err`). As expected, it cannot tell a hold
+      from a loop, because both are a park.
+  - Design: `docs/dvd_nav.md` "An indefinite still and its cell command".
+
 - ✅ **TITLE KEY ON A DISC WITH NO TITLE MENU IS A NO-OP (audit 10b, 2026-10-09,
   ✅ MERGED PR #173; sim-proven, ✅ HW A/B against its own control).**
   - **The defect.** 88 of 1,521 library discs author a VMGM PGCI_UT with no entry-2 (Title)

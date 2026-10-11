@@ -1185,6 +1185,12 @@ implement the libdvdnav still heuristic + honour the resulting holds. In
    menu **button** that fires a VM jump still exits early via the existing `jump_go` (that's
    the "Continue" on the ad screen and menu navigation — Stage-3 early-advance rides the
    button→VM→jump path already in place).
+   > **Correction (2026-10-10):** MiB/Matrix author no `0xFF` + cell-command cell (their
+   > motion menus loop with still 0), so there were no "loop-holds" to protect. An
+   > indefinite still now always holds before its cell command, as in libdvdnav:
+   > `docs/dvd_nav.md` "An indefinite still and its cell command". The note below that the
+   > heuristic "only fires in `menu_dom`" is stale too: title cells take it with Disc
+   > Menus on (the FMV-game timed choices, `docs/dvd_nav.md`).
 
 Non-regression: heuristic **only fires in `menu_dom`** (title cells are large → never
 match); MiB/Matrix/BBB compute **no** heuristic holds; T2 matches libdvdnav's 5 s + the

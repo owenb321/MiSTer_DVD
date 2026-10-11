@@ -1011,51 +1011,66 @@ can never continue differently from an expired one:
 
 | Still | `still_next` | libdvdnav (`dvdnav_still_skip` → `vm_get_next_cell`) |
 |---|---|---|
-| Timed or duration-residual, cell command | `STILL_CMD`: the cell command (VM) | same |
+| Timed, duration-residual or indefinite (0xFF), cell command | `STILL_CMD`: the cell command (VM) | same |
+| Indefinite (0xFF), a `cmd_nr` past the PGC's cell commands | `STILL_NEXT`/`STILL_PGEND`, no command | same ("Invalid Cell command") |
 | Indefinite (0xFF), not the last cell | `STILL_NEXT`: the next cell | same |
 | Indefinite (0xFF) or timed, the last cell | `STILL_PGEND`: PGC end → POST | same |
 
 The 0xFF entry now records `still_next`/`still_last` (it set neither before, since only the
 timer read them).
 
-**An indefinite still and its cell command (2026-10-08, PR #169).**
-- **Until then** the cell command outranked a 0xFF still whenever `vm_mode` was on. That is
-  the HW-proven Phase-3 ordering, which keeps MiB/Matrix motion menus looping instead of
-  freezing on a last frame. libdvdnav holds the still and runs the command only when the
-  still ends.
-- **The rule now:** command-first applies only to a command that **loops the cell**:
-  - `LinkCN` to itself;
-  - `LinkTopCell` / `LinkTopPG` / `LinkTopPGC`;
-  - `LinkPGN`, unconditionally, because menus run no program query, so "this program" isn't
-    known;
-  - `LinkPGCN` to this PGC.
-
-  Any other command waits out the still, with `still_next = STILL_CMD`; Still off or a
-  button's jump ends it.
-- **How the reader knows:** the `P_CMD` walker records each cell command's link class in
-  `ccls_mem` (256 × 21, one M10K) as it streams it to the VM, and `cc_loops` decodes it at
-  the cell's end.
-- **Found by:** the First Play fix on hardware. ISLAM_TRAILER's First Play menu cell is
-  0xFF + `g1 = 1; LinkTailPGC`. It ran at once, the POST linked on, and the disc stopped
-  at `Exit`, where libdvdnav waits for the press.
-- **Library:** 47 discs have a 0xFF still with a cell command, and about 12 have a non-loop
-  one.
-  - **INDIVISIBLE's chapter-select menu** (VTSM 2, PGC 19; reached by Title, then the
-    second entry) has five pages, each a 0xFF still with buttons and `LinkTailPGC`. It
-    bounced straight back to its parent menu, so it was unusable. ✅ The maintainer
-    confirmed by hand on 2026-10-08 that it now works, and that it does not on 0.9.0.
-- **Which commands loop:**
-  - Types 1 (a link), 2 and 3 carry the full link set: libdvdnav's
-    `eval_link_instruction`, e.g. INDIVISIBLE's type-3 buttons `g8 = 5; LinkPGCN 19`.
-  - Only types 4–6 are `LinkSubIns`-only.
-  - A `cmd_nr` past the PGC's cell commands (malformed) reads no entry of this PGC, so it
-    keeps the old command-first order.
+**An indefinite still and its cell command (2026-10-10; first step PR #169).**
+- **The rule:** a cell with an indefinite (0xFF) still and a cell command **always** holds
+  the still first, in every domain, and the command runs only when the still ends: Still
+  off runs it (`still_next = STILL_CMD`), and a button's jump leaves the cell so it never
+  runs. This is libdvdnav's order: `play_Cell_post` says "Still time is already taken care
+  of before we get called". A `cmd_nr` past the PGC's cell commands is libdvdnav's "Invalid
+  Cell command": the still holds, then the next cell (or the PGC end) follows with no
+  command.
+- **Why an author writes a command there at all.** The command runs only if the viewer
+  skips the still without taking a button, so it is a fallback, usually "show this menu
+  again" (`LinkTopPG`, `LinkCN` to itself, `LinkPGN 1`). It is not a request for the clip to
+  loop: on a player the clip plays once and freezes on its last frame, buttons live.
+- **History.**
+  - **Phase 3 (2026-07-07)** had no VM, so the reader replayed a button-armed menu cell
+    that had a cell command, because MiB's menu loops by one. When the Phase-4 VM arrived
+    the "hand the cell command to the VM" branch kept its place ahead of the 0xFF-still
+    branch, so every command ran first. The order was later justified as "the HW-proven
+    Phase-3 ordering that keeps MiB/Matrix motion menus looping".
+  - **PR #169 (2026-10-08)** held the still for a command that does not loop the cell
+    (ISLAM_TRAILER's First Play `g1 = 1; LinkTailPGC` had run at once, linked on and
+    stopped at `Exit`; INDIVISIBLE's chapter-select pages bounced back to their parent). It
+    kept command-first for a looping command, classified by a 256-entry link-class store
+    (`ccls_mem`, one M10K) written by the `P_CMD` walker.
+  - **2026-10-10** removed the exception. **Its premise was false:** MiB, The Matrix, both
+    Matrix Reloaded discs and Matrix Revolutions author **no** cell with both a 0xFF still
+    and a cell command, in any domain. Their motion menus loop with `still = 0` plus
+    `LinkTopPG` / `LinkCN` to itself, which loops in either order, and their stills carry
+    no command. The exception acted only on discs it was never written for, and there it
+    replayed a clip that a player freezes. `ccls_mem`/`cc_loops` are gone (−1 M10K).
+- **Library (1,556 images, IFO scan, 26 unparseable):**
+  - 51 images author a 0xFF still with a cell command;
+  - 11 already held every such cell since PR #169;
+  - **40 change** (Beverly Hills Chihuahua 3 is in the library twice): every changed cell
+    has a loop-class command; none has a malformed `cmd_nr`.
+    - 36 of them change only in VTSM menus, many of them Fox-style 26–60 s motion clips (Marley & Me,
+      Slumdog Millionaire, Bride Wars, Tooth Fairy, Igor, ELF, National Treasure). They now
+      play once and hold.
+    - Title domain: Tomb Raider (7 in-title button menus, `LinkPGN 1`), Land Before Time,
+      Ransom, and Bad Company (VTS 4 PGC 1: five 5 s cells with 0xFF + `LinkTopC` and no HLI
+      found in their first VOBUs, so Still off is the way on, as in libdvdnav).
 - **Gates:**
-  - `iso_reader_fpnone_tb` G/H/B2;
-  - `run_sprm67.sh --red` R8–R11;
-  - every existing reader-regress trace is unchanged.
-- **HW:** ISLAM_TRAILER parks on its menu (rig A/B). Motion menus still loop: The Muppets
-  on the rig, Men in Black by hand.
+  - `iso_reader_fpnone_tb` G/H/B2 (VMGM: G LinkTailPGC, H `LinkCN` itself, B2 a type-3
+    `LinkPGCN` itself; H and B2 then take Still off → `vm_cell_cmd`);
+  - `iso_reader_stilloff_tb` I/J (title domain: I `LinkPGN 1` held, then Still off → the
+    command; J a malformed `cmd_nr` held, then Still off → the next cell, no command);
+  - mutations: `run_sprm67.sh --red` R8/R9 and `run_still_off.sh --red` R8–R10. On `main`'s
+    reader, I, J, H and B2 fail and G passes.
+- **HW (✅ A/B vs `main`, 2026-10-10):** The Muppets and Marley & Me menus and Tomb Raider's
+  in-title code screen hold where `main` replayed them (`main` re-decoded Marley's single
+  picture 611 times in 30 s), with the same picture and live buttons; MiB's motion menus are
+  unchanged. Evidence: `docs/status_log.md` "An indefinite still holds before every cell
+  command".
 
 **Holds the key ignores (`still_act = 0`).** These are the holds with no continuation of
 their own, and the key is a no-op there, as it is at a dead end on a real player:

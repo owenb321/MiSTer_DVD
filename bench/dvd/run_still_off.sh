@@ -6,7 +6,7 @@
 # A hold with no continuation of its own ignores the key. See docs/dvd_nav.md
 # "Still off".
 #
-# GREEN: iso_reader_stilloff_tb (the reader, arms A-H)
+# GREEN: iso_reader_stilloff_tb (the reader, arms A-J)
 #        + the still/menu benches that share S_STILL: iso_reader_timedstill_tb,
 #          iso_reader_titlestill_tb, iso_reader_celldur_tb, iso_reader_menu_tb
 #        + nav_pci_tb (btns_pend: an HLI with buttons parsed but not promoted)
@@ -92,7 +92,7 @@ if [ $RED -eq 1 ]; then
         # as their arm). Anything else failing reads as X.
         local got
         got=$(grep -E '^FAIL' "$OUT/$name.log" \
-              | sed -E 's/^FAIL ([A-H])[0-9]?[ :].*/\1/; t; s/.*/X/' \
+              | sed -E 's/^FAIL ([A-J])[0-9]?[ :].*/\1/; t; s/.*/X/' \
               | sort -u | tr '\n' ' ' | sed 's/ $//')
         if [ "$got" = "$want" ]; then
             echo "  ok   $name -> fails [$got]"
@@ -100,13 +100,19 @@ if [ $RED -eq 1 ]; then
             echo "  FAIL $name: failed [$got], expected [$want]"; fail=1
         fi
     }
-    mutate R1_no_key       "A B C" "s/(still_off \&\& still_act)) begin/1'b0) begin/"
+    mutate R1_no_key       "A B C I J" "s/(still_off \&\& still_act)) begin/1'b0) begin/"
     mutate R2_ff_no_pgend  "B"     "s/^\( *\)STILL_PGEND : STILL_NEXT;/\1STILL_NEXT : STILL_NEXT;/"
     mutate R3_ff_menus_off "G"     "s/^\( *\)still_act   <= vm_mode;\$/\1still_act   <= 1'b1;/"
     mutate R4_deadend      "F"     "s/^\( *\)still_act <= 1'b0;\$/\1still_act <= 1'b1;/"
     mutate R5_stale_timer  "E"     "/^            still_timed  <= 1'b0;\$/d"
     mutate R6_no_timer     "D"     "s/(still_timed \&\& sec_tick \&\& still_secs <= 16'd1) ||/1'b0 ||/"
     mutate R7_timed_no_key "C"     "s/still_act   <= vm_mode;   \/\/ menus-off: no Still off/still_act   <= 1'b0;/"
+    # the old command-first order for a 0xFF still with a cell command
+    mutate R8_cmd_first    "I J"   "s/^\( *\)end else if (vm_mode \&\& cm_rd\[7:0\] != 8'd0 \&\&\$/\1end else if (1'b0 \&\&/"
+    # a malformed cmd_nr is handed to the VM after the hold instead of the next cell
+    mutate R9_bad_cmd_runs "J"     "s/still_next  <= (cm_rd\[7:0\] <= cmd_nr_cell) ? STILL_CMD :/still_next  <= (1'b1) ? STILL_CMD :/"
+    # the hold forgets its command: Still off plays on instead of running it
+    mutate R10_drops_cmd   "I"     "s/still_next  <= (cm_rd\[7:0\] <= cmd_nr_cell) ? STILL_CMD :/still_next  <= (1'b0) ? STILL_CMD :/"
 
     # N1: nav_pci never reports a pending HLI -> nav_pci_tb's btns_pend checks.
     sed "s/^assign btns_pend  = .*/assign btns_pend  = 1'b0;/" dvd/nav_pci.sv > "$OUT/N1.sv"
