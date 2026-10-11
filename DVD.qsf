@@ -1624,4 +1624,8 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 #   SEED 17: 93.73/92.46 | 98.10/97.84
 # Every seed clears clk_mem by >= 4.2 MHz (the pre-retime sweep above: 3 of 7 reached 90).
 # SEED 17 pinned: the best worst-corner over both clocks; clock_check PASS (0 fail, 0 warn).
+# RELEASE (2026-10-11, main, release commit 8965261): main after PR #175 plus the release
+# version string. SEED 17 held FIRST roll: clk_dec 89.06/87.83, clk_mem 92.77/96.50
+# (@100C / @-40C). 38,535 / 41,910 ALMs (92 %), 528 / 553 M10K, 91 / 112 DSP.
+# clock_check PASS (0 fail, 0 warn). Build releases/DVD_20261011.rbf.
 set_global_assignment -name SEED 17
