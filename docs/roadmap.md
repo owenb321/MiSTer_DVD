@@ -697,6 +697,15 @@ pick):
 which would give auto 16:9 switching on PAL widescreen CRTs.
 **⛔ by decision 2026-10-01:** UOP enforcement, APS (Macrovision) and CGMS-A.
 
+### ✅ Line-21 captions: the field is the entry's position (issue #166, 2026-10-10; ✅ MERGED PR #175; ✅ HW-CONFIRMED by eye — `docs/closed_captions.md` §8)
+
+- [x] VLD snoop: field = `odd_field_first` toggled per entry (not the marker bit), and
+      `2·cc_count + extra_field` entries. 161/847 captioned discs mark every entry `ff`.
+      `run_cc_extract.sh --red` (fixtures A = MiB, B = Castle in the Sky).
+- [x] `cc_scan.py` sorts by the same rule, prints the framing and the field-1 share.
+- [x] HW (maintainer, a TV on C1): I_ROBOT and CASTLE_IN_THE_SKY readable; MEN_IN_BLACK and
+      THE_MATRIX unchanged.
+
 ### ✅ Pause no longer loses audio (2026-10-09, ✅ MERGED PR #172; ✅ HW A/B vs `main` — `docs/status_log.md` "Pause loses audio")
 
 - [x] The AC-3/engine stall watchdog is held while paused (it dumped ~1 frame per 0.65 s, so

@@ -12,13 +12,23 @@
 #   01            user_data_type_code
 #   F8            caption_block_size
 #   bit7 odd_field_first | bit6 filler | bit5:1 cc_count | bit0 extra_field
-#   then 2*cc_count caption_field_blocks of 3 bytes:
-#        bit7:1 filler 0x7f | bit0 field_odd , cc_byte_1 , cc_byte_2
+#   then 2*cc_count + extra_field caption_field_blocks of 3 bytes:
+#        bit7:1 filler 0x7f | bit0 "field_odd" , cc_byte_1 , cc_byte_2
 #
 # (Layout per ffmpeg mpeg12dec.c mpeg_decode_user_data. This tool does NOT take
 #  it on faith: it VALIDATES the filler bits and the 608 odd-parity of every
 #  byte pair, and reports the pass rate, so a disc that uses some other framing
 #  shows up as a low-validity signature rather than as silent garbage.)
+#
+# ★ THE FIELD IS THE ENTRY'S POSITION, NOT ITS MARKER BIT (issue #166). Entries
+# alternate field by field starting on odd_field_first; entry k belongs to
+# field 1 iff odd_field_first XOR (k odd). About a fifth of captioned discs
+# (161/847 in the 2026-10-10 library sweep, e.g. I_ROBOT, CASTLE_IN_THE_SKY)
+# write marker 0xFF on EVERY entry, so the marker bit cannot tell the fields
+# apart. Until #166 this tool sorted by the marker and reported such a disc as
+# "f1 = every entry, f2 = 0" -- a field-1 count equal to the whole entry count,
+# which is impossible, and which the RTL inherited. The report now prints the
+# field-1 share and flags anything far from one half.
 #
 # Our vld currently DISCARDS these blocks -- rtl/mpeg2/vld.v:679,
 #   CODE_USER_DATA_START: next = STATE_NEXT_START_CODE
@@ -80,6 +90,15 @@ def user_data_blocks(buf):
         i = (j if j >= 0 else len(buf))
 
 
+def entry_field(odd_first, k):
+    """Field of caption entry k in a block: 1 = field 1 (CC1/CC2).
+
+    Position, not marker -- see the header and docs/closed_captions.md §1. The
+    RTL (rtl/mpeg2/vld.v, user_data snoop) implements this same rule; the bench
+    golden is generated from here, so the two must stay in step."""
+    return odd_first ^ (k & 1)
+
+
 def parse_cc_block(p, acc):
     """Parse one 'CC' user_data payload; append byte pairs to acc. True if valid."""
     if len(p) < 5 or p[0:2] != SIG_CC:
@@ -89,21 +108,29 @@ def parse_cc_block(p, acc):
     acc['block_size'][p[3]] += 1
     flags = p[4]
     cc_count = (flags >> 1) & 0x1F
-    acc['odd_first'] += (flags >> 7) & 1
-    acc['extra_field'] += flags & 1
+    odd_first = (flags >> 7) & 1
+    extra = flags & 1
+    acc['odd_first'] += odd_first
+    acc['extra_field'] += extra
     acc['filler_bit'] += (flags >> 6) & 1        # spec says 0; nonzero = odd framing
-    n = 2 * cc_count
+    # 2*cc_count + extra_field entries. The extra entry is real: on 105 of 847
+    # captioned discs it carries caption bytes at least once in the sample.
+    n = 2 * cc_count + extra
     if len(p) < 5 + 3 * n:
         acc['truncated'] += 1
         n = (len(p) - 5) // 3
     ok = True
     for k in range(n):
         m, b1, b2 = p[5 + 3 * k: 8 + 3 * k]
-        # marker byte: filler 0x7f in bits 7:1, field-odd in bit 0
+        # marker byte: filler 0x7f in bits 7:1. Bit 0 is NOT the field (see the
+        # header); it is counted only to classify the disc's framing.
         if (m >> 1) != 0x7F:
             acc['bad_marker'] += 1
             ok = False
-        fld = m & 1                               # 1 = field 1 (CC1/CC2)
+        fld = entry_field(odd_first, k)           # 1 = field 1 (CC1/CC2)
+        acc['marker_field'][m & 1] += 1
+        if (m & 1) != fld:
+            acc['marker_disagree'] += 1
         acc['pairs'] += 1
         acc['field'][fld] += 1
         c1, c2 = b1 & 0x7F, b2 & 0x7F
@@ -115,6 +142,8 @@ def parse_cc_block(p, acc):
             if odd_parity(b1) and odd_parity(b2):
                 acc['parity_ok'] += 1
             acc['nonnull_field'][fld] += 1
+            if extra and k == n - 1:
+                acc['extra_data'] += 1
             # XDS lives in field 2 and opens with a 0x01-0x0F control class
             if fld == 0 and 0x01 <= c1 <= 0x0F:
                 acc['xds'] += 1
@@ -122,6 +151,20 @@ def parse_cc_block(p, acc):
             acc['stream1'].append((c1, c2))
         acc['raw'].append((fld, b1, b2))
     return ok
+
+
+def framing(acc):
+    """'A' = markers follow the position rule (alternate fe/ff), 'B' = markers
+    disagree with it (all ff on every disc seen), plus the field-1 share, which
+    must be about one half on ANY framing: one entry per displayed field."""
+    share = acc['field'][1] / max(1, acc['pairs'])
+    if acc['marker_disagree'] == 0:
+        kind = 'A'
+    elif acc['marker_field'][0] == 0:
+        kind = 'B'
+    else:
+        kind = 'mixed'
+    return kind, share
 
 
 def decode_608_text(pairs, limit=600):
@@ -153,7 +196,8 @@ def decode_608_text(pairs, limit=600):
 # =============================================================================
 # RTL fixture writer
 # =============================================================================
-def write_fixture(path, outdir, vts_sel=None, nblocks=6, start_frac=0.40):
+def write_fixture(path, outdir, vts_sel=None, nblocks=6, start_frac=0.40,
+                  name="cc", need_extra_data=False):
     """Carve a small REAL elementary stream carrying CC blocks + its golden pairs.
 
     The stream is real disc bytes throughout: for each caption block found we keep
@@ -162,8 +206,13 @@ def write_fixture(path, outdir, vts_sel=None, nblocks=6, start_frac=0.40):
     genuine user_data to walk, in a few hundred bytes instead of the ~200 KB a
     contiguous multi-GOP capture would cost -- small enough to commit.
 
-    Writes  cc_es.hex     : 64-bit big-endian words, getbits_fifo's shift order
-            cc_golden.hex : one line per pair, "<field> <b1> <b2>" (hex)
+    Writes  <name>_es.hex     : 64-bit big-endian words, getbits_fifo's shift order
+            <name>_golden.hex : one line per pair, "<field> <b1> <b2>" (hex), the
+                                field by POSITION (entry_field), as the RTL must
+    need_extra_data: the LAST block must be one whose extra_field entry carries
+    caption bytes -- the case the pre-#166 RTL dropped. Such blocks are rare
+    (3 in ~14k sectors on CASTLE_IN_THE_SKY), so the carve keeps scanning for one
+    rather than hoping start_frac lands on it.
     """
     nav = IsoNav(path)
     vts = vts_sel if vts_sel is not None else nav.best_vts
@@ -181,7 +230,8 @@ def write_fixture(path, outdir, vts_sel=None, nblocks=6, start_frac=0.40):
     start = int(total * start_frac)
     k = 0
     buf = b''
-    while len(chunks) < nblocks and k < 40000:
+    have_extra = not need_extra_data
+    while len(chunks) < nblocks and k < 400000:
         s_ = sector_at(start + k)
         if s_ is None:
             break
@@ -207,7 +257,10 @@ def write_fixture(path, outdir, vts_sel=None, nblocks=6, start_frac=0.40):
                 parse_cc_block(payload, acc)
                 # Require live caption bytes: a fixture full of 0x80 0x80 null
                 # padding would pass a broken extractor that emitted constants.
-                if acc['pairs'] and acc['nonnull']:
+                last_slot = len(chunks) == nblocks - 1
+                if acc['pairs'] and acc['nonnull'] and (have_extra or not last_slot
+                                                        or acc['extra_data']):
+                    have_extra = have_extra or acc['extra_data'] > 0
                     chunks.append(buf[g:e])
                     for fld, b1, b2 in acc['raw']:
                         golden.append((fld, b1, b2))
@@ -218,8 +271,10 @@ def write_fixture(path, outdir, vts_sel=None, nblocks=6, start_frac=0.40):
         if consumed:
             buf = buf[consumed:]
 
-    if not chunks:
-        raise SystemExit("no caption blocks found to build a fixture from")
+    if len(chunks) < nblocks or not have_extra:
+        raise SystemExit("only %d/%d caption blocks%s found to build a fixture from"
+                         % (len(chunks), nblocks,
+                            "" if have_extra else " (none with a data-carrying extra entry)"))
 
     # sequence_end, then a tail of filler. The tail is not cosmetic: getbits_fifo
     # keeps a 24-bit window and reads whole 64-bit words, so without bytes BEHIND
@@ -229,14 +284,15 @@ def write_fixture(path, outdir, vts_sel=None, nblocks=6, start_frac=0.40):
     es = b''.join(chunks) + b'\x00\x00\x01\xb7' + b'\x00' * 64
     es += b'\x00' * ((-len(es)) % 8)
     os.makedirs(outdir, exist_ok=True)
-    with open(os.path.join(outdir, "cc_es.hex"), "w") as f:
+    with open(os.path.join(outdir, name + "_es.hex"), "w") as f:
         for w in range(0, len(es), 8):
             f.write(es[w:w+8].hex() + "\n")
-    with open(os.path.join(outdir, "cc_golden.hex"), "w") as f:
+    with open(os.path.join(outdir, name + "_golden.hex"), "w") as f:
         for fld, b1, b2 in golden:
             f.write("%d %02x %02x\n" % (fld, b1, b2))
-    print("fixture: %d blocks, %d ES bytes, %d golden pairs -> %s"
-          % (len(chunks), len(es), len(golden), outdir))
+    f1 = sum(1 for fld, _, _ in golden if fld)
+    print("fixture: %d blocks, %d ES bytes, %d golden pairs (%d field 1) -> %s/%s_*.hex"
+          % (len(chunks), len(es), len(golden), f1, outdir, name))
 
 
 def new_acc():
@@ -245,7 +301,9 @@ def new_acc():
             'type_code': collections.Counter(), 'block_size': collections.Counter(),
             'odd_first': 0, 'extra_field': 0, 'filler_bit': 0, 'truncated': 0,
             'bad_marker': 0, 'pairs': 0, 'parity_ok': 0, 'nonnull': 0, 'xds': 0,
+            'extra_data': 0, 'marker_disagree': 0,
             'field': collections.Counter(), 'nonnull_field': collections.Counter(),
+            'marker_field': collections.Counter(),
             'stream1': [], 'raw': []}
 
 
@@ -347,14 +405,23 @@ def print_disc(name, res, show_text=False, per_window=False):
              100 * acc['nonnull'] / pairs))
     print("%-44s   => %s  (%s)" % ("", v, why))
     if acc['cc_blocks']:
+        kind, share = framing(acc)
         print("%-44s   f1=%d f2=%d  parity_ok(nonnull)=%.1f%%  bad_marker=%d  xds=%d  "
-              "extra_field=%d  type=%s size=%s"
+              "extra_field=%d(data %d)  type=%s size=%s"
               % ("", acc['nonnull_field'][1], acc['nonnull_field'][0],
                  100 * acc['parity_ok'] / max(1, acc['nonnull']),
                  acc['bad_marker'], acc['xds'],
-                 acc['extra_field'],
+                 acc['extra_field'], acc['extra_data'],
                  ",".join("0x%02x" % k for k in acc['type_code']),
                  ",".join("0x%02x" % k for k in acc['block_size'])))
+        print("%-44s   framing %s (marker vs position disagree=%d)  field-1 share=%.2f"
+              % ("", kind, acc['marker_disagree'], share))
+        # One entry per displayed field, alternating: the share is 0.5 to within
+        # one extra entry per block. Anything else means the field rule is wrong
+        # for this disc -- the #166 symptom read 1.00.
+        if abs(share - 0.5) > 0.05:
+            print("%-44s   ⚠ field-1 share %.2f is not ~0.5: the field rule does not fit "
+                  "this disc's framing" % ("", share))
     if acc['ga94'] or acc['dtg1'] or acc['other_sig']:
         extra = []
         if acc['ga94']:
@@ -383,6 +450,12 @@ def main():
     ap.add_argument('--per-window', action='store_true')
     ap.add_argument('--fixture', metavar='OUTDIR',
                     help="carve an RTL testbench fixture (ES + golden pairs) here")
+    ap.add_argument('--fixture-name', default='cc',
+                    help="fixture file prefix: <name>_es.hex, <name>_golden.hex")
+    ap.add_argument('--fixture-at', type=float, default=0.40,
+                    help="where in the title to start carving (fraction)")
+    ap.add_argument('--need-extra-data', action='store_true',
+                    help="end the fixture on a block whose extra_field entry carries data")
     ap.add_argument('--text', action='store_true',
                     help="decode a sample of CC1 text (proof the data is real)")
     a = ap.parse_args()
@@ -396,7 +469,8 @@ def main():
             paths.append(p)
 
     if a.fixture:
-        write_fixture(paths[0], a.fixture, a.vts)
+        write_fixture(paths[0], a.fixture, a.vts, start_frac=a.fixture_at,
+                      name=a.fixture_name, need_extra_data=a.need_extra_data)
         return 0
 
     hits = 0

@@ -22,6 +22,32 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ✅ **LINE-21 CAPTIONS: THE FIELD IS THE ENTRY'S POSITION, NOT ITS MARKER (issue #166,
+  2026-10-10, ✅ MERGED PR #175; sim-proven, ✅ HW-CONFIRMED by eye on a TV).**
+  - **Field report:** CC1 garbled on I, Robot. The disc is fine: `cc_scan.py --text` decodes
+    clean CC1 text from it.
+  - **Root cause:** the VLD snoop (`rtl/mpeg2/vld.v`) took each entry's field from marker
+    bit 0. Framing-B discs write marker `ff` on every entry, so all pairs, padding
+    included, went to `cc_line21`'s field-1 slot at two per frame against a drain of one.
+    The CDC FIFO filled and refused writes, and runs of pairs, control codes included,
+    were lost. A 2026-10-10 sweep of the library puts **161 of 847 captioned discs** on framing B, so
+    this was never a two-disc quirk. Second defect: `extra_field` was ignored, dropping an
+    entry that carries caption bytes on 105 / 847 discs.
+  - **Fix:** field = `odd_field_first`, toggled per entry; `ud_left = flags[5:0]`
+    (= `2·cc_count + extra_field`, max 63). ffmpeg's extra "marker must be `ff`" condition
+    was rejected on data: it differs on one disc, only on padding, and would unbalance the
+    slots. The decision and the outliers (CERBERUS, WILD_WESTERNS_1A, nuclear_dvd_disc) are
+    recorded in `docs/closed_captions.md` §8.
+  - **Why it was missed:** the bench fixture and the HW confirmation were both on framing A
+    (MiB, The Matrix), where both rules agree on every entry, and `cc_scan.py` used the same
+    marker rule, so its `f1=77 f2=0` looked plausible.
+  - **Gate:** `bench/dvd/run_cc_extract.sh --red`. Fixture A (MiB) passes 180/180, and it
+    regenerates byte-identical under the new rule. Fixture B (Castle, 168/168) adds a
+    consumer field-balance check. Under the marker-rule mutation B reads `168 field-1 vs
+    0 field-2`.
+  - **HW (2026-10-10, maintainer, a TV on C1, `DVD_ccfield_20261011_0223`):** good captions
+    on all four: I_ROBOT and CASTLE_IN_THE_SKY fixed, MEN_IN_BLACK and THE_MATRIX unchanged.
+
 - ✅ **AN INDEFINITE STILL HOLDS BEFORE EVERY CELL COMMAND (audit class C residual,
   2026-10-10, ✅ MERGED PR #174; sim-proven, ✅ HW A/B against `main`).**
   - **The audit item was mostly closed already.** Its roadmap text ("the reader runs the
