@@ -65,6 +65,15 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
       re-enters PGC 6 (the code-entry screen), as libdvdnav does for "2 1 1".
     - **MiB** VTSM 2 PGC 5 (control for "unchanged"): 922 vs 914 pictures in 30 s, `still`
       0 on both; the motion menu plays as before.
+    - **Maintainer by eye and ear (2026-10-10, same build):**
+      - ELF's VTSM 1 PGC 15 menu (main menu 2, then 3): the clip and its music play once and
+        end with no pop; the last frame holds cleanly.
+      - Bad Company's VTS 4 title, the THX Optimizer (main menu 2, 3, 2): each 5 s clip
+        holds on its last frame, Play/Select replays it (the disc's `LinkTopC`, as in
+        libdvdnav), and Next Chapter and Menu leave.
+      - Land Before Time's Bonus Materials item 5 (VTSM 1 PGC 22): the 50 s clip plays once
+        and holds, and its button still works.
+      - No picture or audio issues on any of them.
     - Offline: `nav_offline` on the 40 changed images gives the same statuses with `main`'s
       model and the branch's (38 `ok`, 2 `oracle-err`). As expected, it cannot tell a hold
       from a loop, because both are a park.
