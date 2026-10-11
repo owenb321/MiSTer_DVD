@@ -15,6 +15,10 @@
  *   cc_b  CASTLE_IN_THE_SKY  framing B: every marker ff (issue #166); both
  *                            odd_field_first values, extra_field entries on
  *                            each field, the last one carrying caption bytes
+ * Regenerate (both carve from 40 % into the main-feature VTS, --fixture-at):
+ *   tools/cc_scan.py --fixture bench/dvd/test_vobs <MEN_IN_BLACK iso>
+ *   tools/cc_scan.py --fixture bench/dvd/test_vobs --fixture-name cc_b \
+ *       --need-extra-data <CASTLE_IN_THE_SKY iso>
  *   <name>_es.hex     — real GOP-header + user_data runs, 64-bit BE words
  *   <name>_golden.hex — the pairs an independent Python parse found in those blocks
  * The golden side is the same code path that decodes readable English from the
