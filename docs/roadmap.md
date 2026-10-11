@@ -697,7 +697,7 @@ pick):
 which would give auto 16:9 switching on PAL widescreen CRTs.
 **⛔ by decision 2026-10-01:** UOP enforcement, APS (Macrovision) and CGMS-A.
 
-### ✅ Line-21 captions: the field is the entry's position (issue #166, 2026-10-10; ✅ HW-CONFIRMED by eye — `docs/closed_captions.md` §8)
+### ✅ Line-21 captions: the field is the entry's position (issue #166, 2026-10-10; ✅ MERGED PR #175; ✅ HW-CONFIRMED by eye — `docs/closed_captions.md` §8)
 
 - [x] VLD snoop: field = `odd_field_first` toggled per entry (not the marker bit), and
       `2·cc_count + extra_field` entries. 161/847 captioned discs mark every entry `ff`.

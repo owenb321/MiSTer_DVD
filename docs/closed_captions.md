@@ -2,7 +2,7 @@
 
 **Status: ✅ HW-CONFIRMED 2026-08-26 (round 5, user report — C1 captions complete and
 readable on MiB and The Matrix, real TV via the YC active encoder board over composite).**
-**Issue #166 (2026-10-10): the field of each caption entry is now its POSITION, not its
+**Issue #166 (2026-10-10, ✅ MERGED PR #175): the field of each caption entry is now its POSITION, not its
 marker bit, and the `extra_field` entry is read — sim-proven on both framings (§8),
 ✅ HW-CONFIRMED 2026-10-10 by the maintainer on a TV's C1: I_ROBOT and CASTLE_IN_THE_SKY
 now caption correctly, MEN_IN_BLACK and THE_MATRIX still do.**

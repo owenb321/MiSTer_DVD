@@ -430,7 +430,7 @@ otherwise; `--red` runs its mutation arms).
 | PAL/NTSC runtime modeline | ✅ | `roadmap.md` | — |
 | Native 240p/288p for SIF, 352→720 horizontal fill | ✅ ⏳ PAL 288p, long VCD | `mpeg1.md` §B.3b | `run_p240.sh`, `check_p240_wiring.py` |
 | Line-21 closed captions (`cc_vbi`, pickup-paced) | ✅ | `closed_captions.md` | `cc_extract_tb`, `cc_line21_tb` |
-| Line-21 caption field = entry position, `extra_field` read (framing B: 161/847 discs, issue #166) | ✅ HW by eye on a TV (I_ROBOT, CASTLE fixed; MiB, Matrix unchanged) | `closed_captions.md` §8 | `run_cc_extract.sh --red` |
+| Line-21 caption field = entry position, `extra_field` read (framing B: 161/847 discs, issue #166) | ✅ HW by eye on a TV (I_ROBOT, CASTLE fixed; MiB, Matrix unchanged), MERGED PR #175 | `closed_captions.md` §8 | `run_cc_extract.sh --red` |
 | 16:9 menu `permitted_df` overrides Analog Aspect Letterbox↔Crop (menus only) | ✅ | `crt_anamorphic.md` §12 | `run_menu_panscan.sh`, `check_menu_panscan_wiring.py` |
 | Explicit Analog Aspect Letterbox/Crop on Progressive (`aa_live`; Auto/Fit unchanged); `disp_vscale` frame-path fix | ✅ HW (vs playerregs control; 0 lates; analog path via RetroTINK), MERGED PR #155 | `crt_anamorphic.md` §13, §11 | `run_prog_aspect.sh --red`, `run_vscale_frame.sh --red`, `check_prog_aspect_wiring.py` |
 | Untagged video decodes BT.601, not 709 (~60% of features); the matrix commits per picture, never inherited across sequences/MPEG-1 | ✅ HW A/B (tagged-6 null bit-identical; untagged = exact 709→601 re-encode), MERGED PR #156 | `status_log.md` "BT.601 default colour matrix" | `run_colour_matrix.sh --red`, `tools/colour_scan.py` |

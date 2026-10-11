@@ -23,7 +23,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 ## Hardware status (THIS fork, verified 2026-06-21)
 
 - ✅ **LINE-21 CAPTIONS: THE FIELD IS THE ENTRY'S POSITION, NOT ITS MARKER (issue #166,
-  2026-10-10; sim-proven, ✅ HW-CONFIRMED by eye on a TV).**
+  2026-10-10, ✅ MERGED PR #175; sim-proven, ✅ HW-CONFIRMED by eye on a TV).**
   - **Field report:** CC1 garbled on I, Robot. The disc is fine: `cc_scan.py --text` decodes
     clean CC1 text from it.
   - **Root cause:** the VLD snoop (`rtl/mpeg2/vld.v`) took each entry's field from marker
