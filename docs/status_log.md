@@ -22,8 +22,8 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **LINE-21 CAPTIONS: THE FIELD IS THE ENTRY'S POSITION, NOT ITS MARKER (issue #166,
-  2026-10-10; sim-proven, ⏳ HW-confirm pending).**
+- ✅ **LINE-21 CAPTIONS: THE FIELD IS THE ENTRY'S POSITION, NOT ITS MARKER (issue #166,
+  2026-10-10; sim-proven, ✅ HW-CONFIRMED by eye on a TV).**
   - **Field report:** CC1 garbled on I, Robot. The disc is fine: `cc_scan.py --text` decodes
     clean CC1 text from it.
   - **Root cause:** the VLD snoop (`rtl/mpeg2/vld.v`) took each entry's field from marker
@@ -45,8 +45,8 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     regenerates byte-identical under the new rule. Fixture B (Castle, 168/168) adds a
     consumer field-balance check. Under the marker-rule mutation B reads `168 field-1 vs
     0 field-2`.
-  - **Next:** HW by eye on a captioning TV (C1): I_ROBOT and CASTLE readable, MiB and Matrix
-    unchanged.
+  - **HW (2026-10-10, maintainer, a TV on C1, `DVD_ccfield_20261011_0223`):** good captions
+    on all four: I_ROBOT and CASTLE_IN_THE_SKY fixed, MEN_IN_BLACK and THE_MATRIX unchanged.
 
 - ✅ **AN INDEFINITE STILL HOLDS BEFORE EVERY CELL COMMAND (audit class C residual,
   2026-10-10, ✅ MERGED PR #174; sim-proven, ✅ HW A/B against `main`).**

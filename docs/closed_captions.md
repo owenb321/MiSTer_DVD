@@ -4,7 +4,8 @@
 readable on MiB and The Matrix, real TV via the YC active encoder board over composite).**
 **Issue #166 (2026-10-10): the field of each caption entry is now its POSITION, not its
 marker bit, and the `extra_field` entry is read — sim-proven on both framings (§8),
-⏳ HW-confirm pending on I_ROBOT / CASTLE_IN_THE_SKY (a TV's C1, by eye).**
+✅ HW-CONFIRMED 2026-10-10 by the maintainer on a TV's C1: I_ROBOT and CASTLE_IN_THE_SKY
+now caption correctly, MEN_IN_BLACK and THE_MATRIX still do.**
 Implemented as line-21 re-insertion on the analog raster. The core now strips the disc's EIA-608 caption bytes out of the
 MPEG-2 video stream and re-modulates them onto **line 21 of the analog output**, exactly
 as a real DVD player does, so the *television's* own caption decoder renders them. There
@@ -648,8 +649,9 @@ entry on each field, the last carrying data) 168/168, fields 84/84. Red: M1 mark
 reproduced). M2 dropping the extra entry → B. M3 no toggle and M4 ignoring
 `odd_field_first` → A and B.
 
-**Next step:** HW. A TV on C1 over composite/S-video: I_ROBOT and CASTLE_IN_THE_SKY readable;
-MEN_IN_BLACK and THE_MATRIX unchanged. To repeat the sweep, run
+**HW: ✅ CONFIRMED 2026-10-10** (maintainer, by eye, a TV on C1, build
+`DVD_ccfield_20261011_0223`): good captions on all four discs. I_ROBOT and
+CASTLE_IN_THE_SKY are fixed, and MEN_IN_BLACK and THE_MATRIX are unchanged. To repeat the sweep, run
 `tools/cc_scan.py --windows 4 --win-sectors 600 "$DVD_ISO_DIR"` and tally the
 `framing` lines. The figures above came from exactly that sampling, so a disc's
 `extra_field` data count is a lower bound.
