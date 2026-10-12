@@ -3740,6 +3740,10 @@ dvd_iso_reader dvd_iso_reader_inst (
     .cur_pgcn_o     (cur_pgcn_rd),
     .best_menu_vts  (best_menu_vts),
     .menu_btns_armed(hl_btns_armed),      // Phase 3: cell-loop heuristic (vm off)
+    // Issue #176: buttons on screen OR on the way. Pending matters: the reader
+    // reaches a cell's end ~a VBUF ahead of the display, where a window opening in
+    // the cell's last second is still parsed-but-not-promoted.
+    .cc_btns        (hl_btns_armed | hl_btns_pend),
 
     .vm_mode        (menus_on),           // Phase 4: the VM drives navigation
     .vm_adv         (vm_adv_w),

@@ -319,6 +319,12 @@ module dvd_iso_reader #(
     // key escapes the loop. No flush: cells start on clean GOPs and av_sync
     // re-anchors on the PTS jump.
     input             menu_btns_armed,
+    // CELL COMMAND AT THE DISPLAYED CELL END (issue #176). Level: an HLI with
+    // buttons is on screen or parsed and on its way (emu: nav_pci btns_armed |
+    // btns_pend, Disc Menus on). A title cell command reached while it is high
+    // waits until the display has caught up with the cell's end before it runs,
+    // so a button pressed in the cell's last second still counts. See vmw_cmd_pend.
+    input             cc_btns,
 
     // ---------------------------------------------------------------------
     // Phase-4 DVD-VM coupling. vm_mode (= O[1] Disc Menus) hands navigation
@@ -1388,6 +1394,7 @@ wire       pmap_go_w = (prog_map_off16 != 16'd0) && (cmd_nr_pgm != 8'd0) && (dom
 reg        vmw_pgc;                   // 1 = waiting on POST (else a cell cmd)
 reg        vmw_last;                  // the waited cell was the PGC's last
 reg        vmw_pgc_pend;              // PGC ended (vm_mode): drain, then wait
+reg        vmw_cmd_pend;              // title cell command with buttons up: drain, then dispatch
 reg [23:0] vmw_tmr;                   // verdict watchdog (~0.62 s)
 
 // NATURAL-TRANSITION TAIL DRAIN (docs/dvd_nav.md "Tail drain"). A natural
@@ -1408,14 +1415,38 @@ reg [23:0] vmw_tmr;                   // verdict watchdog (~0.62 s)
 // decoder is not (rtl/mpeg2/watchdog.v decoder_active <= ~busy).
 reg [30:0] drain_tmr;   // 31 bits: DRAIN_WD is now 60 s @ 27 MHz
 wire       drain_wd_hit = (drain_tmr >= DRAIN_WD);
-wire       tail_wait = vmw_pgc_pend && ~menu_dom && ~vbuf_empty && ~drain_wd_hit;
+wire       tail_wait = (vmw_pgc_pend || vmw_cmd_pend) && ~menu_dom && ~vbuf_empty &&
+                       ~drain_wd_hit;
+
+// CELL COMMAND AT THE DISPLAYED CELL END (issue #176, docs/dvd_nav.md "A cell
+// command with buttons up"). A cell command runs at the end of the cell's
+// PRESENTATION. The reader reaches the end of the cell's SECTORS a whole VBUF
+// earlier (~1.1 MB = ~1.2 s on Mad Dog McCree), and dispatching there evaluated
+// the command against registers the viewer could still change: Mad Dog's buttons
+// set g[0] and the cell command `if (g[0] != 21) LinkPTT 5` scores the shot, so
+// a shot in the window's last ~1.2 s never counted. When an HLI with buttons is up
+// (cc_btns) at a title cell command, vmw_cmd_pend holds the dispatch through the
+// same drain as a PGC end (tail_wait: cache empty, VBUF at its low-water mark,
+// DRAIN_WD bound) - a measurement of "the display has reached the parse front"
+// that needs no bitrate, unlike a byte threshold, which would fail most on the
+// low-motion aiming shots these games are made of.
+// Cost: a verdict that CONTINUES (vm_adv: Mad Dog's hit; vm_replay: a looping
+// in-title screen) restarts the decoder from an empty buffer, a short freeze at
+// the junction. A verdict that jumps or seeks already waited for the full drain
+// before this change (Phase B below), so it looks the same as before.
+// Not held: menus (keep_vbuf, the menu cap), and interleaved blocks (angle,
+// seamless branch), where a drain would break the seamless join.
+wire       cmd_hold_w = vm_mode && !menu_dom && cc_btns &&
+                        !angle_active && !seamless_active;
 
 // PHASE B (tail-drain for CELL-COMMAND verdicts, docs/dvd_nav.md). A natural
 // cell command (Thayer's Quest FMV branch cells: LinkTailPGC / LinkPGCN at a
 // choice cell) delivers its verdict as a JUMP or SEEK, which executed
 // immediately and cut the stream the decoder had not finished receiving -
-// the same cut PR #149 fixed for PGC ends. The DISPATCH must stay ungated
-// (a mid-title GPRM cell command's vm_adv verdict would hitch playback);
+// the same cut PR #149 fixed for PGC ends. The DISPATCH stays ungated
+// (a mid-title GPRM cell command's vm_adv verdict would hitch playback) -
+// except with buttons up, where the command must see the viewer's last
+// presses (vmw_cmd_pend above, issue #176);
 // instead the resulting jump/seek EXECUTION is gated: jnat_l/snat_l latch the
 // VM's provenance (vm_from_wait) with the request, and jump_go/seek_jump
 // additionally wait until the stream really has been delivered - bounded by
@@ -1485,7 +1516,7 @@ assign     nat_wait_o    = nat_jump_wait || nat_seek_wait;
 // AFTER a watchdog-released dispatch re-arms the bound (worst case 2x
 // DRAIN_WD on a wedged decoder - still strictly bounded, never a deadlock).
 always @(posedge clk) begin
-    if (!rst_n || !(vmw_pgc_pend || (jump_pending && jnat_l) ||
+    if (!rst_n || !(vmw_pgc_pend || vmw_cmd_pend || (jump_pending && jnat_l) ||
                     (seek_pending && snat_l)))
         drain_tmr <= 31'd0;
     else if (tail_wait || nat_jump_wait || nat_seek_wait)
@@ -2700,6 +2731,7 @@ always @(posedge clk or negedge rst_n) begin
         vmw_pgc      <= 1'b0;
         vmw_last     <= 1'b0;
         vmw_pgc_pend <= 1'b0;
+        vmw_cmd_pend <= 1'b0;
         vmw_tmr      <= 24'd0;
         pm_we        <= 1'b0;
         pm_waddr     <= 7'd0;
@@ -3196,6 +3228,7 @@ always @(posedge clk or negedge rst_n) begin
             jpgn_l          <= 8'd0;
             jptt_l          <= 11'd0;
             vmw_pgc_pend    <= 1'b0;
+            vmw_cmd_pend    <= 1'b0;
             pb_sec          <= 32'hFFFFFFFF;   // parse_buf holds no valid sector
         end else if (jump_go) begin
             // VM JUMP (executes at a block boundary, like the transport seek).
@@ -3210,6 +3243,7 @@ always @(posedge clk or negedge rst_n) begin
             still_act    <= 1'b0;
             adv_pend     <= 1'b0;
             vmw_pgc_pend <= 1'b0;
+            vmw_cmd_pend <= 1'b0;
             jump_ack     <= 1'b1;
             // menu->menu jump (transition between menu PGCs): hold the VBUF so
             // the buffered transition tail plays out. `menu_dom` here is the
@@ -3352,6 +3386,7 @@ always @(posedge clk or negedge rst_n) begin
             still_act    <= 1'b0;
             adv_pend     <= 1'b0;
             vmw_pgc_pend <= 1'b0;
+            vmw_cmd_pend <= 1'b0;
             wr_ptr       <= 0;
             // a transport seek re-scans any angle/interleaved block it lands in
             angle_resolved <= 1'b0;
@@ -5647,6 +5682,16 @@ always @(posedge clk or negedge rst_n) begin
                                         still_next  <= STILL_CMD;
                                         strm_done   <= 1'b1;
                                         still_pend  <= 1'b1;   // drain, then S_STILL
+                                    end else if (cmd_hold_w) begin
+                                        // Buttons are up (issue #176): the
+                                        // display is ~a VBUF behind this
+                                        // point, and a press still to come can
+                                        // change what the command decides.
+                                        // Drain first (tail_wait), then the
+                                        // settle block below dispatches.
+                                        vmw_cmd_pend <= 1'b1;
+                                        vmw_last     <= (cell_i + 8'd1 >= cell_count);
+                                        strm_done    <= 1'b1;
                                     end else begin
                                     // Phase-4: the cell has a CELL COMMAND -
                                     // hand it to the VM and wait for the
@@ -5801,6 +5846,15 @@ always @(posedge clk or negedge rst_n) begin
                         vmw_pgc_pend <= 1'b0;
                         vm_pgc_end   <= 1'b1;
                         vmw_pgc      <= 1'b1;
+                        vmw_tmr      <= 24'd0;
+                        state        <= S_VM_WAIT;
+                    end else if (vmw_cmd_pend) begin
+                        // Issue #176: the cell has been displayed to its end
+                        // -> its cell command's turn (vmw_last was set at the
+                        // cell end; cell_i has not moved since).
+                        vmw_cmd_pend <= 1'b0;
+                        vm_cell_cmd  <= 1'b1;
+                        vmw_pgc      <= 1'b0;
                         vmw_tmr      <= 24'd0;
                         state        <= S_VM_WAIT;
                     end else if (adv_pend) begin

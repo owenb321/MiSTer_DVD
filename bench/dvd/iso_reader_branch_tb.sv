@@ -109,6 +109,7 @@ module iso_reader_branch_tb;
     end
 
     dvd_iso_reader #(.NAV_CAP(NAVCAP)) dut (
+        .cc_btns(1'b0),   // issue #176 hold off: a new input floats Z unless tied
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size),
         .title_sel(7'd0), .aud_drained(1'b1), .vbuf_empty(1'b0), 
         .jump_ttn(7'd0), .jump_pgn(8'd0),

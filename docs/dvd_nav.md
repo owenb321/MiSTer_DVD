@@ -5212,6 +5212,64 @@ PGC-end hold). T1–T7 unchanged and green.
 questions still hold ~18 s and stay answerable; MiB/Matrix/T2 menus, Thayer's timed
 choices and a normal movie unchanged.
 
+### A cell command with buttons up runs at the displayed cell end (issue #176, 2026-10-12) — ⏳ HW pending
+
+**The defect.** In *Mad Dog McCree* a shot never registered. The first shootout is VTS 1
+PGC 1 cell 2 (4.27 s). Its HLI (35.55–37.52 s PTS) is a 7×5 grid of aim buttons, and only
+button 21 has a command, `g[0] = 21`. The CELL COMMAND scores the shot:
+`if (g[0] != 21) LinkPTT 5`, where PTT 5 is the scene in which the player is shot. The
+reader ran that command when it had READ the cell's last sector. The VBUF held ~1.1 MB
+(~1.2 s) at that point, so the command ran at ~36.3 s of display time, and any shot after
+that was scored as a miss. HW sweep (2026-10-11): Select at 36.2 s hit twice; at
+36.35/36.5/36.8/37.3 s it missed. The 2 s window was effectively ~0.7 s.
+
+**Why the authored-duration hold above did not cover it.** `cell_secs` starts when the
+reader LOADS the cell, which is already a VBUF ahead of the display, so it over-counts the
+elapsed time by the buffer depth. For a 4.27 s video cell the residual comes out at 0, and
+`RESID_MIN` never comes into it. Lowering `RESID_MIN` cannot fix this.
+
+**The fix.** At a title-domain cell end whose cell command can see a press
+(`cmd_hold_w`), the reader sets `vmw_cmd_pend` instead of dispatching. The dispatch then
+waits for the same drain as a PGC end: `tail_wait` (cache empty, `vbuf_empty`, bounded by
+`DRAIN_WD`). After that, the settle block pulses `vm_cell_cmd`. Conditions:
+
+- `cc_btns`: emu feeds `hl_btns_armed | hl_btns_pend`. The pending half matters because
+  the reader reaches the cell end a VBUF ahead, so a window that opens in the cell's last
+  second is still parsed-but-not-promoted at that moment
+  (`tools/check_cmd_hold_wiring.py` gates the seam).
+- not the menu domain (`keep_vbuf` and the menu cap own that timing), and not inside an
+  angle or seamless-branch block (a drain would break the seamless join).
+- the authored-duration hold (`dur_hold_w`) still comes first, so Weakest Link's path is
+  unchanged.
+
+**Why `vbuf_empty` and not a byte threshold.** A release at ~1 VBV (~192 KB) was
+considered, so that a continuing verdict would refill before the decoder starves. It was
+rejected because bytes are not display time. 192 KB is ~0.2 s at Mad Dog's ~7 Mbit/s, but
+~0.8 s at 2 Mbit/s, and the low-motion aiming shots these games are made of are exactly
+the low-bitrate case. A time-referenced release (STC against the cell's last
+`vobu_e_ptm`) would be exact, but it is a bigger change. Leave it unbuilt unless the pause
+below turns out to matter.
+
+**The cost.** A verdict that CONTINUES has to restart the decoder from an empty buffer,
+which costs a short freeze at the junction. That covers `vm_adv` (Mad Dog's hit) and
+`vm_replay` (a loop). A verdict that jumps or seeks waited for the full drain before this
+change anyway (Phase B, `jnat_l`/`snat_l`), so it looks the same.
+
+**Library sweep** (`tools/cell_cmd_btn_scan.py $DVD_ISO_DIR`, the local library of 1,556 images, a 3 s lookback
+from each cell's last VOBU). 11,362 title cells on 87 discs have a cell command, no still
+and buttons up at the end:
+
+| Class | Cells | Discs | Effect of a hold |
+|---|---|---|---|
+| conditional (`if (...) Link…`) | 3,849 | 13 | **the fix**: every American Laser Games / Digital Leisure title (Mad Dog I/II, Crime Patrol, Space Pirates, Who Shot Johnny Rock, Drug Wars, Last Bounty Hunter, Dragon's Lair II, Time Traveler, …). The false branch continues, so a hit pauses briefly. |
+| unconditional link/jump elsewhere | 2,331 | 44 | none (already drained before executing) |
+| unconditional self-loop (`LinkTopPG`/`LinkTopC`/`LinkCN` self) | 1,932 | 39 | a pause on every loop of a gapless in-title game screen (Fairytopia, Bee Movie, Cinderella III, Tom and Jerry, …) |
+| `LinkTailPGC` | 1,024 | 27 | POST runs at the displayed end (POST usually jumps) |
+| unconditional, no link (`Nop`, one Set) | 140 | 8 | a pause mid-sequence **in the target games themselves** (Space Pirates 76, Crime Patrol 20, Mad Dog II 16) |
+
+The last two rows decided the next step: a command whose verdict cannot depend on a press
+gains nothing from the hold, so it is not held (`cc_fixed`, below).
+
 ---
 
 ## ⏳ OPEN: two presses to activate a menu button (WAKE_UP_WITH_ELMO, 2026-09-13)
