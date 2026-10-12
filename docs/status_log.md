@@ -22,8 +22,8 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- ⏳ **A TITLE CELL COMMAND WITH BUTTONS UP RUNS AT THE DISPLAYED CELL END (issue #176,
-  2026-10-12, branch `fix/cell-cmd-display`; sim-proven, HW pending).**
+- ✅ **A TITLE CELL COMMAND WITH BUTTONS UP RUNS AT THE DISPLAYED CELL END (issue #176,
+  2026-10-12, branch `fix/cell-cmd-display`; sim-proven, ✅ HW-CONFIRMED A/B vs v0.9.1).**
   - **Field report:** in Mad Dog McCree a shot never registers. HW sweep 2026-10-11 on the
     first shootout (VTS 1 PGC 1 cell 2): Select at 36.2 s PTS hit twice; at 36.35, 36.5,
     36.8 and 37.3 s it missed. The HLI window is 35.55–37.52 s.
@@ -43,16 +43,21 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     (Space Pirates, Crime Patrol, Mad Dog II).
   - **Rejected:** a release at ~1 VBV (192 KB). Bytes are not display time, and that
     release fails most on the low-bitrate aiming shots the fix is for.
-  - **Cost, accepted:** a held command whose verdict continues (Mad Dog's hit) restarts the
-    decoder from an empty buffer, a short freeze at the junction. Held commands that jump
-    already waited for the full drain.
+  - **Cost, expected, then measured as none on Mad Dog:** a held command whose verdict
+    continues (Mad Dog's hit) restarts the reader from a drained VBUF. The decoder's
+    decoded-picture lead covers it: the hit junction ran at the nominal rate, with no
+    stall longer than the 20 ms telemetry grain and no lates.
+  - **HW (rig, Mad Dog, Select taps timed from fast telemetry, A/B):** v0.9.1 hit at 36.1
+    s and missed at 36.6 and 37.3 s. This branch hits at 36.6, 37.0 and 37.3 s, and misses
+    at 37.45 s and 37.7 s. The window now closes at ~37.35 s of the authored 37.52 s (the
+    rest is the decoded-picture lead). Method and table: `docs/dvd_nav.md`.
   - **Gates:** `bench/dvd/run_cmd_hold.sh --red` (10 arms, 11 mutations);
     `tools/check_cmd_hold_wiring.py --red`; `run_reader_regress.sh` vs `main`, identical
     with the hold tied off.
-  - **Next:** HIL. Run the control arm (the issue's sweep on `main`) first, then the same
-    sweep on this build: 36.35–37.3 s should hit. Also check a loop disc (Fairytopia) for
-    no new pause, and Mad Dog II / Crime Patrol by hand. Design note: `docs/dvd_nav.md` "A
-    cell command with buttons up".
+  - **Next:** open the PR. Not yet run on HW: a loop disc such as Fairytopia, which is
+    unchanged by construction because a fixed command is never held (bench P2), and Mad
+    Dog II / Crime Patrol by hand. Design note: `docs/dvd_nav.md` "A cell command with
+    buttons up".
 
 - ✅ **LINE-21 CAPTIONS: THE FIELD IS THE ENTRY'S POSITION, NOT ITS MARKER (issue #166,
   2026-10-10, ✅ MERGED PR #175; sim-proven, ✅ HW-CONFIRMED by eye on a TV).**

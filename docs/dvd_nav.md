@@ -5212,7 +5212,7 @@ PGC-end hold). T1–T7 unchanged and green.
 questions still hold ~18 s and stay answerable; MiB/Matrix/T2 menus, Thayer's timed
 choices and a normal movie unchanged.
 
-### A cell command with buttons up runs at the displayed cell end (issue #176, 2026-10-12) — ⏳ HW pending (branch `fix/cell-cmd-display`)
+### A cell command with buttons up runs at the displayed cell end (issue #176, 2026-10-12) — ✅ HW-CONFIRMED A/B vs v0.9.1 (branch `fix/cell-cmd-display`)
 
 **The defect.** In *Mad Dog McCree* a shot never registered. The first shootout is VTS 1
 PGC 1 cell 2 (4.27 s). Its HLI (35.55–37.52 s PTS) is a 7×5 grid of aim buttons, and only
@@ -5250,10 +5250,13 @@ the low-bitrate case. A time-referenced release (STC against the cell's last
 `vobu_e_ptm`) would be exact, but it is a bigger change. Leave it unbuilt unless the pause
 below turns out to matter.
 
-**The cost.** A verdict that CONTINUES has to restart the decoder from an empty buffer,
-which costs a short freeze at the junction. That covers `vm_adv` (Mad Dog's hit) and
-`vm_replay` (a loop). A verdict that jumps or seeks waited for the full drain before this
-change anyway (Phase B, `jnat_l`/`snat_l`), so it looks the same.
+**The expected cost, and what HW measured.** A verdict that CONTINUES (`vm_adv`: Mad Dog's
+hit; `vm_replay`: a loop) restarts the reader from a drained VBUF, which was expected to
+freeze the picture briefly at the junction. On Mad Dog it does not: the decoder still
+holds a few decoded pictures when `vbuf_empty` fires, and they cover the restart. The
+junction ran at the nominal picture rate, with no stall longer than the 20 ms telemetry
+grain and no lates (table below). A verdict that jumps or seeks already waited for the
+full drain before this change (Phase B, `jnat_l`/`snat_l`), so it looks the same.
 
 **Library sweep** (`tools/cell_cmd_btn_scan.py $DVD_ISO_DIR`, the local library of 1,556 images, a 3 s lookback
 from each cell's last VOBU). 11,362 title cells on 87 discs have a cell command, no still
@@ -5289,7 +5292,7 @@ cell command in the library (1,556 images) and finds 0 disagreements.
 
 With the filter, the conditional, `LinkTailPGC` and Set rows above are held, and the
 loops, `Nop`s and fixed links play as they did before. `--held` lists exactly the held
-set.
+set: **5,600 cells on 44 images** (was 11,362 on 87 without the filter).
 
 **Gate:** `bench/dvd/run_cmd_hold.sh --red`. `iso_reader_cmdhold_tb` reproduces Mad Dog's
 shape, `if (g[0] != 21) LinkCN 3`. It checks:
@@ -5306,6 +5309,31 @@ shape, `if (g[0] != 21) LinkCN 3`. It checks:
 Eleven mutations each fail exactly their own arms. The seam is gated by
 `tools/check_cmd_hold_wiring.py --red`. With `cc_btns` tied off, every other reader bench is
 bit-identical to `main` (`run_reader_regress.sh`).
+
+**HW result (2026-10-12, rig, Mad Dog McCree, Deputy, first shootout).** The sweep script
+(scratch, not kept) selects Deputy from the difficulty menu and maps displayed pictures to
+PTS: telemetry `pickups` + `drops` from the title flush, PTS = 0.181 s + (k − 1)/29.97,
+with the press time solved on the board's monotonic clock from fast (20 ms) telemetry. It
+then taps Right ×3 from 35.75 s and Select at the target, and scores the result from
+telemetry. A miss is the `LinkPTT 5` seek, whose flush drops `video_live` at cell 2's end
+(picture 1118). A hit plays on into cell 3 with no drop. Fire accuracy is about ±0.09 s.
+
+| Select at (PTS) | v0.9.1 (control) | this branch |
+|---|---|---|
+| 36.1 s | hit | — |
+| 36.6 s | **miss** | **hit** |
+| 37.0 s | — | **hit** |
+| 37.3 s | **miss** | **hit** |
+| 37.45 s | — | miss |
+| 37.7 s (past the window) | — | miss |
+
+The effective window now closes at ~37.35 s against the authored 37.52 s, so a player
+gets ~1.8 s of the 2 s (was ~0.75 s). The remaining ~0.17 s is the decoder's decoded-
+picture lead: `vbuf_empty` fires while those pictures are still to be shown. ⚠ Harness
+trap, found on the way: the key daemon's `keys` command costs 170 ms per key and queues
+anything written behind it. Three `keys` Rights pushed a Select written at 36.2 s out to
+~36.3 s, so the first control runs scored the harness, not the core. Use single
+`key <code> 30` taps for timed presses.
 
 **Known limits.**
 
