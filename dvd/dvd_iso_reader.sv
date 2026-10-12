@@ -1399,8 +1399,8 @@ reg [23:0] vmw_tmr;                   // verdict watchdog (~0.62 s)
 
 // FIXED CELL COMMANDS (issue #176). The hold below exists so a cell command sees
 // the viewer's last presses. A command whose verdict cannot depend on a press gains
-// nothing from it and would only pause: the library sweep found 1,932 gapless
-// in-title loops (LinkTopPG / LinkTopC / LinkCN-self, 39 discs) and 140 Nop cells in
+// nothing from it and would only pause: the library sweep found 1,924 gapless
+// in-title loops (LinkTopPG / LinkTopC / LinkCN-self, 40 images) and 83 Nop cells in
 // the target games themselves (Space Pirates, Crime Patrol, Mad Dog II). So the
 // P_CMD walk classifies every cell command as it streams past, one bit per command
 // number, and those are dispatched at once as before. FIXED = unconditional

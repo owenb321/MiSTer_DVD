@@ -5258,17 +5258,19 @@ junction ran at the nominal picture rate, with no stall longer than the 20 ms te
 grain and no lates (table below). A verdict that jumps or seeks already waited for the
 full drain before this change (Phase B, `jnat_l`/`snat_l`), so it looks the same.
 
-**Library sweep** (`tools/cell_cmd_btn_scan.py $DVD_ISO_DIR`, the local library of 1,556 images, a 3 s lookback
-from each cell's last VOBU). 11,362 title cells on 87 discs have a cell command, no still
-and buttons up at the end:
+**Library sweep** (`tools/cell_cmd_btn_scan.py $DVD_ISO_DIR`, the local library of 1,556
+images, a 3 s lookback from each cell's last VOBU; the class summary is the tool's own
+output, classified from the command bytes). 11,362 title cells on 87 images have a cell
+command, no still, and buttons up at the end:
 
-| Class | Cells | Discs | Effect of a hold |
-|---|---|---|---|
-| conditional (`if (...) Link…`) | 3,849 | 13 | **the fix**: every American Laser Games / Digital Leisure title (Mad Dog I/II, Crime Patrol, Space Pirates, Who Shot Johnny Rock, Drug Wars, Last Bounty Hunter, Dragon's Lair II, Time Traveler, …). The false branch continues, so a hit pauses briefly. |
-| unconditional link/jump elsewhere | 2,331 | 44 | none (already drained before executing) |
-| unconditional self-loop (`LinkTopPG`/`LinkTopC`/`LinkCN` self) | 1,932 | 39 | a pause on every loop of a gapless in-title game screen (Fairytopia, Bee Movie, Cinderella III, Tom and Jerry, …) |
-| `LinkTailPGC` | 1,024 | 27 | POST runs at the displayed end (POST usually jumps) |
-| unconditional, no link (`Nop`, one Set) | 140 | 8 | a pause mid-sequence **in the target games themselves** (Space Pirates 76, Crime Patrol 20, Mad Dog II 16) |
+| Class | Cells | Images | Held? | Effect |
+|---|---|---|---|---|
+| conditional (`if (...) …`) | 4,058 | 15 | held | **the fix**: every American Laser Games / Digital Leisure title (Mad Dog I/II, Crime Patrol, Space Pirates, Who Shot Johnny Rock, Drug Wars, Last Bounty Hunter, Dragon's Lair I/II, Time Traveler) plus Thayer's Quest and Scene It |
+| `NextC`/`NextPG`/`TailPGC`/`RSM` | 913 | 30 | held | POST or a resume runs at the displayed end (POST usually jumps) |
+| carries a Set (types 2–6) | 629 | 12 | held | the Set reads registers a press may have changed |
+| fixed loop (`LinkTopC`, `LinkTopPG`, `LinkCN` self) | 1,924 | 40 | **not held** | a hold would pause every loop of a gapless in-title game screen (Fairytopia, Bee Movie, Cinderella III, Tom and Jerry, …) |
+| fixed, no link (`Nop`/`Goto`/`Break`) | 83 | 6 | **not held** | a hold would pause mid-sequence **in the target games themselves** (Space Pirates 26, Crime Patrol 20, Mad Dog II 15, Last Bounty Hunter 13) |
+| fixed link/jump elsewhere | 3,755 | 48 | not held | none either way (drained before executing) |
 
 The loop and `Nop` rows decided the second half of the fix: a command whose verdict cannot
 depend on a press gains nothing from the hold, so it is not held.
@@ -5290,9 +5292,10 @@ with an advance), never decides anything. `tools/cell_cmd_btn_scan.py cmd_fixed(
 same predicate. `--selfcheck` compares it with the vmcmd.c decoder's text on every title
 cell command in the library (1,556 images) and finds 0 disagreements.
 
-With the filter, the conditional, `LinkTailPGC` and Set rows above are held, and the
-loops, `Nop`s and fixed links play as they did before. `--held` lists exactly the held
-set: **5,600 cells on 44 images** (was 11,362 on 87 without the filter).
+With the filter, the first three rows are held (**5,600 cells on 44 images**; `--held`
+lists exactly them), and the loops, `Nop`s and fixed links play as they did before.
+(The first draft of this table came from a scan that had not finished; these are the
+complete library figures.)
 
 **Gate:** `bench/dvd/run_cmd_hold.sh --red`. `iso_reader_cmdhold_tb` reproduces Mad Dog's
 shape, `if (g[0] != 21) LinkCN 3`. It checks:
@@ -5310,13 +5313,15 @@ Eleven mutations each fail exactly their own arms. The seam is gated by
 `tools/check_cmd_hold_wiring.py --red`. With `cc_btns` tied off, every other reader bench is
 bit-identical to `main` (`run_reader_regress.sh`).
 
-**HW result (2026-10-12, rig, Mad Dog McCree, Deputy, first shootout).** The sweep script
-(scratch, not kept) selects Deputy from the difficulty menu and maps displayed pictures to
-PTS: telemetry `pickups` + `drops` from the title flush, PTS = 0.181 s + (k − 1)/29.97,
+**HW result (2026-10-12, rig, Mad Dog McCree, Deputy, first shootout).** The sweep
+(`tools/hil_shot_sweep.py`; its docstring has the Mad Dog command line) selects Deputy from
+the difficulty menu and maps displayed pictures to PTS: telemetry `pickups` + `drops` from the title flush, PTS = 0.181 s + (k − 1)/29.97,
 with the press time solved on the board's monotonic clock from fast (20 ms) telemetry. It
 then taps Right ×3 from 35.75 s and Select at the target, and scores the result from
 telemetry. A miss is the `LinkPTT 5` seek, whose flush drops `video_live` at cell 2's end
-(picture 1118). A hit plays on into cell 3 with no drop. Fire accuracy is about ±0.09 s.
+(picture 1118). A hit plays on into cell 3 with no drop. The sweep below was taken with
+the scratch prototype, which fired within about ±0.09 s of plan. The committed tool fires
+within ~10 ms (re-checked: 36.6 s hit, 37.7 s miss).
 
 | Select at (PTS) | v0.9.1 (control) | this branch |
 |---|---|---|
@@ -5327,13 +5332,14 @@ telemetry. A miss is the `LinkPTT 5` seek, whose flush drops `video_live` at cel
 | 37.45 s | — | miss |
 | 37.7 s (past the window) | — | miss |
 
-The effective window now closes at ~37.35 s against the authored 37.52 s, so a player
-gets ~1.8 s of the 2 s (was ~0.75 s). The remaining ~0.17 s is the decoder's decoded-
-picture lead: `vbuf_empty` fires while those pictures are still to be shown. ⚠ Harness
+The effective window now closes between 37.3 s (a hit) and 37.45 s (a miss), against the
+authored 37.52 s, so a player gets ~1.8 s of the 2 s (was ~0.75 s, closing near 36.3 s).
+The rest is the decoder's decoded-picture lead: `vbuf_empty` fires while those pictures
+are still to be shown. ⚠ Harness
 trap, found on the way: the key daemon's `keys` command costs 170 ms per key and queues
 anything written behind it. Three `keys` Rights pushed a Select written at 36.2 s out to
-~36.3 s, so the first control runs scored the harness, not the core. Use single
-`key <code> 30` taps for timed presses.
+~36.3 s, so the first control runs scored the harness, not the core. The tool uses single
+`key <code> 30` taps, and the trap is in the hil-testing skill.
 
 **Known limits.**
 

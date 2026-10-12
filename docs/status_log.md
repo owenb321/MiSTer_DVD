@@ -37,10 +37,11 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     `DRAIN_WD`). Commands whose verdict cannot depend on a press (`fx_mem`: unconditional
     Nop / fixed-target links and jumps) are not held.
   - **Why the filter.** The library sweep (`tools/cell_cmd_btn_scan.py`, 1,556 images)
-    found the defect class on every American Laser Games / Digital Leisure title: 3,849
-    conditional cells on 13 discs. It also found that a blanket hold would have paused
-    1,932 gapless in-title loops on 39 discs, plus 140 `Nop` cells inside the target games
-    (Space Pirates, Crime Patrol, Mad Dog II).
+    found the defect class on every American Laser Games / Digital Leisure title: 4,058
+    conditional cells on 15 images. It also found that a blanket hold would have paused
+    1,924 gapless in-title loops on 40 images, plus 83 `Nop` cells inside the target games
+    (Space Pirates, Crime Patrol, Mad Dog II, Last Bounty Hunter). 5,600 cells on 44 images
+    are held.
   - **Rejected:** a release at ~1 VBV (192 KB). Bytes are not display time, and that
     release fails most on the low-bitrate aiming shots the fix is for.
   - **Cost, expected, then measured as none on Mad Dog:** a held command whose verdict
@@ -49,8 +50,9 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     stall longer than the 20 ms telemetry grain and no lates.
   - **HW (rig, Mad Dog, Select taps timed from fast telemetry, A/B):** v0.9.1 hit at 36.1
     s and missed at 36.6 and 37.3 s. This branch hits at 36.6, 37.0 and 37.3 s, and misses
-    at 37.45 s and 37.7 s. The window now closes at ~37.35 s of the authored 37.52 s (the
-    rest is the decoded-picture lead). Method and table: `docs/dvd_nav.md`.
+    at 37.45 s and 37.7 s. The window now closes between 37.3 and 37.45 s of the authored
+    37.52 s (the rest is the decoded-picture lead). Method and table: `docs/dvd_nav.md`;
+    re-run it with `tools/hil_shot_sweep.py`.
   - **Gates:** `bench/dvd/run_cmd_hold.sh --red` (10 arms, 11 mutations);
     `tools/check_cmd_hold_wiring.py --red`; `run_reader_regress.sh` vs `main`, identical
     with the hold tied off.

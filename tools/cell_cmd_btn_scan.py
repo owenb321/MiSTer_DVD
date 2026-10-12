@@ -22,8 +22,9 @@ One line per hit:
                 jumps (it only sets a register) -- the shape whose effect a later cell
                 command reads
 
-A summary line at the end counts discs and cells. Damaged images are reported on stderr
-and skipped.
+The summary at the end splits the cells by what the reader does with their command
+(CLASSES: held or not, and why) and counts discs and cells. Damaged images are reported
+on stderr and skipped.
 
 Limits: language-independent title domain only (menus keep their own loop semantics); an
 interleaved (angle / seamless-branch) cell is listed like any other, though the reader does
@@ -114,6 +115,32 @@ def cmd_fixed(cmd):
     if op in (0, 4, 5, 6, 7):
         return True
     return op == 1 and (b7 & 0x1F) not in (2, 6, 13, 16)
+
+
+CLASSES = (
+    ('cond', 'conditional: held (a continuing verdict restarts from a drained VBUF)'),
+    ('post', 'NextC/NextPG/TailPGC/RSM: held (POST or a resume reads registers)'),
+    ('set', 'carries a Set (types 2-6): held'),
+    ('loop', 'fixed loop to its own cell/program: not held (gapless replay kept)'),
+    ('nolink', 'fixed, no link (Nop/Goto/Break): not held'),
+    ('link', 'fixed link/jump elsewhere: not held (drained before executing anyway)'),
+)
+
+
+def cmd_class(cmd, cell):
+    """Which CLASSES row a cell command falls in (cell = its 1-based cell number)."""
+    b0, b1, b7 = cmd[0], cmd[1], cmd[7]
+    if (b1 >> 4) & 7:
+        return 'cond'
+    if not cmd_fixed(cmd):
+        return 'post' if (b0 >> 5) == 1 else 'set'
+    if (b0 >> 5) == 0 or ((b0 >> 5) == 1 and not b0 & 0x10 and (b1 & 0x0F) == 0):
+        return 'nolink'
+    if (b0 >> 5) == 1 and not b0 & 0x10:
+        op, sub = b1 & 0x0F, b7 & 0x1F
+        if (op == 1 and sub in (1, 5)) or (op == 7 and b7 == cell):
+            return 'loop'
+    return 'link'
 
 
 def is_link(cmd):
@@ -213,7 +240,7 @@ def scan(iso, lookback, verbose, held_only=False):
                                nb, walked, ns, to_end, so, not fx,
                                ne.decode_vmcmd(cmds[nr - 1])))
                     print(line, flush=True)
-                    hits.append(so)
+                    hits.append((so, cmd_class(cmds[nr - 1], i + 1)))
     return hits
 
 
@@ -240,6 +267,7 @@ def main():
     ap.add_argument('paths', nargs='+')
     a = ap.parse_args()
     ndisc = nhit = ncell = nset = 0
+    ccells, cdiscs = {}, {}
     rc = 0
     if a.selfcheck:
         nbad = 0
@@ -266,7 +294,13 @@ def main():
         if h:
             nhit += 1
             ncell += len(h)
-            nset += sum(h)
+            nset += sum(so for so, _ in h)
+            for _, k in h:
+                ccells[k] = ccells.get(k, 0) + 1
+            for k in set(k for _, k in h):
+                cdiscs[k] = cdiscs.get(k, 0) + 1
+    for k, label in CLASSES:
+        print('# %-6s %6d cells %4d images  %s' % (k, ccells.get(k, 0), cdiscs.get(k, 0), label))
     print('# %d images, %d with hits, %d cells (%d with a set-only button)'
           % (ndisc, nhit, ncell, nset))
     return rc
