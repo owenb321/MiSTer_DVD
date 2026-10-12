@@ -1397,6 +1397,39 @@ reg        vmw_pgc_pend;              // PGC ended (vm_mode): drain, then wait
 reg        vmw_cmd_pend;              // title cell command with buttons up: drain, then dispatch
 reg [23:0] vmw_tmr;                   // verdict watchdog (~0.62 s)
 
+// FIXED CELL COMMANDS (issue #176). The hold below exists so a cell command sees
+// the viewer's last presses. A command whose verdict cannot depend on a press gains
+// nothing from it and would only pause: the library sweep found 1,932 gapless
+// in-title loops (LinkTopPG / LinkTopC / LinkCN-self, 39 discs) and 140 Nop cells in
+// the target games themselves (Space Pirates, Crime Patrol, Mad Dog II). So the
+// P_CMD walk classifies every cell command as it streams past, one bit per command
+// number, and those are dispatched at once as before. FIXED = unconditional
+// (compare op byte1[6:4] = 0) AND
+//   - type 0 (byte0[7:5]): Nop / Goto / Break / SetTmpPML, or
+//   - type 1 jump (byte0[4]): Exit, JumpTT, JumpVTS_*, JumpSS, CallSS, or
+//   - type 1 link with a fixed target: op (byte1[3:0]) 0, 4 LinkPGCN, 5 LinkPTTN,
+//     6 LinkPGN, 7 LinkCN, or 1 LinkSIns with any sub-instruction (byte7[4:0]) but
+//     NextC 2, NextPG 6, TailPGC 13 and RSM 16 - those can land in POST or a
+//     resume, which read registers.
+// Types 2-6 all carry a Set and are held. tools/cell_cmd_btn_scan.py cmd_fixed()
+// is the same predicate, cross-checked against the vmcmd.c decoder on every title
+// cell command in the library (--selfcheck: 0 disagreements).
+// fx_mem is written only for this PGC's cell commands; cmd_hold_w also requires
+// cmd_nr <= cmd_nr_cell, so a stale entry (or an invalid cmd_nr, which the VM
+// answers with an advance) never decides anything.
+reg        fx_we;
+reg  [7:0] fx_waddr;                  // the 1-based cell command number
+reg        fx_wdata;
+reg  [9:0] cc_first;                  // nr_pre + nr_post: command index of cell command 1
+reg        fx_mem [0:255];
+reg        fx_rd;                     // the playing cell's command is fixed
+integer    fx_i;
+initial for (fx_i = 0; fx_i < 256; fx_i = fx_i + 1) fx_mem[fx_i] = 1'b0;
+always @(posedge clk) begin
+    if (fx_we) fx_mem[fx_waddr] <= fx_wdata;
+    fx_rd <= fx_mem[cm_rd[7:0]];      // cm_rd settles at the cell load: a cycle is free
+end
+
 // NATURAL-TRANSITION TAIL DRAIN (docs/dvd_nav.md "Tail drain"). A natural
 // title-domain PGC end (First Play logo chains, end-of-title -> menu) must
 // play out the decoder's ~1 s buffered tail before the POST commands run:
@@ -1437,7 +1470,8 @@ wire       tail_wait = (vmw_pgc_pend || vmw_cmd_pend) && ~menu_dom && ~vbuf_empt
 // Not held: menus (keep_vbuf, the menu cap), and interleaved blocks (angle,
 // seamless branch), where a drain would break the seamless join.
 wire       cmd_hold_w = vm_mode && !menu_dom && cc_btns &&
-                        !angle_active && !seamless_active;
+                        !angle_active && !seamless_active &&
+                        !fx_rd && (cm_rd[7:0] <= cmd_nr_cell);
 
 // PHASE B (tail-drain for CELL-COMMAND verdicts, docs/dvd_nav.md). A natural
 // cell command (Thayer's Quest FMV branch cells: LinkTailPGC / LinkPGCN at a
@@ -1534,6 +1568,17 @@ reg [31:0] lv_c;                      // cell last_vobu_start_sector @16 (RBN)
 reg [15:0] pb_c;                      // playback_time in seconds, clamped to the
                                       // C_PBTM spec max 9:59:59 = 35,999 (Phase 6)
 reg [7:0]  cmd_b0, cmd_b1, cmd_b6;    // command bytes 0/1/6 (LinkPGCN detect)
+// The FIXED predicate (see fx_mem), evaluated with byte 7 on pb_rdata.
+wire       cmd_fixed_w = (cmd_b1[6:4] == 3'd0) &&
+                         ((cmd_b0[7:5] == 3'd0) ||
+                          ((cmd_b0[7:5] == 3'd1) &&
+                           (cmd_b0[4] ||
+                            cmd_b1[3:0] == 4'd0 || cmd_b1[3:0] == 4'd4 ||
+                            cmd_b1[3:0] == 4'd5 || cmd_b1[3:0] == 4'd6 ||
+                            cmd_b1[3:0] == 4'd7 ||
+                            (cmd_b1[3:0] == 4'd1 &&
+                             pb_rdata[4:0] != 5'd2  && pb_rdata[4:0] != 5'd6 &&
+                             pb_rdata[4:0] != 5'd13 && pb_rdata[4:0] != 5'd16))));
 reg        pb_skip;                   // next S_SECREAD completion skips the rbuf fetch
 
 // Cell-streaming position (concatenated title-VOB 2048-sector domain = the DVD
@@ -2692,6 +2737,10 @@ always @(posedge clk or negedge rst_n) begin
         pgc_loaded   <= 1'b0;
         pgc_error    <= 1'b0;
         cmd_we       <= 1'b0;
+        fx_we        <= 1'b0;
+        fx_waddr     <= 8'd0;
+        fx_wdata     <= 1'b0;
+        cc_first     <= 10'd0;
         ext_w_en     <= 1'b0;
         still_timed  <= 1'b0;
         still_secs   <= 16'd0;
@@ -2784,6 +2833,7 @@ always @(posedge clk or negedge rst_n) begin
             pgc_dom_tt    <= (dom == DOM_TT);
         end
         cmd_we   <= 1'b0;
+        fx_we    <= 1'b0;
         pm_we    <= 1'b0;
         ptt_we   <= 1'b0;
         ext_w_en <= 1'b0;                   // one-cycle write strobe (see ext_mem)
@@ -4731,6 +4781,7 @@ always @(posedge clk or negedge rst_n) begin
                         cmd_nr_pre  <= (nr_pre16   > 16'd255) ? 8'd255 : nr_pre16[7:0];
                         cmd_nr_post <= (nr_post16  > 16'd255) ? 8'd255 : nr_post16[7:0];
                         cmd_nr_cell <= (nr_cellc16 > 16'd255) ? 8'd255 : nr_cellc16[7:0];
+                        cc_first    <= nr_pre16[9:0] + nr_post16[9:0];
                         if (nr_pre16 + nr_post16 + nr_cellc16 == 16'd0 ||
                             nr_pre16 + nr_post16 + nr_cellc16 > 16'd511) begin
                             // empty or absurd -> skip to the program map / cells
@@ -4771,6 +4822,13 @@ always @(posedge clk or negedge rst_n) begin
                         cmd_b0 == 8'h20 && cmd_b1[3:0] == 4'h4) begin
                         if (cmd_b1[6:4] == 3'd0) link_pgcn_u <= {1'b0, cmd_b6[6:0], pb_rdata};
                         else                     link_pgcn_c <= {1'b0, cmd_b6[6:0], pb_rdata};
+                    end
+                    // Byte 7 of a CELL command: classify it (fx_mem, issue #176).
+                    if (walk_idx[2:0] == 3'd7 && walk_idx[12:3] >= cc_first &&
+                        walk_idx[12:3] - cc_first < 10'd255) begin
+                        fx_we    <= 1'b1;
+                        fx_waddr <= walk_idx[10:3] - cc_first[7:0] + 8'd1;
+                        fx_wdata <= cmd_fixed_w;
                     end
                     if (walk_left == 13'd1) begin
                         if (pmap_go_w) begin

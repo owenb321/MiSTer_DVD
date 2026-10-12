@@ -623,6 +623,15 @@ in `CONF_STR`. Design: `docs/cdda.md` "`.cue` sheets". ⛔ CHD still not support
 > **top gap confirmed = exact chapters/PTT (7/7 discs); interactive GPRM-counter/NVTMR promoted
 > above parental on measured prevalence (3/7 game discs).** Phase 3 = close gaps in that order.
 
+### ⏳ Issue #176: cell commands with buttons up run at the displayed cell end (branch `fix/cell-cmd-display`)
+
+Sim-proven (`bench/dvd/run_cmd_hold.sh --red`); HW pending. Next step: the HIL sweep from
+the issue on `main` (control) and on this build (Mad Dog's first shootout: 36.35–37.3 s
+must hit), then a loop disc (Fairytopia) for no new pause. Design and the library sweep
+behind it: `docs/dvd_nav.md` "A cell command with buttons up". Open follow-up, only if
+the pause on a continuing verdict matters on HW: a time-referenced release (STC against
+the cell's last `vobu_e_ptm`).
+
 ### ⏳ 2026-10-01 spec-audit: DVD Demystified 3rd-edition follow-ups (items 1–8 and 10b ✅; the rest re-ranked 2026-10-06, PR #165)
 
 The audit, with evidence and the user's decisions, is in

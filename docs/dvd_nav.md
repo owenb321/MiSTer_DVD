@@ -5212,7 +5212,7 @@ PGC-end hold). T1–T7 unchanged and green.
 questions still hold ~18 s and stay answerable; MiB/Matrix/T2 menus, Thayer's timed
 choices and a normal movie unchanged.
 
-### A cell command with buttons up runs at the displayed cell end (issue #176, 2026-10-12) — ⏳ HW pending
+### A cell command with buttons up runs at the displayed cell end (issue #176, 2026-10-12) — ⏳ HW pending (branch `fix/cell-cmd-display`)
 
 **The defect.** In *Mad Dog McCree* a shot never registered. The first shootout is VTS 1
 PGC 1 cell 2 (4.27 s). Its HLI (35.55–37.52 s PTS) is a 7×5 grid of aim buttons, and only
@@ -5267,8 +5267,57 @@ and buttons up at the end:
 | `LinkTailPGC` | 1,024 | 27 | POST runs at the displayed end (POST usually jumps) |
 | unconditional, no link (`Nop`, one Set) | 140 | 8 | a pause mid-sequence **in the target games themselves** (Space Pirates 76, Crime Patrol 20, Mad Dog II 16) |
 
-The last two rows decided the next step: a command whose verdict cannot depend on a press
-gains nothing from the hold, so it is not held (`cc_fixed`, below).
+The loop and `Nop` rows decided the second half of the fix: a command whose verdict cannot
+depend on a press gains nothing from the hold, so it is not held.
+
+**Fixed commands are not held (`fx_mem`).** As the P_CMD walk streams each cell command
+to the VM, it classifies the command and writes one bit per command number into
+`fx_mem` (256×1). The bit is read back for the playing cell as `fx_rd`. A command is
+FIXED when it is unconditional (compare op `byte1[6:4]` = 0) and is one of:
+
+- type 0: `Nop`, `Goto`, `Break` or `SetTmpPML`;
+- a type 1 jump: `Exit`, `JumpTT`, `JumpVTS_*`, `JumpSS` or `CallSS`;
+- a type 1 link with a fixed target: `LinkPGCN`/`PTTN`/`PGN`/`CN`, or `LinkSIns` with any
+  sub-instruction except `NextC`, `NextPG`, `TailPGC` and `RSM`. Those four can land in
+  POST or a resume, which read registers.
+
+Types 2–6 all carry a Set, so they are held. `cmd_hold_w` also requires
+`cmd_nr <= cmd_nr_cell`, so a stale bit, or an invalid `cmd_nr` (which the VM answers
+with an advance), never decides anything. `tools/cell_cmd_btn_scan.py cmd_fixed()` is the
+same predicate. `--selfcheck` compares it with the vmcmd.c decoder's text on every title
+cell command in the library (1,556 images) and finds 0 disagreements.
+
+With the filter, the conditional, `LinkTailPGC` and Set rows above are held, and the
+loops, `Nop`s and fixed links play as they did before. `--held` lists exactly the held
+set.
+
+**Gate:** `bench/dvd/run_cmd_hold.sh --red`. `iso_reader_cmdhold_tb` reproduces Mad Dog's
+shape, `if (g[0] != 21) LinkCN 3`. It checks:
+
+- A1: the hold, and the miss with no press;
+- A2: a press made after the reader's cache has emptied is scored;
+- B: no buttons means no hold;
+- C: the hold waits for the cache;
+- D: a jump clears the latch;
+- E: `DRAIN_WD` releases the hold;
+- P1–P4: `Nop` and `LinkTopC` are not held, `LinkTailPGC` is held, and an invalid
+  `cmd_nr` is not held.
+
+Eleven mutations each fail exactly their own arms. The seam is gated by
+`tools/check_cmd_hold_wiring.py --red`. With `cc_btns` tied off, every other reader bench is
+bit-identical to `main` (`run_reader_regress.sh`).
+
+**Known limits.**
+
+- A pause during the hold counts toward `DRAIN_WD` (60 s), the same as the PGC-end
+  drain. A pause longer than that lets the command run before the display reaches the
+  end of the cell.
+- An HLI left armed by an earlier cell (nav_pci keeps a highlight past `hli_e_ptm` until a
+  successor or a disarm) counts as buttons up. A held command in a later, button-less cell
+  then waits for the drain. That cell's command still runs correctly; the cost is the
+  pause.
+- The pause on a continuing verdict (Mad Dog's hit) is the price of exactness. If it ever
+  matters, the fix is a time-referenced release, not a byte threshold (see above).
 
 ---
 

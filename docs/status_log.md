@@ -22,6 +22,38 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ⏳ **A TITLE CELL COMMAND WITH BUTTONS UP RUNS AT THE DISPLAYED CELL END (issue #176,
+  2026-10-12, branch `fix/cell-cmd-display`; sim-proven, HW pending).**
+  - **Field report:** in Mad Dog McCree a shot never registers. HW sweep 2026-10-11 on the
+    first shootout (VTS 1 PGC 1 cell 2): Select at 36.2 s PTS hit twice; at 36.35, 36.5,
+    36.8 and 37.3 s it missed. The HLI window is 35.55–37.52 s.
+  - **Root cause:** the shot is scored by a CELL COMMAND,
+    `if (g[0] != 21) LinkPTT 5`, which reads the register the button sets. The reader ran
+    it on reading the cell's last sector, a VBUF (~1.1 MB, ~1.2 s) before the display
+    reached it. The authored-duration hold could not help: its clock starts at the
+    reader's cell load and over-counts by the same buffer depth.
+  - **Fix:** with buttons up (`cc_btns` = nav_pci `btns_armed | btns_pend`), a title cell
+    command waits for the PGC-end drain (`tail_wait`: cache empty, `vbuf_empty`,
+    `DRAIN_WD`). Commands whose verdict cannot depend on a press (`fx_mem`: unconditional
+    Nop / fixed-target links and jumps) are not held.
+  - **Why the filter.** The library sweep (`tools/cell_cmd_btn_scan.py`, 1,556 images)
+    found the defect class on every American Laser Games / Digital Leisure title: 3,849
+    conditional cells on 13 discs. It also found that a blanket hold would have paused
+    1,932 gapless in-title loops on 39 discs, plus 140 `Nop` cells inside the target games
+    (Space Pirates, Crime Patrol, Mad Dog II).
+  - **Rejected:** a release at ~1 VBV (192 KB). Bytes are not display time, and that
+    release fails most on the low-bitrate aiming shots the fix is for.
+  - **Cost, accepted:** a held command whose verdict continues (Mad Dog's hit) restarts the
+    decoder from an empty buffer, a short freeze at the junction. Held commands that jump
+    already waited for the full drain.
+  - **Gates:** `bench/dvd/run_cmd_hold.sh --red` (10 arms, 11 mutations);
+    `tools/check_cmd_hold_wiring.py --red`; `run_reader_regress.sh` vs `main`, identical
+    with the hold tied off.
+  - **Next:** HIL. Run the control arm (the issue's sweep on `main`) first, then the same
+    sweep on this build: 36.35–37.3 s should hit. Also check a loop disc (Fairytopia) for
+    no new pause, and Mad Dog II / Crime Patrol by hand. Design note: `docs/dvd_nav.md` "A
+    cell command with buttons up".
+
 - ✅ **LINE-21 CAPTIONS: THE FIELD IS THE ENTRY'S POSITION, NOT ITS MARKER (issue #166,
   2026-10-10, ✅ MERGED PR #175; sim-proven, ✅ HW-CONFIRMED by eye on a TV).**
   - **Field report:** CC1 garbled on I, Robot. The disc is fine: `cc_scan.py --text` decodes

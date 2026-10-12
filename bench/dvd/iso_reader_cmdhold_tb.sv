@@ -19,7 +19,7 @@
 //     cell 0 (0xB4) cmd 1 = g[1] = 1
 //     cell 1 (0xB5) cmd 2 = Nop
 //     cell 2 (0xB6) cmd 3 = LinkTopC                   <- an in-title loop
-//   Title 3 (PGC@1100): POST Nop
+//   Title 3 (PGC@1400): POST Nop
 //     cell 0 (0xB7) cmd_nr 5 (past nr_cell: invalid)
 //     cell 1 (0xB8) cmd 1 = LinkTailPGC
 // Every cell is two sectors with last_vobu_start = first_sector and 1 s of playback:
@@ -38,6 +38,10 @@
 //      with vbuf_empty high.
 //   D  a jump during the hold (button JumpTT 2) clears it: no stale latch.
 //   E  a decoder that never drains: DRAIN_WD releases the hold (never a deadlock).
+//   P1 a FIXED command (Nop) runs at once with buttons up and the VBUF full.
+//   P2 a fixed loop (LinkTopC) replays with no hold: in-title loops stay gapless.
+//   P3 LinkTailPGC is held: it lands in POST, which reads registers.
+//   P4 a cmd_nr past the PGC's cell commands is not held (no stale fx_mem bit).
 //
 // Run: bench/dvd/run_cmd_hold.sh [--red]
 
@@ -190,10 +194,13 @@ module iso_reader_cmdhold_tb;
         end
     end
 
-    integer n_cc = 0, n_pe = 0;
+    integer n_cc = 0, n_pe = 0, n_rep = 0;
+    reg pend_seen = 0;                      // the hold latched since the arm cleared it
     always @(posedge clk) begin
         if (vm_cell_cmd_w) n_cc = n_cc + 1;
         if (vm_pgc_end_w)  n_pe = n_pe + 1;
+        if (vm_replay_w)   n_rep = n_rep + 1;
+        if (dut.vmw_cmd_pend) pend_seen = 1;
     end
 
     // ---- mock HPS: one 2048-byte block per sd_rd ----
@@ -385,11 +392,11 @@ module iso_reader_cmdhold_tb;
             be32(22*2048+204, 32'd1);
             be32(22*2048+208, 32'd2);
 
-            // VTS_PGCIT @23: titles 1/2/3 -> PGC@16 / @700 / @1100
+            // VTS_PGCIT @23: titles 1/2/3 -> PGC@16 / @700 / @1400
             be16(23*2048+0, 16'd3);
             img[23*2048+8]  = 8'h81; be32(23*2048+8+4,  32'd16);
             img[23*2048+16] = 8'h82; be32(23*2048+16+4, 32'd700);
-            img[23*2048+24] = 8'h83; be32(23*2048+24+4, 32'd1100);
+            img[23*2048+24] = 8'h83; be32(23*2048+24+4, 32'd1400);
 
             // title 1: PRE g[0]=0; POST Nop; cell cmds {score, g[2]=1}
             put_pgc(23*2048+16, 8'd3, 8'd3, 16'd400, 16'd240, 16'd256);
@@ -412,12 +419,12 @@ module iso_reader_cmdhold_tb;
             put_cmdtbl(23*2048+700, 16'd400, 0, 1, 3, C_NOP, C_G1_1, C_NOP, C_TOPC);
 
             // title 3: POST Nop; one cell cmd {LinkTailPGC}; cell 0 names cmd 5
-            put_pgc(23*2048+1100, 8'd2, 8'd2, 16'd400, 16'd236, 16'd256);
-            img[23*2048+1100+236] = 8'd1;
-            img[23*2048+1100+237] = 8'd2;
-            put_cell(23*2048+1100, 16'd256, 0, 8'd5, 32'd12); // B7: invalid cmd_nr
-            put_cell(23*2048+1100, 16'd256, 1, 8'd1, 32'd14); // B8: LinkTailPGC
-            put_cmdtbl(23*2048+1100, 16'd400, 0, 1, 1, C_NOP, C_TAILPGC, C_NOP, C_NOP);
+            put_pgc(23*2048+1400, 8'd2, 8'd2, 16'd400, 16'd236, 16'd256);
+            img[23*2048+1400+236] = 8'd1;
+            img[23*2048+1400+237] = 8'd2;
+            put_cell(23*2048+1400, 16'd256, 0, 8'd5, 32'd12); // B7: invalid cmd_nr
+            put_cell(23*2048+1400, 16'd256, 1, 8'd1, 32'd14); // B8: LinkTailPGC
+            put_cmdtbl(23*2048+1400, 16'd400, 0, 1, 1, C_NOP, C_TAILPGC, C_NOP, C_NOP);
 
             for (j = 0; j < 2048; j = j + 1) begin
                 img[25*2048+j] = 8'hD0;
@@ -481,11 +488,12 @@ module iso_reader_cmdhold_tb;
         end
     endfunction
 
-    integer s0, c0, e0, p0;
-    integer a1_ok, a2_ok, b_ok, c_ok, d_ok, e_ok;
+    integer s0, c0, e0, p0, r0;
+    integer a1_ok, a2_ok, b_ok, c_ok, d_ok, e_ok, p1_ok, p2_ok, p3_ok, p4_ok;
 
     initial begin
         a1_ok = 1; a2_ok = 1; b_ok = 1; c_ok = 1; d_ok = 1; e_ok = 1;
+        p1_ok = 1; p2_ok = 1; p3_ok = 1; p4_ok = 1;
         build_iso;
         file_size = IMG_BYTES;
 
@@ -554,11 +562,26 @@ module iso_reader_cmdhold_tb;
         if (dut.vmw_cmd_pend !== 1'b1) begin fail("C: no hold at the B4 cell end"); c_ok = 0; end
         repeat (30000) @(posedge clk);
         if (n_cc != c0) begin fail("C: the command ran with the reader's cache still full"); c_ok = 0; end
-        cc_btns = 0; busy = 0;
+        busy = 0;
         t = 0; while (n_cc == c0 && t < 100000) begin @(posedge clk); t = t + 1; end
         if (n_cc != c0 + 1) begin fail("C: the command did not run once the cache drained"); c_ok = 0; end
-        // title 2 now plays on into its LinkTopC loop (cell 2 replays until D jumps)
         $display("C %s: the hold also waits for the reader's cache", c_ok ? "PASS" : "FAIL");
+
+        // ---------- P1: a FIXED command (Nop) is not held, buttons up or not ----------
+        vbuf_empty = 0;                     // the VBUF "full" from here on
+        @(posedge clk); pend_seen = 0;
+        t = 0; while (n_cc < c0 + 2 && t < 100000) begin @(posedge clk); t = t + 1; end
+        if (n_cc < c0 + 2) begin fail("P1: the Nop cell command never ran with the VBUF full"); p1_ok = 0; end
+        if (pend_seen)     begin fail("P1: a Nop cell command was held"); p1_ok = 0; end
+        $display("P1 %s: a fixed command (Nop) runs at once with buttons up", p1_ok ? "PASS" : "FAIL");
+
+        // ---------- P2: a fixed loop (LinkTopC) replays gaplessly, buttons up ----------
+        r0 = n_rep;
+        @(posedge clk); pend_seen = 0;
+        t = 0; while (n_rep < r0 + 2 && t < 150000) begin @(posedge clk); t = t + 1; end
+        if (n_rep < r0 + 2) begin fail("P2: the LinkTopC loop did not replay with the VBUF full"); p2_ok = 0; end
+        if (pend_seen)      begin fail("P2: a LinkTopC loop was held"); p2_ok = 0; end
+        $display("P2 %s: a fixed loop (LinkTopC) replays without a hold", p2_ok ? "PASS" : "FAIL");
 
         // ---------- D: a jump during the hold clears it ----------
         repeat (20000) @(posedge clk);
@@ -578,6 +601,27 @@ module iso_reader_cmdhold_tb;
         repeat (2000) @(posedge clk);
         if (dut.vmw_cmd_pend !== 1'b0) begin fail("D: a stale hold survived to title 3's end"); d_ok = 0; end
         $display("D %s: a jump during the hold clears it", d_ok ? "PASS" : "FAIL");
+
+        // ---------- P4 / P3: title 3, buttons up, VBUF full ----------
+        repeat (2000) @(posedge clk);
+        cc_btns = 1; vbuf_empty = 0;
+        c0 = n_cc; p0 = n_pe;
+        @(posedge clk); pend_seen = 0;
+        press(C_JUMPTT3);
+        // P4: cell 0 names cmd 5 of 1 (invalid): never held, the VM advances
+        t = 0; while (n_cc == c0 && t < 100000) begin @(posedge clk); t = t + 1; end
+        if (n_cc != c0 + 1) begin fail("P4: the invalid cell command never dispatched"); p4_ok = 0; end
+        if (pend_seen)      begin fail("P4: an invalid cmd_nr was held"); p4_ok = 0; end
+        $display("P4 %s: a cmd_nr past this PGC's cell commands is not held", p4_ok ? "PASS" : "FAIL");
+        // P3: cell 1 LinkTailPGC reaches POST, which reads registers: held
+        wait_hold(400000);
+        if (dut.vmw_cmd_pend !== 1'b1) begin fail("P3: LinkTailPGC was not held"); p3_ok = 0; end
+        repeat (20000) @(posedge clk);
+        if (n_cc != c0 + 1) begin fail("P3: LinkTailPGC ran with the VBUF full"); p3_ok = 0; end
+        vbuf_empty = 1;
+        t = 0; while (n_cc == c0 + 1 && t < 100000) begin @(posedge clk); t = t + 1; end
+        if (n_cc != c0 + 2) begin fail("P3: LinkTailPGC did not run once the VBUF drained"); p3_ok = 0; end
+        $display("P3 %s: LinkTailPGC (POST reads registers) is held", p3_ok ? "PASS" : "FAIL");
 
         // ---------- E: a VBUF that never drains -> DRAIN_WD releases ----------
         repeat (2000) @(posedge clk);
