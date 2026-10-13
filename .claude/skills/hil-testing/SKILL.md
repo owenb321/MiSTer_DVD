@@ -120,6 +120,11 @@ frames. Sequence the key press and the burst on the target (one ssh session), re
 missing frame as missing, and pair a burst with a settled shot. For a defect that is a
 FLASH the instrument is the burst; for one that HOLDS the settled shot is enough.
 
+**★ `restore` does not stop a harness Main that is already running.** A core load keeps
+the running Main; only a reboot replaces it. `restore` now warns when one is still
+running. On a SHARED rig, reboot it (check `mister.py state` says MENU first) so the next
+user is back on stock Main.
+
 **★ For a press timed to the picture, use `key <code> 30` taps, never `keys`.** The key
 daemon's `keys` command holds each key 50 ms, then sleeps 120 ms, and anything written
 to the FIFO meanwhile QUEUES behind it. Three `keys` Rights pushed a Select written at a
