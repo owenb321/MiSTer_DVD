@@ -31,7 +31,9 @@ cell end 37.551 s; Play -> Deputy; the 64 s intro skips with Select):
         --prep "/0:01:04 CH  1/ 2=select" "/0:00:00 CH  1/ 2=select" "CH 17/ 2="
 
 --prep steps are "REGEX=KEY": wait until the decoded HUD status line (Debug Overlay on,
-so CH = {PGCN, VTS}) matches REGEX, then press KEY (empty = press nothing). The last
+so CH = {PGCN, VTS}) matches REGEX, then press KEY (empty = press nothing). "@SECONDS=KEY"
+waits a fixed time instead, for a rig whose output mode the HUD decoder is not calibrated
+for (it reads 720-wide rasters; a 640x480 rig decodes nothing). The last
 step should land on the menu whose Select starts play; the trial presses that Select.
 """
 import argparse
@@ -148,6 +150,12 @@ def prep(args, keys):
                     '--opt', 'Debug Overlay=On'], capture_output=True, text=True)
     for step in args.prep:
         rx, _, key = step.rpartition('=')
+        if rx.startswith('@'):           # a timed step: for a rig whose HUD cannot be decoded
+            time.sleep(float(rx[1:]))
+            if key:
+                subprocess.run([sys.executable, os.path.join(HERE, 'mister.py'), 'key', key],
+                               capture_output=True)
+            continue
         end = time.time() + args.step_timeout
         h = ''
         while time.time() < end:
