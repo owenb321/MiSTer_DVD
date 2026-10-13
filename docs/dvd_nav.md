@@ -5389,6 +5389,9 @@ when both hold:
 ~1.2 s ahead, so that would be more lead than libdvdnav gives. Worse, it would arm each
 window of a multi-window cell while the previous one is still on screen.
 
+Across the library, `cell_cmd_btn_scan.py` counts **3,971 scoring cells on 18 images**
+(the FMV games, a few kids' DVD games, and three bonus-feature cells on films).
+
 **The guard.** The shooting games author ONE scoring window per cell: 3,923 cells on 12
 images. Bambi disc 2 (15 cells × 11 windows) and the two Harry Potter games (33 cells ×
 7–15 windows, some 2 s apart) author SEQUENCES, where a 1 s lead would hand the last
