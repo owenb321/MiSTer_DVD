@@ -1923,6 +1923,7 @@ wire rt_edge    = joy_eff[0] & ~joy_prev[0];
 // nav_pci interface (Phase 3)
 wire        hl_btns_armed;
 wire        hl_btns_pend;           // an HLI with buttons parsed, not yet promoted
+wire        cc_scoring_w;           // reader: the cell being read has a press-reading cell command (issue #176)
 // STC display-coherence latch for nav_pci's scheduled promotion path: 1 when the
 // most recent load/seek/jump FLUSHED the decoder (keep_vbuf=0 — STC anchor and
 // display reset together). A keep_vbuf menu->menu hop clears it (the re-anchored
@@ -3744,6 +3745,7 @@ dvd_iso_reader dvd_iso_reader_inst (
     // reaches a cell's end ~a VBUF ahead of the display, where a window opening in
     // the cell's last second is still parsed-but-not-promoted.
     .cc_btns        (hl_btns_armed | hl_btns_pend),
+    .cc_scoring     (cc_scoring_w),       // issue #176: nav_pci arms a scoring window early
 
     .vm_mode        (menus_on),           // Phase 4: the VM drives navigation
     .vm_adv         (vm_adv_w),
@@ -6388,6 +6390,7 @@ nav_pci nav_pci_inst (
     // fact about the clock, not a thing to throttle, and a suppressed second
     // re-anchor would leave nav_pci trusting a timeline the clock had already left.
     .stc_reanchor (rephase_req),           // THE STC IS A CLOCK: it just moved to another timeline
+    .early_ok     (cc_scoring_w),          // issue #176: a scoring window arms EARLY_LEAD ahead
                                          // (keep_vbuf hop => scheduled path blocked
                                          //  until a still park proves catch-up)
     .sel_force  (vm_btn_force),          // Phase 4: SetHL_BTNN / link buttons

@@ -325,6 +325,12 @@ module dvd_iso_reader #(
     // waits until the display has caught up with the cell's end before it runs,
     // so a button pressed in the cell's last second still counts. See vmw_cmd_pend.
     input             cc_btns,
+    // SCORING CELL (issue #176): the cell being read is a title cell whose cell
+    // command can see a press (valid and not FIXED, fx_mem). nav_pci arms a
+    // set-only highlight committed while this is high a fixed lead before its start
+    // time. ⚠ It describes the cell the READER is on, which can lead the cell being
+    // PARSED by one cache (16 KB) at a cell boundary.
+    output            cc_scoring,
 
     // ---------------------------------------------------------------------
     // Phase-4 DVD-VM coupling. vm_mode (= O[1] Disc Menus) hands navigation
@@ -1469,6 +1475,8 @@ wire       tail_wait = (vmw_pgc_pend || vmw_cmd_pend) && ~menu_dom && ~vbuf_empt
 // before this change (Phase B below), so it looks the same as before.
 // Not held: menus (keep_vbuf, the menu cap), and interleaved blocks (angle,
 // seamless branch), where a drain would break the seamless join.
+assign     cc_scoring = vm_mode && !menu_dom && (cm_rd[7:0] != 8'd0) &&
+                        (cm_rd[7:0] <= cmd_nr_cell) && !fx_rd;
 wire       cmd_hold_w = vm_mode && !menu_dom && cc_btns &&
                         !angle_active && !seamless_active &&
                         !fx_rd && (cm_rd[7:0] <= cmd_nr_cell);

@@ -18,7 +18,10 @@ One line per hit:
   nav_btns      NAV packs with buttons / NAV packs walked in the last LOOKBACK seconds
   e_ptm_to_end  seconds from the last HLI's hli_e_ptm to the cell's last vobu_e_ptm
                 ('forever' for 0xFFFFFFFF)
-  set_only      1 = at least one of the buttons has a command that neither links nor
+  set_only      1 = an HLI in those NAV packs is a SCORING highlight (hli_setonly: every
+                button Set-or-nothing, at least one Set -- dvd/nav_pci.sv's test); with
+                held=1 that cell's window arms early (nav_pci EARLY_LEAD).
+  (old)         was: at least one of the buttons has a command that neither links nor
                 jumps (it only sets a register) -- the shape whose effect a later cell
                 command reads
 
@@ -143,6 +146,27 @@ def cmd_class(cmd, cell):
     return 'link'
 
 
+def btn_kind(c):
+    """'none', 'set' or 'link' for one 8-byte BUTTON command -- the test dvd/nav_pci.sv
+    applies as the HLI streams past (fb_set / fb_link, issue #176)."""
+    t = c[0] >> 5
+    if t == 0:
+        return 'none'
+    if t in (2, 3):
+        return 'set' if (c[1] & 0x0F) == 0 else 'link'
+    if t in (4, 5, 6):
+        return 'set' if c[7] == 0 else 'link'
+    return 'link'
+
+
+def hli_setonly(pci):
+    """A SCORING highlight: every button is Set-or-nothing and at least one sets. Its
+    buttons do nothing by themselves; a later command reads what they set."""
+    ns = pci[0x71] & 0x3F
+    kinds = [btn_kind(pci[0x8E + b * 18 + 10:0x8E + b * 18 + 18]) for b in range(ns)]
+    return ns > 0 and 'link' not in kinds and 'set' in kinds
+
+
 def is_link(cmd):
     s = ne.decode_vmcmd(cmd)
     return any(k in s for k in ('Link', 'Jump', 'Call', 'Exit', 'Break', 'Goto'))
@@ -166,10 +190,8 @@ def scan_cell(f, vobs, cell, lookback):
             btn_ns = max(btn_ns, ns)
             if last_hli is None:
                 last_hli = be32(pci, 0x66)
-            for b in range(ns):
-                c = pci[0x8E + b * 18 + 10:0x8E + b * 18 + 18]
-                if any(c) and not is_link(c):
-                    set_only = True
+            if hli_setonly(pci):
+                set_only = True
         if end_ptm - be32(pci, 0x0C) >= lookback * 90000:
             break
         back = be32(s, PREV_VOBU)
@@ -240,7 +262,7 @@ def scan(iso, lookback, verbose, held_only=False):
                                nb, walked, ns, to_end, so, not fx,
                                ne.decode_vmcmd(cmds[nr - 1])))
                     print(line, flush=True)
-                    hits.append((so, cmd_class(cmds[nr - 1], i + 1)))
+                    hits.append((so, cmd_class(cmds[nr - 1], i + 1), not fx))
     return hits
 
 
@@ -268,6 +290,7 @@ def main():
     a = ap.parse_args()
     ndisc = nhit = ncell = nset = 0
     ccells, cdiscs = {}, {}
+    nscore = nscored = 0
     rc = 0
     if a.selfcheck:
         nbad = 0
@@ -294,14 +317,20 @@ def main():
         if h:
             nhit += 1
             ncell += len(h)
-            nset += sum(so for so, _ in h)
-            for _, k in h:
+            nset += sum(so for so, _, _ in h)
+            for _, k, _ in h:
                 ccells[k] = ccells.get(k, 0) + 1
-            for k in set(k for _, k in h):
+            for k in set(k for _, k, _ in h):
                 cdiscs[k] = cdiscs.get(k, 0) + 1
+            sc = sum(1 for so, _, held in h if so and held)
+            if sc:
+                nscore += sc
+                nscored += 1
     for k, label in CLASSES:
         print('# %-6s %6d cells %4d images  %s' % (k, ccells.get(k, 0), cdiscs.get(k, 0), label))
-    print('# %d images, %d with hits, %d cells (%d with a set-only button)'
+    print('# scoring (held command + scoring highlight, arms early): %d cells on %d images'
+          % (nscore, nscored))
+    print('# %d images, %d with hits, %d cells (%d with a scoring highlight)'
           % (ndisc, nhit, ncell, nset))
     return rc
 

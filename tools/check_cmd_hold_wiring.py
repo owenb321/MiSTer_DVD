@@ -12,7 +12,9 @@ the file. It fails if:
     hold off on every disc, or on every cell);
   * nav_pci .btns_armed / .btns_pend are not plain declared nets;
   * dvd_iso_reader .vbuf_empty is not the `vbuf_empty` register assigned from the VBUF
-    low-water compare (`vbuf_fill_s1 <= 8'h01`).
+    low-water compare (`vbuf_fill_s1 <= 8'h01`);
+  * nav_pci .early_ok is not the plain declared net on dvd_iso_reader .cc_scoring (the
+    scoring-window lead would be off on every disc, or on for every set-only HLI).
 
     python3 tools/check_cmd_hold_wiring.py [emu.sv]   # exit 0 = wired right
     python3 tools/check_cmd_hold_wiring.py --red      # each mutation must FAIL
@@ -65,6 +67,17 @@ def check(emu_raw):
         bad.append("dvd_iso_reader .vbuf_empty is '%s', want vbuf_empty" % ve)
     if not re.search(r"\bvbuf_empty\s*<=\s*\(\s*vbuf_fill_s1\s*<=\s*8'h01\s*\)\s*;", src):
         bad.append("vbuf_empty is not assigned from (vbuf_fill_s1 <= 8'h01)")
+
+    cs = port_expr(rd, 'cc_scoring')
+    eo = port_expr(np, 'early_ok')
+    cs = cs.strip() if cs else cs
+    eo = eo.strip() if eo else eo
+    if not cs or not IDENT.match(cs):
+        bad.append("dvd_iso_reader .cc_scoring is '%s' -- must be a plain net" % cs)
+    elif not re.search(r'\bwire\b[^;]*\b' + re.escape(cs) + r'\b', src):
+        bad.append("net '%s' (.cc_scoring) is not declared as a wire" % cs)
+    if eo != cs:
+        bad.append("nav_pci .early_ok is '%s', want the reader's .cc_scoring net '%s'" % (eo, cs))
     return bad
 
 
@@ -77,6 +90,10 @@ MUTATIONS = [
     ('port dropped', r'\.cc_btns\s*\(hl_btns_armed \| hl_btns_pend\),', ''),
     ('pend open', r'\.btns_pend\s*\(hl_btns_pend\)', '.btns_pend  ()'),
     ('vbuf tied', r'\.vbuf_empty\s*\(vbuf_empty\)', ".vbuf_empty     (1'b1)"),
+    ('early tied', r'\.early_ok\s*\(cc_scoring_w\)', ".early_ok     (1'b1)"),
+    ('early open', r'\.early_ok\s*\(cc_scoring_w\)', '.early_ok     ()'),
+    ('early on btns', r'\.early_ok\s*\(cc_scoring_w\)', '.early_ok     (hl_btns_armed)'),
+    ('scoring open', r'\.cc_scoring\s*\(cc_scoring_w\)', '.cc_scoring     ()'),
     ('vbuf threshold', r"vbuf_empty <= \(vbuf_fill_s1 <= 8'h01\);", "vbuf_empty <= (vbuf_fill_s1 <= 8'h40);"),
 ]
 
@@ -111,7 +128,7 @@ def main():
         print('\n'.join('FAIL: ' + b for b in bad))
         return 1
     print('OK: reader .cc_btns = nav_pci btns_armed | btns_pend; .vbuf_empty = the '
-          'low-water mark')
+          'low-water mark; nav_pci .early_ok = reader .cc_scoring')
     return 0
 
 
