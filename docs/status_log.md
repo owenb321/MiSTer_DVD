@@ -56,8 +56,8 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
   - **Gates:** `bench/dvd/run_cmd_hold.sh --red` (10 arms, 11 mutations);
     `tools/check_cmd_hold_wiring.py --red`; `run_reader_regress.sh` vs `main`, identical
     with the hold tied off.
-  - **Second half: a scoring window arms 1 s early (2026-10-13; sim-proven, HW pending,
-    `dev-cellcmdhold2`).** With the end fixed, a gameplay video of the same DVD still shot
+  - **Second half: a scoring window arms 1 s early (2026-10-13; ✅ HW-CONFIRMED,
+    `dev-cellcmdhold2`: Rights from 34.6 s hit, from 34.3 s miss, 37.3 s still hits).** With the end fixed, a gameplay video of the same DVD still shot
     ~1 s earlier than this core allowed. The cause: libdvdnav answers buttons from the
     moment it READS their NAV pack (`highlight.c` `get_current_button` tests `hli_ss`
     only), while this core armed on the display clock at `hli_s_ptm` (HW: Rights from
@@ -67,9 +67,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     window on the same timeline as an armed one gets no lead, because Bambi D2 and the
     Harry Potter games author 7–15 windows per cell. Gates: `nav_pci_early_tb`
     a–f + N1–N6 in `run_cmd_hold.sh --red`; `run_hli_window.sh --red` unchanged.
-  - **Next:** HW-check the lead with `tools/hil_shot_sweep.py` (Rights from ~34.6 s,
-    Select ~34.9 s should hit; Rights from ~34.3 s should miss; 37.3 s still hits). Then
-    open the PR. Not yet run on HW: a loop disc such as Fairytopia, which is unchanged by
+  - **Next:** the maintainer's play-test, then the PR. Not yet run on HW: a loop disc such as Fairytopia, which is unchanged by
     construction because a fixed command is never held (bench P2), and Mad Dog II /
     Crime Patrol by hand. Design notes: `docs/dvd_nav.md` "A cell command with buttons
     up" and "A scoring window arms 1 s before its start time".

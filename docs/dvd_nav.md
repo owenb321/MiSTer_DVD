@@ -5353,7 +5353,7 @@ anything written behind it. Three `keys` Rights pushed a Select written at 36.2 
 - The pause on a continuing verdict (Mad Dog's hit) is the price of exactness. If it ever
   matters, the fix is a time-referenced release, not a byte threshold (see above).
 
-### A scoring window arms 1 s before its start time (issue #176, 2026-10-13) — sim-proven, ⏳ HW
+### A scoring window arms 1 s before its start time (issue #176, 2026-10-13) — ✅ HW-CONFIRMED (`dev-cellcmdhold2`)
 
 **The report.** With the end of the window fixed, the maintainer still found the shootouts
 far tighter than a gameplay video of the same DVD, where the player shoots about a second
@@ -5422,8 +5422,18 @@ Six mutations, N1–N6, each fail exactly their own arm. `run_hli_window.sh --re
 lead tied off. `check_cmd_hold_wiring.py --red` gates `nav_pci .early_ok` = reader
 `.cc_scoring`.
 
-**Expected on HW** (Mad Dog, first shootout): Rights from ~34.6 s and Select at ~34.9 s
-hit, where today they miss. The end of the window is unchanged, at ~37.35 s.
+**HW (2026-10-13, second rig, `tools/hil_shot_sweep.py`, timed prep):**
+
+| Rights from | Select at | `dev-cellcmdhold` (no lead) | `dev-cellcmdhold2` |
+|---|---|---|---|
+| 34.30 s | 34.60 s | — | miss (the first Right is before 34.55 s) |
+| 34.60 s | 34.90 s | miss (window opens at 35.55 s) | **hit** |
+| 35.45 s | 35.75 s | miss | — |
+| 35.56 s | 35.85 s | hit | — |
+| 35.75 s | 37.30 s | hit | **hit** (the end is unchanged) |
+
+Mad Dog's first scoring window now runs ~34.55–37.35 s (about 2.8 s) against the
+authored 35.55–37.52 s. It was ~0.75 s on v0.9.1.
 
 ---
 
