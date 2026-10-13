@@ -202,6 +202,46 @@ def scan_cell(f, vobs, cell, lookback):
     return walked, hits, btn_ns, last_hli, end_ptm, set_only
 
 
+def scoring_windows(iso):
+    """For every held title cell, the distinct scoring windows it authors (hli_ss=1
+    commits of a scoring highlight, by hli_s_ptm), walking ALL its NAV packs. Returns
+    a Counter {windows per cell: cells}. One per cell is the shooting-game shape that
+    gets the full lead; more is a sequence, where nav_pci's guard keeps the later
+    windows on their own start time."""
+    import collections
+    hist = collections.Counter()
+    with open(iso, 'rb') as f:
+        for v in range(1, 100):
+            try:
+                ifo = ne.find_vts_ifo(f, v)
+            except SystemExit:
+                break
+            vobs, pgcs = title_pgcs(f, ifo)
+            for pgcn, pa in pgcs:
+                cells, cmds = pgc_cells_and_cmds(f, pa)
+                for c in cells:
+                    nr = c[3]
+                    if not nr or c[2] or nr > len(cmds) or cmd_fixed(cmds[nr - 1]):
+                        continue
+                    rbn, last, n, wins = be32(c, 8), be32(c, 20), 0, set()
+                    while rbn <= last and n < 400:
+                        f.seek((vobs + rbn) * 2048)
+                        s = f.read(2048)
+                        if not ne.is_nav_pack(s):
+                            break
+                        pci = s[0x2D:]
+                        if (be16(pci, 0x60) & 3) == 1 and hli_setonly(pci):
+                            wins.add(be32(pci, 0x62))
+                        ok, off = ne.sri_offset(be32(s, 0x541))
+                        if not ok or off == 0:
+                            break
+                        rbn += off
+                        n += 1
+                    if wins:
+                        hist[len(wins)] += 1
+    return hist
+
+
 def selfcheck(iso):
     """Cross-check cmd_fixed() against the decoder's own text over EVERY title cell
     command on a disc: a fixed command must decode with no condition, no Set and no
@@ -283,6 +323,8 @@ def main():
     ap.add_argument('-v', action='store_true')
     ap.add_argument('--held', action='store_true',
                     help='list only the cells the reader holds (cmd_fixed is False)')
+    ap.add_argument('--windows', action='store_true',
+                    help='per image: scoring windows per held cell (1 = full lead)')
     ap.add_argument('--selfcheck', action='store_true',
                     help='cross-check cmd_fixed() against the decoded text on every '
                          'title cell command; exit 1 on any disagreement')
@@ -292,6 +334,21 @@ def main():
     ccells, cdiscs = {}, {}
     nscore = nscored = 0
     rc = 0
+    if a.windows:
+        import collections
+        tot = collections.Counter()
+        for iso in isos(a.paths):
+            try:
+                h = scoring_windows(iso)
+            except Exception as e:       # a damaged image must not stop a sweep
+                print('%s ERR %s' % (os.path.basename(iso), e), file=sys.stderr)
+                continue
+            if h:
+                print('%-50s windows/cell %s' % (os.path.basename(iso), dict(sorted(h.items()))),
+                      flush=True)
+                tot.update(h)
+        print('# total windows/cell %s' % dict(sorted(tot.items())))
+        return 0
     if a.selfcheck:
         nbad = 0
         for iso in isos(a.paths):

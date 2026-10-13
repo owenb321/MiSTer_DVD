@@ -117,8 +117,8 @@ set-top player would not.
 logic, and individual minigames can misbehave. Film and TV discs are the supported path.
 
 Shooting and reflex games (*Mad Dog McCree*, *Crime Patrol*, *Space Pirates*, *Who Shot
-Johnny Rock?* and similar) count a press made up to the end of each window, as a set-top
-player does.
+Johnny Rock?* and similar) count a press made up to the end of each window. The aiming buttons go live about a
+second before their authored start, as they do on software DVD players.
 
 **Some discs offer no subtitles in an alternate viewing mode.** A few titles build a second
 version of the film as its own program chain — The Matrix's "Follow the White Rabbit" is the

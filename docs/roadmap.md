@@ -627,8 +627,10 @@ in `CONF_STR`. Design: `docs/cdda.md` "`.cue` sheets". ⛔ CHD still not support
 
 Sim-proven (`bench/dvd/run_cmd_hold.sh --red`) and ✅ HW-confirmed A/B vs v0.9.1 (Mad Dog's
 first shootout: 36.6–37.3 s now hit, `main` misses them; no pause at the junction).
-Next step: the PR. Still unchecked on HW: a loop disc (Fairytopia), unchanged by
-construction, and Mad Dog II / Crime Patrol by hand. Design and the library sweep
+Second half (2026-10-13, sim-proven, ⏳ HW): a scoring window arms 1 s before its
+`hli_s_ptm`, as libdvdnav players do. Next step: HW-check that with
+`tools/hil_shot_sweep.py`, then the PR. Still unchecked on HW: a loop disc
+(Fairytopia), unchanged by construction, and Mad Dog II / Crime Patrol by hand. Design and the library sweep
 behind it: `docs/dvd_nav.md` "A cell command with buttons up". Open follow-up, only if
 the pause on a continuing verdict matters on HW: a time-referenced release (STC against
 the cell's last `vobu_e_ptm`).

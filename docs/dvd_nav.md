@@ -5353,6 +5353,75 @@ anything written behind it. Three `keys` Rights pushed a Select written at 36.2 
 - The pause on a continuing verdict (Mad Dog's hit) is the price of exactness. If it ever
   matters, the fix is a time-referenced release, not a byte threshold (see above).
 
+### A scoring window arms 1 s before its start time (issue #176, 2026-10-13) — sim-proven, ⏳ HW
+
+**The report.** With the end of the window fixed, the maintainer still found the shootouts
+far tighter than a gameplay video of the same DVD, where the player shoots about a second
+earlier and still hits. On this core a shot can only land from 35.55 s, the HLI's
+`hli_s_ptm` (HW-measured: Rights from 35.45 s miss, from 35.56 s hit). So the gap is at the
+*start* of the window: the end was already as late as the disc allows.
+
+**Why a libdvdnav player opens earlier.** `libdvdnav/src/highlight.c`
+`get_current_button()` gates button navigation and activation on `hli_ss != 0` alone,
+against the PCI of the last NAV pack the player READ. `hli_s_ptm` is only copied into the
+highlight's `pts`, which is when the player DRAWS it. So the buttons answer from the
+moment the reader passes the NAV pack carrying them. On Mad Dog that pack begins the
+VOBU at 35.15 s, 0.4 s before `hli_s_ptm`, and a player reads it a buffer ahead of the
+picture. That is about 1 s of lead, which is what the video shows. libdvdnav also runs the
+cell command at the read end, so its window is about as long as this core's now is, only
+shifted earlier.
+
+**The rule.** A SCORING window arms `EARLY_LEAD` (`nav_pci` parameter, 90,000 ticks =
+1.0 s, a player model and not an OSD option) before its `hli_s_ptm`. A window is scoring
+when both hold:
+
+- the reader's current title cell has a command that can see a press. That is the new
+  reader output `cc_scoring`: the command is valid and not FIXED (`fx_mem`). It describes
+  the cell the READER is on, which can lead the cell being parsed by one cache (16 KB) at
+  a boundary.
+- every button in the HLI is Set-or-nothing, with at least one Set. `nav_pci` scans the
+  button commands as the PCI streams past (`fb_set`/`fb_link`; `cell_cmd_btn_scan.py`
+  `btn_kind`/`hli_setonly` is the same test). Buttons like these do nothing by
+  themselves; a later command reads what they set. Highlights whose buttons link (menus,
+  the white rabbit, commentary toggles, every film's in-title buttons) are untouched.
+
+**Rejected: arming at parse time** (libdvdnav's literal behaviour). This core reads
+~1.2 s ahead, so that would be more lead than libdvdnav gives. Worse, it would arm each
+window of a multi-window cell while the previous one is still on screen.
+
+**The guard.** The shooting games author ONE scoring window per cell: 3,923 cells on 12
+images. Bambi disc 2 (15 cells × 11 windows) and the two Harry Potter games (33 cells ×
+7–15 windows, some 2 s apart) author SEQUENCES, where a 1 s lead would hand the last
+second of each window to the next (the `hli_window_tb` [D] failure). So a commit whose
+`s_ptm` is LATER, on the same timeline, than an armed scoring window (`h_so`), or that is
+queued behind a parked one (`nx2`), gets no lead and waits for its own start. The
+compare is signed: the next shootout cell restarts the PTS timeline, so its window reads
+EARLIER and still leads. The counts come from `tools/cell_cmd_btn_scan.py --windows`.
+
+**Timing gates kept.** `nxt_pre` (a commit before its window) is still computed against
+the UNSHIFTED `s_ptm`. A commit that lands inside the lead promotes at once, which is the
+libdvdnav behaviour being modelled. A commit after `s_ptm` still takes only the fallback,
+so `stc_trusted` and the crossing-only rule cover the stale-timeline cases exactly as
+before.
+
+**Gates.** `bench/dvd/run_cmd_hold.sh --red` now includes `nav_pci_early_tb`, scored on
+which command a press at a display time fires:
+
+- (a) a scoring window arms at `s_ptm` − 1 s, and not 50 ms before that;
+- (b) not a scoring cell: arms at `s_ptm`;
+- (c) a linking button: arms at `s_ptm`;
+- (d) an all-Nop highlight: arms at `s_ptm`;
+- (e) a later window of the same cell waits for its own start;
+- (f) the next cell's window gets the lead after PTS restarts.
+
+Six mutations, N1–N6, each fail exactly their own arm. `run_hli_window.sh --red`
+(Scooby-Doo whack-a-mole + `nav_pci_tb`, all mutations) is unchanged and green with the
+lead tied off. `check_cmd_hold_wiring.py --red` gates `nav_pci .early_ok` = reader
+`.cc_scoring`.
+
+**Expected on HW** (Mad Dog, first shootout): Rights from ~34.6 s and Select at ~34.9 s
+hit, where today they miss. The end of the window is unchanged, at ~37.35 s.
+
 ---
 
 ## ⏳ OPEN: two presses to activate a menu button (WAKE_UP_WITH_ELMO, 2026-09-13)
