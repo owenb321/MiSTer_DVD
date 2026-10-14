@@ -120,8 +120,9 @@ frames. Sequence the key press and the burst on the target (one ssh session), re
 missing frame as missing, and pair a burst with a settled shot. For a defect that is a
 FLASH the instrument is the burst; for one that HOLDS the settled shot is enough.
 
-**★ `restore` does not stop a harness Main that is already running.** A core load keeps
-the running Main; only a reboot replaces it. `restore` now warns when one is still
+**★ `restore` does not stop a harness Main that is already running.** Loading the DVD
+core re-execs into `[DVD] main=` (which `restore` re-points), but MENU and every other
+core keep the running Main until a reboot. `restore` now warns when one is still
 running. On a SHARED rig, reboot it (check `mister.py state` says MENU first) so the next
 user is back on stock Main.
 

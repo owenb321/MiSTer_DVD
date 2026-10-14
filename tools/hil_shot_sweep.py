@@ -131,7 +131,9 @@ else:
                 log["rate"] = fit[0]; fired_s = True
         time.sleep(0.004)
 os.remove("/tmp/dvd_telem_fast")
-print("ROWS " + json.dumps([{k: r[k] for k in ("t", "pickups", "drops", "lates")} |
+print("ROWS " + json.dumps([{k: r[k] for k in ("t", "pickups", "drops", "lates", "aud_frames",
+                                                "aud_play", "aud_gate", "reanchors",
+                                                "av_drift_ms") if k in r} |
                             {"live": r["flags"]["video_live"], "menu": r["flags"]["menu"]}
                             for r in rows]))
 print("LOG " + json.dumps(log))
