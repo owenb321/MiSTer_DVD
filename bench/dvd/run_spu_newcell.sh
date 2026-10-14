@@ -8,9 +8,11 @@
 # --red: each mutation must fail EXACTLY its designed arm.
 #   M1  the guard ignores new_cell            -> N1 (the new cell's graphic is skipped)
 #   M2  the guard never re-closes at COMMIT   -> N3 (an older re-send replaces the overlay)
-#   M3  hl_mask ignores an HLI armed first    -> K2 (the right highlight is hidden)
+#   M3  hl_mask ignores an HLI armed first    -> K2 K5 (the right highlight is hidden)
 #   M4  hl_mask never masks                   -> K1 (the intro's HLI lights both wands)
 #   M5  newcell_load back at COMMIT           -> N4 (the blip: pixels before the mask)
+#   M6  hl_mask has no arm grace              -> K5 (issue #176: an arm from the new
+#                                                 cell's own PCI, before its DSI, is lost)
 set -uo pipefail
 cd "$(dirname "$0")/../.."
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
@@ -64,8 +66,9 @@ PY
         got=$(run_hm "$TMP/hl_mask.sv")
         echo "   $id: failing [${got:-none}], expected [$want]"
         [ "$got" = "$want" ] || { echo "  FAIL: $id caught by the wrong arms"; rc=1; }; }
-    redm M3 "s/if (newcell_load \&\& !armed_since \&\& !hli_arm) mask <= 1'b1;/if (newcell_load \&\& !hli_arm) mask <= 1'b1;/" K2
+    redm M3 "s/if (newcell_load \&\& !armed_since \&\& !hli_arm) mask <= 1'b1;/if (newcell_load \&\& !hli_arm) mask <= 1'b1;/" "K2 K5"
     redm M4 "s/            if (newcell_load \&\& !armed_since \&\& !hli_arm) mask <= 1'b1;//" K1
+    redm M6 "s/if (new_cell) armed_since <= (since_arm < ARM_GRACE);/if (new_cell) armed_since <= 1'b0;/" K5
 fi
 [ "$rc" -eq 0 ] && echo "== spu_newcell: OK ==" || echo "== spu_newcell: FAIL =="
 exit $rc

@@ -67,6 +67,12 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     window on the same timeline as an armed one gets no lead, because Bambi D2 and the
     Harry Potter games author 7–15 windows per cell. Gates: `nav_pci_early_tb`
     a–f + N1–N6 in `run_cmd_hold.sh --red`; `run_hli_window.sh --red` unchanged.
+  - **Regression found in play-test, fixed (`dev-cellcmdhold3`):** sheriff's office (VTS 7
+    cell 1), no reticle drawn but shots scored. The lead armed a window at a jump-entered
+    title's first picture at its PCI commit, before the same NAV pack's DSI raised
+    `new_cell`. `hl_mask` then masked the highlight for good. Fix: `hl_mask` `ARM_GRACE`
+    (an arm just before `new_cell` is the new cell's); gate `run_spu_newcell.sh --red`
+    K5/M6. ⏳ HW: the maintainer's check in the sheriff's office.
   - **Next:** the maintainer's play-test, then the PR. Not yet run on HW: a loop disc such as Fairytopia, which is unchanged by
     construction because a fixed command is never held (bench P2), and Mad Dog II /
     Crime Patrol by hand. Design notes: `docs/dvd_nav.md` "A cell command with buttons

@@ -5435,6 +5435,25 @@ lead tied off. `check_cmd_hold_wiring.py --red` gates `nav_pci .early_ok` = read
 Mad Dog's first scoring window now runs ~34.55–37.35 s (about 2.8 s) against the
 authored 35.55–37.52 s. It was ~0.75 s on v0.9.1.
 
+**A regression the lead caused, and its fix (2026-10-13, `dvd/hl_mask.sv`).** In the
+sheriff's office (VTS 7 PGC 1 cell 1) the reticle was never drawn, although the buttons
+armed and a correctly aimed shot still scored (maintainer, with Debug Overlay: blocks
+1–4 green, the magenta outline on the gunman).
+
+The cause: that window starts at the title's FIRST picture (`hli_s_ptm` 0.179 s, never
+timing out), and the title is entered by a jump. After the flush the display clock reads 0
+until its first anchor, so with the 1 s lead the HLI is due the moment its PCI commits.
+A NAV pack carries the PCI ~224 bytes BEFORE the DSI cell IDs that raise `new_cell`, so
+the arm landed just ahead of its own cell change. `new_cell` then cleared `hl_mask`'s
+`armed_since`, the cell's subpicture unit raised the mask, and nothing re-armed to clear
+it: the window never times out, and its continuations (`hli_ss`=2) never re-promote.
+Without the lead the arm waited for the clock's first anchor, which comes after the DSI.
+
+The fix: an arm within `ARM_GRACE` (16,384 clk_sys cycles, ~0.6 ms) of `new_cell`
+counts as the new cell's. A previous cell's HLI promotes on the display schedule, so it
+falls in that sliver only by coincidence, and the cost then is the old one-frame blip.
+Gate: `run_spu_newcell.sh --red`, new arm K5 + mutation M6.
+
 ---
 
 ## ⏳ OPEN: two presses to activate a menu button (WAKE_UP_WITH_ELMO, 2026-09-13)
