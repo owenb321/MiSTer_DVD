@@ -895,7 +895,9 @@ mirror on a sound disc:
 
 ## Drive compatibility: the tray lock, the eject fallback, the identity line (2026-10-13/14, PR #177)
 
-**Status:** host-gated (`main/tests/run_tests.sh --red`, `dvd_phys_test` [15]/[16]).
+**Status:** ✅ MERGED PR #177. ✅ The reporter confirmed eject works on the original
+slot-loading IDE drive + USB adapter (2026-10-14). Host-gated by `main/tests/run_tests.sh
+--red` (`dvd_phys_test` [15]/[16]).
 ✅ **HW, two rigs, A/B vs the shipped v0.9.1 Main:**
 - **Second rig (LG GUD1N behind an Initio INIC-1618L bridge, v0.9.1 core), 2026-10-14.**
   This is the reporter's case. udev's eject-request handling was paused
@@ -1005,10 +1007,9 @@ DVD's 10.08 Mb/s peak mux rate.
 
 ### Known limitations / next step
 
-- **The reporter's own drive is untested.** The second rig reproduced its symptom by pausing
-  udev's eject-request handling, which is equivalent only if the reporter's drive is one
-  that cannot report eject requests. Their `DVD_PHYS: drive ...` line, together with whether
-  the button now works, settles it.
+- **The reporter's drive identity was not collected.** They confirmed eject works, but which
+  of the causes it hit (udev's lock with no eject-request support, or a refused
+  `CDROMEJECT`) is unrecorded. A future report's `DVD_PHYS: drive ...` line would say.
 - **Up to ~10 s after insertion** the button can still be dead on such a drive (latency, above).
 - With an image playing (not the drive's disc), Eject still does not touch the tray,
   unchanged.

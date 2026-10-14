@@ -22,8 +22,8 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **DRIVE COMPATIBILITY: NO TRAY LOCK, EJECT FALLBACK, DRIVE IDENTITY LINE (2026-10-13/14,
-  PR #177; ✅ HW A/B on two rigs vs the v0.9.1 Main; ⏳ the reporter's own drive).**
+- ✅ **DRIVE COMPATIBILITY: NO TRAY LOCK, EJECT FALLBACK, DRIVE IDENTITY LINE (2026-10-13/14,
+  ✅ MERGED PR #177; ✅ HW A/B on two rigs vs the v0.9.1 Main; ✅ reporter confirmed).**
   - **Field report:** a slot-loading IDE drive on a USB adapter could not be ejected once the
     core was loaded, neither with the core's Eject nor with the drive's button. No logs.
   - **Cause (found on the second rig, after a wrong first theory):** MiSTer's stock udev rule
@@ -55,9 +55,8 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
       `CDROMEJECT` works.
     - Mutation arms `phys-lock-left-on`, `phys-unlock-once`, `phys-eject-no-fallback`,
       `phys-eject-not-loej`.
-  - **Next:** the reporter's drive with the PR's Main. Their identity line plus whether the
-    button works settles whether theirs is a no-eject-request drive. Design:
-    `docs/physical_disc.md` "Drive compatibility".
+  - **Reporter:** confirmed eject works with the PR's Main on the original slot-loading IDE
+    drive + USB adapter (2026-10-14). Design: `docs/physical_disc.md` "Drive compatibility".
 
 - ✅ **LINE-21 CAPTIONS: THE FIELD IS THE ENTRY'S POSITION, NOT ITS MARKER (issue #166,
   2026-10-10, ✅ MERGED PR #175; sim-proven, ✅ HW-CONFIRMED by eye on a TV).**

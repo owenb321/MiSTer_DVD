@@ -481,7 +481,7 @@ otherwise; `--red` runs its mutation arms).
 | VOB table sized to the spec (issue #112) | ✅ | `physical_disc.md` | `main/tests` |
 | A raw (IFO) read stops at the next VOB start: read-ahead burst no longer hands a VOB's head out scrambled (issue #147) | ✅ HW (Horrible Bosses: v0.8.0 CSS ENCRYPTED, fix clean), MERGED PR #153 | `status_log.md` | `main/tests/run_tests.sh --red` ([20]/[20b]) |
 | Read-ahead ring; full read windows at VOB ends; eject EBUSY | ✅ ⏳ audio underrun is phase 3 | `physical_disc.md` | `main/tests` |
-| Drive compatibility: udev's tray lock released every scan (drive button works on drives that can't report eject requests), SG_IO eject fallback, drive identity line (PR #177) | ✅ HW A/B, two rigs vs v0.9.1 Main; ⏳ reporter's drive | `physical_disc.md` "Drive compatibility" | `main/tests/run_tests.sh --red` ([15]/[16]) |
+| Drive compatibility: udev's tray lock released every scan (drive button works on drives that can't report eject requests), SG_IO eject fallback, drive identity line (PR #177) | ✅ MERGED PR #177; HW A/B on two rigs vs v0.9.1 Main + reporter confirmed (slot-loading IDE drive, USB adapter) | `physical_disc.md` "Drive compatibility" | `main/tests/run_tests.sh --red` ([15]/[16]) |
 | VCD/SVCD from `.bin`, and from a physical disc | ✅ | `vcd_svcd.md`, `physical_disc.md` | `run_vcd.sh`, `main/tests` |
 | WAV / CD-DA raw PCM; physical audio CD; visualizer | ✅ ⏳ next on last track | `cdda.md` | `run_wav.sh`, `cdda_toc_tb` |
 | `.cue` sheets (audio CD and VCD) | ✅ | `cdda.md` | `main/tests/run_tests.sh --red` |
