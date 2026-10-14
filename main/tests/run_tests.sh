@@ -96,6 +96,34 @@ if [ "$RED" -eq 1 ]; then
         "s/^\tteardown_to_idle(now);$/\t;/" \
         phys-eject-order
 
+    # The kernel's tray lock left on: a drive that obeys PREVENT MEDIUM REMOVAL
+    # ignores its own button for as long as the core holds the disc.
+    red_case dvd_phys.cpp dvd_phys_test.cpp \
+        "kernel lock cleared before the mount" \
+        "s/^\tdrive_never_lock(fd);$/\t;/" \
+        phys-lock-left-on
+
+    # The unlock sent only once per insertion: udev's cdrom_id --lock-media
+    # re-locks after the edge, and a drive that cannot report eject requests
+    # keeps a dead button for the whole session (the second rig, 2026-10-14).
+    red_case dvd_phys.cpp dvd_phys_test.cpp \
+        "udev's lock released on every scan" \
+        "s/^\tioctl(fd, CDROM_LOCKDOOR, 0);$/\tif (!prev_ready) ioctl(fd, CDROM_LOCKDOOR, 0);/" \
+        phys-unlock-once
+
+    # A refused CDROMEJECT is the end of it: ENOSYS (a drive that misreports its
+    # mechanism) and EBUSY (another handle) never reach the drive.
+    red_case dvd_phys.cpp dvd_phys_test.cpp \
+        "direct SCSI eject sent" \
+        "s/^\t\t\t\teject_scsi(fd, dev);$/\t\t\t\t;/" \
+        phys-eject-no-fallback
+
+    # The fallback sends START instead of LoEj: the drive spins up and nothing opens.
+    red_case dvd_phys.cpp dvd_phys_test.cpp \
+        "last command is START STOP UNIT LoEj" \
+        "s/0x1B, 0x02, why/0x1B, 0x01, why/" \
+        phys-eject-not-loej
+
     # ---- dvd_cdda: the drive fd's lifecycle ------------------------------
     # The fd handed to dvd_cdda_open() is OURS from then on. Dropping it without
     # closing leaks one descriptor on /dev/srN per mount, and the kernel then
