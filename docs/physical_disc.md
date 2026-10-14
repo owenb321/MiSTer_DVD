@@ -895,9 +895,16 @@ mirror on a sound disc:
 
 ## Drive compatibility: the tray lock, the eject fallback, the identity line (2026-10-13, branch `feature/drive-compat`)
 
-**Status:** host-gated (`main/tests/run_tests.sh --red`, `dvd_phys_test` [15]/[16]);
-⏳ HW: the rig can confirm only that nothing regressed, because its drive never showed the
-symptom (below).
+**Status:** host-gated (`main/tests/run_tests.sh --red`, `dvd_phys_test` [15]/[16]).
+✅ **HW on the rig (2026-10-13), A/B vs the installed Main:** with `sleep 120 < /dev/sr0`
+holding the drive during playback, Eject on the installed Main logged `tray would not open
+(errno 16)` and the tray stayed shut (control). On this branch it logged `CDROMEJECT refused
+(errno 16)`, then `held open by pid ... (sleep), 1 handle(s)` (no `that is US` line, so the
+eject's own fd was skipped), then `tray opened ... (direct SCSI eject)`, and the tray opened.
+`CDROM_SET_OPTIONS(0)` (a pure read) gave options `0x5`, so `CDO_LOCK` was cleared while
+`dev.cdrom.lock` stayed 1. The identity line read `Dell DVD+/-RW DW316 rev A1C3, USB 413c:9016
+... at 480 Mb/s, can open tray 1, can lock 1`. ⏳ Still open: the drive's own button on a
+drive that obeys the lock, which the rig cannot show (below).
 
 **Field report:** a slot-loading IDE drive on a USB adapter could not be ejected once the core
 was loaded, neither with the core's Eject nor with the drive's own button. No logs. Rather
@@ -980,6 +987,10 @@ DVD's 10.08 Mb/s peak mux rate.
   under the same hold must log `tray would not open ... (errno 16)` and leave the tray shut.
 - With an image playing (not the drive's disc), Eject still does not touch the tray,
   unchanged.
+- **Seen in both HIL arms, pre-existing:** one `mister.py key eject` press logs TWO eject
+  events, the second as `(image)`, so `teardown_to_idle()` runs twice. It is harmless at
+  idle. Not yet known whether it comes from the harness's key injection or from the
+  `AF_EJECT_TGL` toggle in `dvd_remote.cpp`.
 - The support bundle does not carry `/tmp/dvd_report.log`. A reporter has to copy it by hand.
 - **The fallback blocks the poll thread** for as long as the drive takes to answer: three
   commands at a 10 s timeout each, so ~30 s worst case on a drive that hangs, with OSD and

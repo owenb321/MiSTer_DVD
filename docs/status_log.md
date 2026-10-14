@@ -23,7 +23,11 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 ## Hardware status (THIS fork, verified 2026-06-21)
 
 - 🔧 **DRIVE COMPATIBILITY: NO TRAY LOCK, EJECT FALLBACK, DRIVE IDENTITY LINE (2026-10-13,
-  branch `feature/drive-compat`; host-gated, ⏳ HW).**
+  branch `feature/drive-compat`; host-gated; ✅ rig A/B for the fallback, lock flag and
+  identity line; ⏳ the button on a lock-honouring drive).**
+  - **Rig A/B (vs the installed Main, drive held open by `sleep`):** control = `errno 16`,
+    tray shut. Branch = holder named (`sleep` only), `direct SCSI eject`, tray opened;
+    drive options `0x5` (`CDO_LOCK` off, sysctl still 1); identity line correct.
   - **Field report:** a slot-loading IDE drive on a USB adapter could not be ejected once the
     core was loaded, neither with the core's Eject nor with the drive's button. No logs.
   - **Cause (general, not this drive):** the kernel locks the tray on every non-`O_NONBLOCK`
