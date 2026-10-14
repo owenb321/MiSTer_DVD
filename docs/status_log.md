@@ -77,7 +77,9 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     gunshot went silent for 2 s of exact zero on back-to-back short scoring cells
     (VTS 3 cells 4–7). The hold drained the audio ring at every join. Fix: the hold also
     releases on `cc_aud_low` (ring < 6 frames and the title has audio); about 0.2 s off
-    the window end. ⏳ HW: the saloon by ear.
+    the window end. HW (second rig): first shootout 34.9/37.0 s hit, 37.3 s miss; the
+    ring bottoms at 4 frames at the join, where it used to hit 0. ⏳ The saloon by ear
+    (maintainer).
   - **Next:** the maintainer's play-test, then the PR. Not yet run on HW: a loop disc such as Fairytopia, which is unchanged by
     construction because a fixed command is never held (bench P2), and Mad Dog II /
     Crime Patrol by hand. Design notes: `docs/dvd_nav.md` "A cell command with buttons

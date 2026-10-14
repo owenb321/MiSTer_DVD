@@ -5356,7 +5356,10 @@ The fix: the hold also releases on `cc_aud_low`, emu's ring-low hysteresis (< 6 
 ~0.2 s of AC-3) AND `cc_aud_live` (the ring reached 12 frames within 3 s, so a title
 without audio keeps the plain `vbuf_empty` release). The reader then resumes while the
 old cell's audio still plays, which is the ordering the pre-hold build always had. The
-cost is ~0.2 s off the window end (Mad Dog's first shootout: ~37.15 s). Gates:
+cost is ~0.2 s off the window end. HW on `dev-cellcmdhold4` (second rig, Mad Dog's first
+shootout): 34.9 s and 37.0 s hit, and 37.3 s now misses, so the window is ~34.55 s to
+37.0–37.3 s. The audio ring bottoms out at 4 frames at the hit's join (it reached 0
+before). Gates:
 `run_cmd_hold.sh` arm F + R12; `check_cmd_hold_wiring.py` checks the seam.
 
 **Known limits.**
