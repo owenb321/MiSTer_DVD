@@ -42,6 +42,9 @@
 //   P2 a fixed loop (LinkTopC) replays with no hold: in-title loops stay gapless.
 //   P3 LinkTailPGC is held: it lands in POST, which reads registers.
 //   P4 a cmd_nr past the PGC's cell commands is not held (no stale fx_mem bit).
+//   F  the audio ring runs low (cc_aud_low) during a hold with the VBUF still full:
+//      the hold releases, so the reader resumes before the old audio runs dry
+//      (Mad Dog's saloon: back-to-back short scoring cells lost the gunshot).
 //
 // Run: bench/dvd/run_cmd_hold.sh [--red]
 
@@ -71,6 +74,7 @@ module iso_reader_cmdhold_tb;
     reg         busy = 0;
     reg         cc_btns = 0;
     reg         vbuf_empty = 1;
+    reg         cc_aud_low = 0;
 
     reg  [7:0]  img [0:IMG_BYTES-1];
 
@@ -104,7 +108,7 @@ module iso_reader_cmdhold_tb;
     wire [10:0] ptt_cur_w;
 
     dvd_iso_reader #(.SEC_DIV(1000), .DRAIN_WD(DRAIN_WD_TB)) dut (
-        .cc_btns(cc_btns),
+        .cc_btns(cc_btns), .cc_aud_low(cc_aud_low),
         .ptt_upd(ptt_upd_w), .ptt_cur(ptt_cur_w),
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(7'd0),
@@ -489,11 +493,11 @@ module iso_reader_cmdhold_tb;
     endfunction
 
     integer s0, c0, e0, p0, r0;
-    integer a1_ok, a2_ok, b_ok, c_ok, d_ok, e_ok, p1_ok, p2_ok, p3_ok, p4_ok;
+    integer a1_ok, a2_ok, b_ok, c_ok, d_ok, e_ok, f_ok, p1_ok, p2_ok, p3_ok, p4_ok;
 
     initial begin
         a1_ok = 1; a2_ok = 1; b_ok = 1; c_ok = 1; d_ok = 1; e_ok = 1;
-        p1_ok = 1; p2_ok = 1; p3_ok = 1; p4_ok = 1;
+        p1_ok = 1; p2_ok = 1; p3_ok = 1; p4_ok = 1; f_ok = 1;
         build_iso;
         file_size = IMG_BYTES;
 
@@ -622,6 +626,23 @@ module iso_reader_cmdhold_tb;
         t = 0; while (n_cc == c0 + 1 && t < 100000) begin @(posedge clk); t = t + 1; end
         if (n_cc != c0 + 2) begin fail("P3: LinkTailPGC did not run once the VBUF drained"); p3_ok = 0; end
         $display("P3 %s: LinkTailPGC (POST reads registers) is held", p3_ok ? "PASS" : "FAIL");
+
+        // ---------- F: the audio runs low first -> the hold releases ----------
+        repeat (2000) @(posedge clk);
+        cc_btns = 1; vbuf_empty = 0; cc_aud_low = 0;
+        c0 = n_cc;
+        press(C_JUMPTT1);
+        wait_hold(4000000);
+        if (dut.vmw_cmd_pend !== 1'b1) begin fail("F: no hold at the B0 cell end"); f_ok = 0; end
+        repeat (20000) @(posedge clk);
+        if (n_cc != c0) begin fail("F: the command ran before the audio ran low"); f_ok = 0; end
+        cc_aud_low = 1;
+        t = 0; while (n_cc == c0 && t < 5000) begin @(posedge clk); t = t + 1; end
+        if (n_cc != c0 + 1) begin fail("F: audio low did not release the hold"); f_ok = 0; end
+        cc_aud_low = 0;
+        vbuf_empty = 1;                     // let the miss branch finish
+        t = 0; while (n_pe == p0 && t < 4000000) begin @(posedge clk); t = t + 1; end
+        $display("F %s: the audio running low releases the hold", f_ok ? "PASS" : "FAIL");
 
         // ---------- E: a VBUF that never drains -> DRAIN_WD releases ----------
         repeat (2000) @(posedge clk);

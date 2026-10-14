@@ -5341,6 +5341,24 @@ anything written behind it. Three `keys` Rights pushed a Select written at 36.2 
 ~36.3 s, so the first control runs scored the harness, not the core. The tool uses single
 `key <code> 30` taps, and the trap is in the hil-testing skill.
 
+**A second regression the hold caused: the gunshot after a hit went silent (2026-10-13).**
+The maintainer reported missing gunshots in the saloon, and their recording made it
+measurable: 2 s of exact digital zero after most hits, with the picture playing on (VTS 3
+cells 4–7). Those are back-to-back short scoring cells, 1.9–3.9 s each, with a PTS
+restart at every join. Draining to `vbuf_empty` also empties the audio ring, so the audio
+underran at every join and the AC-3 resync stayed silent for about 2 s. (A first capture
+on the first shootout, a single long cell, showed no gap at the hit; its 0.84 s silence
+was a miss's jump transition, the same in v0.9.1.) Simulation could not reproduce the
+mute: `aud_retime_tb` S13, head-after-underrun with LPCM frames, plays the head on time.
+So the fix stops the starvation itself rather than tuning the audio path.
+
+The fix: the hold also releases on `cc_aud_low`, emu's ring-low hysteresis (< 6 frames,
+~0.2 s of AC-3) AND `cc_aud_live` (the ring reached 12 frames within 3 s, so a title
+without audio keeps the plain `vbuf_empty` release). The reader then resumes while the
+old cell's audio still plays, which is the ordering the pre-hold build always had. The
+cost is ~0.2 s off the window end (Mad Dog's first shootout: ~37.15 s). Gates:
+`run_cmd_hold.sh` arm F + R12; `check_cmd_hold_wiring.py` checks the seam.
+
 **Known limits.**
 
 - A pause during the hold counts toward `DRAIN_WD` (60 s), the same as the PGC-end

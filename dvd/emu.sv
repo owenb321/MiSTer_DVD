@@ -704,7 +704,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-cellcmdhold3"
+`define CORE_VERSION "dev-cellcmdhold4"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -3601,6 +3601,24 @@ always @(posedge clk_sys) begin
     else if (aud_frames_avail <  16'd6)    aud_ring_low <= 1'b1;
     else if (aud_frames_avail >= 16'd12)   aud_ring_low <= 1'b0;
 end
+// ★ CELL-COMMAND HOLD, AUDIO SIDE (issue #176, Mad Dog's saloon: a hit's gunshot
+// went silent for ~2 s). The reader holds a scoring cell command until the display
+// reaches the cell end; draining to vbuf_empty also emptied this ring, so on back-to-
+// back short scoring cells (the saloon's 1.9-3.9 s cells, a PTS restart at each)
+// the audio underran at EVERY join and the AC-3 resync left ~2 s of silence. The
+// hold also releases when the ring runs low (the hysteresis above, < 6 frames,
+// ~0.2 s of AC-3), so the reader resumes while the old cell's audio still plays --
+// the ordering the pre-hold build always had. Costs ~0.2 s off the window's end.
+// cc_aud_live: the title HAS audio (the ring reached 12 frames within 3 s), so an
+// audio-less title keeps the plain vbuf_empty release instead of releasing at once.
+reg  [26:0] cc_aud_live_tmr;                   // 3 s at 27 MHz
+always @(posedge clk_sys) begin
+    if (!reset_n)                          cc_aud_live_tmr <= 27'd0;
+    else if (aud_frames_avail >= 16'd12)   cc_aud_live_tmr <= 27'd81_000_000;
+    else if (cc_aud_live_tmr != 27'd0)     cc_aud_live_tmr <= cc_aud_live_tmr - 27'd1;
+end
+wire cc_aud_live = (cc_aud_live_tmr != 27'd0);
+wire cc_aud_low  = aud_ring_low & cc_aud_live;
 reg  menu_vbuf_over;
 wire menu_vbuf_throttle = menus_on & menu_active & menu_vbuf_over &
                           ~(menu_aud_live & aud_ring_low);
@@ -3746,6 +3764,7 @@ dvd_iso_reader dvd_iso_reader_inst (
     // the cell's last second is still parsed-but-not-promoted.
     .cc_btns        (hl_btns_armed | hl_btns_pend),
     .cc_scoring     (cc_scoring_w),       // issue #176: nav_pci arms a scoring window early
+    .cc_aud_low     (cc_aud_low),         // issue #176: the hold also releases before the audio runs dry
 
     .vm_mode        (menus_on),           // Phase 4: the VM drives navigation
     .vm_adv         (vm_adv_w),

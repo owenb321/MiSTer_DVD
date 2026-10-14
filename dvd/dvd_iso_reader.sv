@@ -331,6 +331,10 @@ module dvd_iso_reader #(
     // time. ⚠ It describes the cell the READER is on, which can lead the cell being
     // PARSED by one cache (16 KB) at a cell boundary.
     output            cc_scoring,
+    // The audio ring is nearly dry (emu: < 6 frames, and the title has audio). The
+    // cell-command hold releases on this OR vbuf_empty, so the reader resumes
+    // before the old cell's audio runs out (issue #176, Mad Dog's saloon).
+    input             cc_aud_low,
 
     // ---------------------------------------------------------------------
     // Phase-4 DVD-VM coupling. vm_mode (= O[1] Disc Menus) hands navigation
@@ -1454,8 +1458,9 @@ end
 // decoder is not (rtl/mpeg2/watchdog.v decoder_active <= ~busy).
 reg [30:0] drain_tmr;   // 31 bits: DRAIN_WD is now 60 s @ 27 MHz
 wire       drain_wd_hit = (drain_tmr >= DRAIN_WD);
-wire       tail_wait = (vmw_pgc_pend || vmw_cmd_pend) && ~menu_dom && ~vbuf_empty &&
-                       ~drain_wd_hit;
+wire       tail_wait = ((vmw_pgc_pend && ~vbuf_empty) ||
+                        (vmw_cmd_pend && ~vbuf_empty && ~cc_aud_low)) &&
+                       ~menu_dom && ~drain_wd_hit;
 
 // CELL COMMAND AT THE DISPLAYED CELL END (issue #176, docs/dvd_nav.md "A cell
 // command with buttons up"). A cell command runs at the end of the cell's

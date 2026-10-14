@@ -142,6 +142,7 @@ module iso_reader_vm_tb;
     wire [10:0] ptt_cur_w;
     dvd_iso_reader #(.DRAIN_WD(31'd20000)) dut (
         .cc_btns(1'b0),   // issue #176 hold off: a new input floats Z unless tied
+        .cc_aud_low(1'b0), // issue #176 audio-low release off: tie the new input
         .ptt_upd(ptt_upd_w), .ptt_cur(ptt_cur_w),
         // new reader inputs tied off: a floating input is X, and X on
         // agl_vm_en would poison the angle resolve (see the port comments).

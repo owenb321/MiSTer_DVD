@@ -14,7 +14,10 @@ the file. It fails if:
   * dvd_iso_reader .vbuf_empty is not the `vbuf_empty` register assigned from the VBUF
     low-water compare (`vbuf_fill_s1 <= 8'h01`);
   * nav_pci .early_ok is not the plain declared net on dvd_iso_reader .cc_scoring (the
-    scoring-window lead would be off on every disc, or on for every set-only HLI).
+    scoring-window lead would be off on every disc, or on for every set-only HLI);
+  * dvd_iso_reader .cc_aud_low is not `cc_aud_low`, assigned `aud_ring_low & cc_aud_live`
+    (without the ring-low term the hold starves the audio at every scoring join; without
+    the liveness term an audio-less title releases every hold at once).
 
     python3 tools/check_cmd_hold_wiring.py [emu.sv]   # exit 0 = wired right
     python3 tools/check_cmd_hold_wiring.py --red      # each mutation must FAIL
@@ -78,6 +81,14 @@ def check(emu_raw):
         bad.append("net '%s' (.cc_scoring) is not declared as a wire" % cs)
     if eo != cs:
         bad.append("nav_pci .early_ok is '%s', want the reader's .cc_scoring net '%s'" % (eo, cs))
+
+    al = port_expr(rd, 'cc_aud_low')
+    if al is None or al.strip() != 'cc_aud_low':
+        bad.append("dvd_iso_reader .cc_aud_low is '%s', want cc_aud_low" % al)
+    m = re.search(r'\bwire\s+cc_aud_low\s*=\s*([^;]+);', src)
+    if not m or sorted(t.strip() for t in m.group(1).split('&')) != ['aud_ring_low', 'cc_aud_live']:
+        bad.append("cc_aud_low is not assigned aud_ring_low & cc_aud_live (%s)"
+                   % (m.group(1).strip() if m else 'no assign'))
     return bad
 
 
@@ -94,6 +105,8 @@ MUTATIONS = [
     ('early open', r'\.early_ok\s*\(cc_scoring_w\)', '.early_ok     ()'),
     ('early on btns', r'\.early_ok\s*\(cc_scoring_w\)', '.early_ok     (hl_btns_armed)'),
     ('scoring open', r'\.cc_scoring\s*\(cc_scoring_w\)', '.cc_scoring     ()'),
+    ('aud low tied', r'\.cc_aud_low\s*\(cc_aud_low\)', ".cc_aud_low     (1'b0)"),
+    ('aud low no live', r'wire cc_aud_low  = aud_ring_low & cc_aud_live;', 'wire cc_aud_low  = aud_ring_low;'),
     ('vbuf threshold', r"vbuf_empty <= \(vbuf_fill_s1 <= 8'h01\);", "vbuf_empty <= (vbuf_fill_s1 <= 8'h40);"),
 ]
 

@@ -50,6 +50,12 @@
 //       The orphaned latch must be released at the backward jump, so the new
 //       audio starts IN PHASE right after its picture -- not after HOLD_W and a
 //       reset (~0.7 s later than the pre-change build)
+//    S13 (issue #176, Mad Dog: the gunshot after a hit went silent for ~0.8 s) the
+//       old timeline's audio plays out and UNDERRUNS first; only THEN does the new
+//       cell's audio arrive (40 ms after), and the display crosses 60 ms after that.
+//       The reader held the cell command until the VBUF drained, so nothing of the
+//       new cell was parsed before the old audio ran out. The new head must play at
+//       its PTS right at the crossing -- not after the hold's HOLD_W timeout.
 //  S1-S7 must raise NO resync_req. The bench models the demux's arrival front
 //  (arr_pts = the newest committed frame) and, on resync_req, the flush_ctl
 //  aud_resync it causes (decoder reset + ring discard).
@@ -629,6 +635,31 @@ module aud_retime_tb;
                 if (errs == r0) $display("  [S12] T2: orphaned latch released, c2 in phase %0d clk after its picture (%0d ticks)",
                                          cap_t[f] - t_anchor, late);
             end
+        end
+        if (run_s(13)) begin
+        // ======================= S13: the new audio arrives AFTER the old underran ======
+            r0 = errs;
+            fresh;
+            for (i0 = 0; i0 < N_OLD; i0 = i0 + 1) add_frame(1, i0, OLD_BASE + i0 * FRAME_TICKS);
+            start_old;
+            wait (stc >= OLD_END + 33'd3600);                   // old audio ran out 40 ms ago
+            for (i0 = 0; i0 < N_NEW; i0 = i0 + 1) add_frame(2, i0, NEW_BASE + i0 * FRAME_TICKS);
+            publish;                                            // the new cell's first audio arrives
+            cross_at(OLD_END + 33'd9000, NEW_BASE);             // display crosses 60 ms later
+            run_until(N_OLD*SPF + N_NEW*SPF, 20_000_000);
+            f = first_of(2);
+            if (count_of(1) != N_OLD*SPF) fail("S13: old timeline lost samples");
+            if (f < 0) fail("S13: new timeline never played");
+            else begin
+                if (cap_stc[f] >= OLD_BASE)
+                    fail("S13: new-timeline audio played while the clock was on the OLD timeline");
+                if (cap_stc[f] > NEW_BASE + 33'd4500)
+                    fail("S13: the new head played > 50 ms after its PTS (a silent gap after the join)");
+            end
+            if (errs == r0) $display("  [S13] head after the underrun: new head at stc=%0d (PTS %0d), %0d of %0d new samples",
+                                     cap_stc[f], NEW_BASE, count_of(2), N_NEW*SPF);
+            else if (f >= 0) $display("  [S13] measured: new head at stc=%0d (PTS %0d) = %0d ms late, %0d of %0d new samples",
+                                      cap_stc[f], NEW_BASE, (cap_stc[f] - NEW_BASE) / 90, count_of(2), N_NEW*SPF);
         end
 
         if (errs == 0) $display("PASS: aud_retime_tb (S1-S12)");

@@ -73,6 +73,11 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     `new_cell`. `hl_mask` then masked the highlight for good. Fix: `hl_mask` `ARM_GRACE`
     (an arm just before `new_cell` is the new cell's); gate `run_spu_newcell.sh --red`
     K5/M6. ⏳ HW: the maintainer's check in the sheriff's office.
+  - **Regression 2, from the maintainer's saloon recording (`dev-cellcmdhold4`):** a hit's
+    gunshot went silent for 2 s of exact zero on back-to-back short scoring cells
+    (VTS 3 cells 4–7). The hold drained the audio ring at every join. Fix: the hold also
+    releases on `cc_aud_low` (ring < 6 frames and the title has audio); about 0.2 s off
+    the window end. ⏳ HW: the saloon by ear.
   - **Next:** the maintainer's play-test, then the PR. Not yet run on HW: a loop disc such as Fairytopia, which is unchanged by
     construction because a fixed command is never held (bench P2), and Mad Dog II /
     Crime Patrol by hand. Design notes: `docs/dvd_nav.md` "A cell command with buttons
