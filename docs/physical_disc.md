@@ -893,6 +893,93 @@ mirror on a sound disc:
 - list IFO sectors → the log line, and telemetry flags 000;
 - list an IFO sector **and** its BUP twin → `ifo_nogood` and the old behaviour.
 
+## Drive compatibility: the tray lock, the eject fallback, the identity line (2026-10-13, branch `feature/drive-compat`)
+
+**Status:** host-gated (`main/tests/run_tests.sh --red`, `dvd_phys_test` [15]/[16]);
+⏳ HW: the rig can confirm only that nothing regressed, because its drive never showed the
+symptom (below).
+
+**Field report:** a slot-loading IDE drive on a USB adapter could not be ejected once the core
+was loaded, neither with the core's Eject nor with the drive's own button. No logs. Rather
+than chase one drive, this removes three assumptions that held only because the rig's drive
+(a Dell DW316 slim USB drive) happened to satisfy them. All three live in
+`main/support/dvd/dvd_phys.cpp`, so no new `apply_integration.py` step.
+
+### 1. The kernel locked the tray for the whole session
+
+Linux `drivers/cdrom/cdrom.c` (checked against v5.15, the rig's `5.15.1-MiSTer`):
+`open_for_data()`, the path for any open WITHOUT `O_NONBLOCK`, sends PREVENT MEDIUM
+REMOVAL when the drive's `CDO_LOCK` option is set, and `register_cdrom()` sets that option
+from the `dev.cdrom.lock` sysctl (default 1; 1 on the rig). The lock is dropped only in
+`cdrom_release()` when the LAST handle closes. libdvdcss, the no-libdvdcss raw fallback and
+the VCD source all open without `O_NONBLOCK`, so from the mount to the teardown the tray was
+locked. A drive that obeys PREVENT then ignores its own button.
+
+The rig never showed this: its drive's button ejects mid-playback (that is what the
+read-ahead's idle gaps were tuned against, `dvd_readahead.cpp`). So either the drive or its
+built-in bridge ignores PREVENT. A desktop or slot-loading drive behind an adapter that passes
+the command through will obey it. A slot-loader has no tray to pull and usually no
+emergency-release hole either.
+
+**Fix:** `drive_never_lock()` issues `CDROM_CLEAR_OPTIONS(CDO_LOCK)` on every ready scan
+(a flag write in the kernel, no I/O), which always precedes the mount. On each insertion edge
+the tick also sends one `CDROM_LOCKDOOR(0)` to release a lock another handle already holds.
+That one is a real command, so it is not sent once a second. Every drive then behaves like
+the rig's, and a disc pulled mid-read is the existing, HW-tested teardown path.
+
+**Rejected:**
+- *Write 0 to `/proc/sys/dev/cdrom/lock` at Main start.* The sysctl is copied into a drive's
+  options only at registration, so a drive plugged in after the write locks again. It also
+  changes the machine for every other core, and it would need a new integration hook into
+  stock Main.
+- *`CDROM_LOCKDOOR(0)` after each data open.* That needs a call at three open sites in three
+  modules (`dvd_css.cpp` twice, `dvd_vcd.cpp`) and misses any future one. Clearing the
+  option before the mount covers every open, including libdvdcss's internal one.
+
+### 2. The core's Eject stopped at the kernel's refusal
+
+`cdrom_ioctl_eject()` refuses BEFORE the drive is asked, in three cases that say nothing about
+whether the drive can eject:
+
+| errno | cause |
+|---|---|
+| `ENOSYS` (38) | `sr.c` masked `CDC_OPEN_TRAY` because mode page 2A's eject bit is clear. Slot-loaders and some bridges misreport the loading mechanism |
+| `EBUSY` (16) | `use_count != 1`: some other handle is open (a leak of ours, or another program) |
+| `EIO` and others | the kernel's own ALLOW MEDIUM REMOVAL, sent first, was rejected by the bridge |
+
+**Fix:** on any `CDROMEJECT` failure, `eject_scsi()` sends three commands through `SG_IO`
+(which `sr_block_ioctl()` routes to `scsi_ioctl()`, past the cdrom layer): ALLOW MEDIUM
+REMOVAL, START STOP UNIT `start`, then START STOP UNIT `LoEj`. This is the same sequence and
+order util-linux `eject(1)` falls back to when its own `CDROMEJECT` fails. Only the last
+command decides the outcome. The first two are logged and ignored. On `EBUSY`, the holders are
+named first (`log_drive_holders()` walks `/proc/*/fd`, the way `mark_cloexec_to()` walks
+`/proc/self/fd`), and a handle of our own says `-- that is US`.
+
+⚠ This deliberately bypasses `EBUSY`. The user pressed Eject, and our own teardown has already
+released everything of ours. The kernel's refusal protects a mounted filesystem, which a
+read-only video disc is not.
+
+### 3. One log line per insertion names the drive
+
+`log_drive_identity()` writes, to `/tmp/dvd_report.log`:
+`DVD_PHYS: drive /dev/sr0: <vendor> <model> rev <fw>, USB <vid>:<pid> "<product>" at <speed>
+Mb/s, can open tray N, can lock N`. The last two are the kernel's view
+(`CDROM_GET_CAPABILITY`), which is exactly what decides between the cases above. USB speed is
+there because an old USB 1.1 IDE adapter (12 Mb/s, roughly 8–9 Mb/s usable) is slower than a
+DVD's 10.08 Mb/s peak mux rate.
+
+### Known limitations / next step
+
+- **The positive case is unverified:** the rig's drive does not obey the lock. ⏳ Needs a
+  lock-honouring drive, ideally the reporter's: with the new Main, the drive's own button
+  should work mid-play. On the rig, confirm only the control (normal Eject, button still fine)
+  and that the SG_IO fallback really ejects through this kernel. To force it: hold `/dev/sr0`
+  open from a shell (`sleep 60 < /dev/sr0 &`) and press Eject, which gives `EBUSY` → holder
+  line naming `sleep` → direct SCSI eject.
+- With an image playing (not the drive's disc), Eject still does not touch the tray,
+  unchanged.
+- The support bundle does not carry `/tmp/dvd_report.log`. A reporter has to copy it by hand.
+
 ## Drive region tool (`main/Scripts/set_dvd_region.sh`)
 
 A drive with **no region set** refuses the CSS title-key ioctl, so libdvdcss cracks every

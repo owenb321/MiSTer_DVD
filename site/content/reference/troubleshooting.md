@@ -120,7 +120,21 @@ Check, in order:
 
 See [Physical discs](../formats/physical-discs.md).
 
-### `set_dvd_region` refuses to change the region
+### The disc will not eject
+
+Both **Eject** (B19) and the drive's own button should work at any time, including during
+playback. If neither does, the player wrote what happened to `/tmp/dvd_report.log`:
+
+- A `DVD_PHYS: drive ...` line, written when the disc went in. It names the drive, its USB
+  adapter and speed, and whether the drive says it `can open tray` and `can lock`.
+- `DVD_PHYS: eject: ...` lines, written when you pressed **Eject**. They say whether the tray
+  opened, and if not, why. If another program on the MiSTer was holding the drive, one of the
+  lines names it.
+
+Copy that file over SSH and attach it to a [bug report](reporting-a-bug.md), with the drive
+and adapter you use. Eject only opens the tray when the player is playing that drive's disc;
+with a disc image loaded, it just unloads the image.
+
 
 Read what the drive said — the script prints it. `no disc in the drive` and `the disc in the
 drive is from a different region` both mean the same thing: **many drives take their new

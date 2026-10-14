@@ -37,7 +37,7 @@ main=MiSTer_DVDcss
 `MiSTer_DVDcss` instead of the stock Main. Every other core is unaffected.
 
 With that in place: open the core with a disc in the drive and it plays; insert a disc while
-the core is open and it plays; eject to stop. Remove the `[DVD]` section, or the binary, and
+the core is open and it plays; eject to stop, with **Eject** (B19) or the drive's own button. Remove the `[DVD]` section, or the binary, and
 the core reverts to image-only playback with the stock Main — nothing else changes.
 
 A scratch over the disc's navigation data is read around: when a sector of a menu or

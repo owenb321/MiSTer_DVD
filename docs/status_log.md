@@ -22,6 +22,28 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **DRIVE COMPATIBILITY: NO TRAY LOCK, EJECT FALLBACK, DRIVE IDENTITY LINE (2026-10-13,
+  branch `feature/drive-compat`; host-gated, ⏳ HW).**
+  - **Field report:** a slot-loading IDE drive on a USB adapter could not be ejected once the
+    core was loaded, neither with the core's Eject nor with the drive's button. No logs.
+  - **Cause (general, not this drive):** the kernel locks the tray on every non-`O_NONBLOCK`
+    open while the drive's `CDO_LOCK` option is set (`dev.cdrom.lock`, default 1), and
+    libdvdcss opens that way, so the tray stayed locked from mount to teardown. The rig's Dell
+    DW316 ignores PREVENT (its button ejects mid-play), so the rig could never show it.
+    Separately, `CDROMEJECT` is refused by the kernel before the drive hears of it on
+    `ENOSYS` (misreported mechanism), `EBUSY` (another handle) or a rejected ALLOW.
+  - **Fix (`main/support/dvd/dvd_phys.cpp`):** `CDROM_CLEAR_OPTIONS(CDO_LOCK)` on every ready
+    scan plus one `CDROM_LOCKDOOR(0)` per insertion; on a refused `CDROMEJECT`, the util-linux
+    `eject(1)` SG_IO fallback (ALLOW, START, LoEj), with the holding pids named on `EBUSY`; one
+    `DVD_PHYS: drive ...` line per insertion (vendor/model/fw, USB id and speed, kernel's
+    can-open/can-lock).
+  - **Gates:** `main/tests/run_tests.sh --red`: `dvd_phys_test` [15] lock cleared before the
+    mount, [16] fallback on `ENOSYS` and `EBUSY` + control; arms `phys-lock-left-on`,
+    `phys-eject-no-fallback`, `phys-eject-not-loej`.
+  - **Next:** HW. The rig can confirm the control and the SG_IO eject (hold `/dev/sr0` open
+    from a shell to force `EBUSY`). The positive case needs a lock-honouring drive. Full
+    design and rejected alternatives: `docs/physical_disc.md` "Drive compatibility".
+
 - ✅ **LINE-21 CAPTIONS: THE FIELD IS THE ENTRY'S POSITION, NOT ITS MARKER (issue #166,
   2026-10-10, ✅ MERGED PR #175; sim-proven, ✅ HW-CONFIRMED by eye on a TV).**
   - **Field report:** CC1 garbled on I, Robot. The disc is fine: `cc_scan.py --text` decodes

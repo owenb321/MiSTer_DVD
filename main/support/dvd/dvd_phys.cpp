@@ -18,6 +18,9 @@
 #include <limits.h>          // INT_MAX — CDSL_CURRENT expands to it via <linux/cdrom.h>
 #include <sys/ioctl.h>
 #include <linux/cdrom.h>
+#include <scsi/sg.h>         // SG_IO -- the eject fallback that bypasses the cdrom layer
+#include <dirent.h>
+#include <stdlib.h>
 
 #include "dvd_phys.h"
 #include "dvd_detect.h"
@@ -146,6 +149,190 @@ static int open_ready_drive(char *out, int out_sz)
 }
 #endif
 
+// ---------------------------------------------------------------------------
+// Drive compatibility: the tray lock, the eject fallback, and who the drive is
+// ---------------------------------------------------------------------------
+// Everything below exists because the rig's drive is one drive. What it does
+// not exercise, a user's drive will. See docs/physical_disc.md "Drive compatibility".
+
+// ★ THE KERNEL LOCKS THE TRAY WHILE WE PLAY. Any open of /dev/srN WITHOUT
+// O_NONBLOCK runs the cdrom layer's open-for-data path, which sends PREVENT
+// MEDIUM REMOVAL whenever the drive's CDO_LOCK option is set -- and register_cdrom()
+// sets it from the dev.cdrom.lock sysctl, default 1. libdvdcss, the raw fallback
+// and the VCD source all open that way, so from the mount to the teardown the
+// drive's own button was dead (the lock is dropped only when the LAST handle
+// closes). The rig never showed it: its slim USB drive ignores PREVENT, and its
+// button ejects mid-play. A drive that obeys the lock -- a desktop or slot-loading
+// drive behind a USB adapter that passes the command through -- cannot be
+// ejected by hand once the core holds the disc.
+//
+// Clearing CDO_LOCK makes every drive behave like the rig's. That is safe because
+// a disc vanishing mid-read is already a handled, HW-tested path (the tick below
+// tears down to idle; dvd_readahead.cpp leaves gaps so the probe sees it).
+// ⚠ Per drive, not the global sysctl: the sysctl is applied only at registration,
+// so a drive plugged in after a write to it would lock again, and it would change
+// the machine for every other core. Clearing is a flag write with no I/O.
+static void drive_never_lock(int fd)
+{
+	ioctl(fd, CDROM_CLEAR_OPTIONS, CDO_LOCK);
+}
+
+static void sysfs_str(const char *path, char *out, int out_sz)
+{
+	out[0] = 0;
+	FILE *f = fopen(path, "r");
+	if (!f) { snprintf(out, out_sz, "?"); return; }
+	if (!fgets(out, out_sz, f)) out[0] = 0;
+	fclose(f);
+	int n = (int)strlen(out);
+	while (n > 0 && (out[n - 1] == '\n' || out[n - 1] == ' ')) out[--n] = 0;
+	if (!out[0]) snprintf(out, out_sz, "?");
+}
+
+// One line per insertion naming the drive, its USB bridge and what the kernel
+// believes it can do. "The tray will not open" has causes that depend entirely on
+// the hardware, and a reporter can rarely say what is inside their enclosure --
+// so the log says it for them. USB speed is included because an old
+// USB 1.1 (12 Mb/s) IDE adapter is slower than a DVD's own data rate.
+static void log_drive_identity(int fd, const char *dev)
+{
+	const char *name = strrchr(dev, '/');
+	name = name ? name + 1 : dev;
+
+	char p[PATH_MAX + 32], vendor[32], model[48], rev[16];
+	snprintf(p, sizeof(p), "/sys/block/%s/device/vendor", name); sysfs_str(p, vendor, sizeof(vendor));
+	snprintf(p, sizeof(p), "/sys/block/%s/device/model", name);  sysfs_str(p, model, sizeof(model));
+	snprintf(p, sizeof(p), "/sys/block/%s/device/rev", name);    sysfs_str(p, rev, sizeof(rev));
+
+	// The USB device is the first ancestor of the SCSI device with an idVendor.
+	char usb[160] = "not USB";
+	char link[PATH_MAX], real[PATH_MAX];
+	snprintf(link, sizeof(link), "/sys/block/%s/device", name);
+	if (realpath(link, real))
+	{
+		char *slash;
+		while ((slash = strrchr(real, '/')) && slash != real)
+		{
+			*slash = 0;
+			char vid[16], pid[16], prod[64], speed[16];
+			snprintf(p, sizeof(p), "%s/idVendor", real);
+			sysfs_str(p, vid, sizeof(vid));
+			if (!strcmp(vid, "?")) continue;
+			snprintf(p, sizeof(p), "%s/idProduct", real); sysfs_str(p, pid, sizeof(pid));
+			snprintf(p, sizeof(p), "%s/product", real);   sysfs_str(p, prod, sizeof(prod));
+			snprintf(p, sizeof(p), "%s/speed", real);     sysfs_str(p, speed, sizeof(speed));
+			snprintf(usb, sizeof(usb), "USB %s:%s \"%s\" at %s Mb/s", vid, pid, prod, speed);
+			break;
+		}
+	}
+
+	int cap = ioctl(fd, CDROM_GET_CAPABILITY, 0);
+	if (cap < 0)
+		phys_log("DVD_PHYS: drive %s: %s %s rev %s, %s, capabilities unknown (errno %d)",
+		         dev, vendor, model, rev, usb, errno);
+	else
+		phys_log("DVD_PHYS: drive %s: %s %s rev %s, %s, can open tray %d, can lock %d",
+		         dev, vendor, model, rev, usb,
+		         !!(cap & CDC_OPEN_TRAY), !!(cap & CDC_LOCK));
+}
+
+// CDROMEJECT refuses with EBUSY while any other handle is open. Name them: a
+// leaked handle of our own and another program on the machine need different
+// fixes, and only the pid list tells them apart.
+static void log_drive_holders(const char *dev)
+{
+	char want[PATH_MAX];
+	if (!realpath(dev, want)) return;
+	DIR *d = opendir("/proc");
+	if (!d) return;
+	int found = 0;
+	struct dirent *e;
+	while ((e = readdir(d)))
+	{
+		if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
+		char fdir[300];
+		snprintf(fdir, sizeof(fdir), "/proc/%s/fd", e->d_name);
+		DIR *fds = opendir(fdir);
+		if (!fds) continue;
+		int n = 0;
+		struct dirent *f;
+		while ((f = readdir(fds)))
+		{
+			char lnk[600], tgt[PATH_MAX];
+			snprintf(lnk, sizeof(lnk), "%s/%s", fdir, f->d_name);
+			ssize_t k = readlink(lnk, tgt, sizeof(tgt) - 1);
+			if (k <= 0) continue;
+			tgt[k] = 0;
+			if (!strcmp(tgt, want)) n++;
+		}
+		closedir(fds);
+		if (!n) continue;
+		char comm[64], cp[300];
+		snprintf(cp, sizeof(cp), "/proc/%s/comm", e->d_name);
+		sysfs_str(cp, comm, sizeof(comm));
+		phys_log("DVD_PHYS: eject: %s is held open by pid %s (%s), %d handle(s)%s",
+		         dev, e->d_name, comm, n, atoi(e->d_name) == (int)getpid() ? " -- that is US" : "");
+		found = 1;
+	}
+	closedir(d);
+	if (!found) phys_log("DVD_PHYS: eject: no process holds %s open", dev);
+}
+
+// One 6-byte, no-data SCSI command through SG_IO. Returns 0 on GOOD status, else
+// fills `why` with the errno or the sense key/ASC/ASCQ.
+static int sg_cmd6(int fd, unsigned char op, unsigned char b4, char *why, int why_sz)
+{
+	unsigned char cdb[6] = { op, 0, 0, 0, b4, 0 };
+	unsigned char sense[32];
+	sg_io_hdr_t io;
+	memset(&io, 0, sizeof(io));
+	memset(sense, 0, sizeof(sense));
+	io.interface_id    = 'S';
+	io.cmd_len         = sizeof(cdb);
+	io.cmdp            = cdb;
+	io.dxfer_direction = SG_DXFER_NONE;
+	io.sbp             = sense;
+	io.mx_sb_len       = sizeof(sense);
+	io.timeout         = 10000;     // ms; a tray or slot motor can take seconds
+	if (ioctl(fd, SG_IO, &io) < 0)
+	{
+		snprintf(why, why_sz, "errno %d", errno);
+		return -1;
+	}
+	if ((io.info & SG_INFO_OK_MASK) == SG_INFO_OK) return 0;
+	if (io.sb_len_wr >= 14)
+		snprintf(why, why_sz, "sense %X/%02X/%02X", sense[2] & 0x0F, sense[12], sense[13]);
+	else
+		snprintf(why, why_sz, "status 0x%x host 0x%x driver 0x%x",
+		         io.status, io.host_status, io.driver_status);
+	return -1;
+}
+
+// ★ THE EJECT FALLBACK. CDROMEJECT is refused by the kernel BEFORE the drive is
+// asked, in three cases that say nothing about whether the drive can eject:
+//   ENOSYS  the drive's capabilities page claims it cannot (slot-loaders and
+//           some bridges report the loading mechanism inconsistently)
+//   EBUSY   any other handle is open (a leak, or another program)
+//   EIO &c. the bridge rejected the ALLOW MEDIUM REMOVAL the kernel sends first
+// So when it fails, ask the drive directly, the way util-linux eject(1) does when
+// its own CDROMEJECT fails: ALLOW MEDIUM REMOVAL, START, then START STOP UNIT
+// with LoEj. The first two are allowed to fail -- only the last one decides.
+static int eject_scsi(int fd, const char *dev)
+{
+	char why[64];
+	if (sg_cmd6(fd, 0x1E, 0x00, why, sizeof(why)))     // PREVENT ALLOW: allow
+		phys_log("DVD_PHYS: eject: ALLOW MEDIUM REMOVAL failed on %s (%s), continuing", dev, why);
+	if (sg_cmd6(fd, 0x1B, 0x01, why, sizeof(why)))     // START STOP UNIT: start
+		phys_log("DVD_PHYS: eject: START UNIT failed on %s (%s), continuing", dev, why);
+	if (sg_cmd6(fd, 0x1B, 0x02, why, sizeof(why)))     // START STOP UNIT: LoEj
+	{
+		phys_log("DVD_PHYS: eject: the drive refused the eject command too on %s (%s)", dev, why);
+		return -1;
+	}
+	phys_log("DVD_PHYS: eject: tray opened on %s (direct SCSI eject)", dev);
+	return 0;
+}
+
 void dvd_phys_note_mount(const char *path, unsigned char index)
 {
 	if (!path || index != 0) return;   // the drive only ever binds slot 0
@@ -262,12 +449,25 @@ void dvd_phys_tick(void)
 		return;
 	}
 
+	// ★ Never let the kernel lock the tray -- see drive_never_lock(). On EVERY
+	// ready scan, not once: it must land before the mount below opens the drive,
+	// and it is a flag write with no I/O, so repeating it costs nothing.
+	drive_never_lock(fd);
+
 	// An insertion edge clears the "somebody else has the slot" latch: putting a
 	// disc in is a deliberate act, and the auto-mount is the only way to play one.
 	// A disc that was ALREADY sitting in the drive does not get to take the slot
 	// back from an image the user asked for. Drive READINESS is the edge, not the
 	// verdict, so this costs one ioctl and reads nothing off the disc.
-	if (!prev_ready) { foreign = 0; probed_unrecognized = 0; }
+	if (!prev_ready)
+	{
+		foreign = 0; probed_unrecognized = 0;
+		// Release a lock somebody else's handle may already hold (the flag
+		// cleared above only stops NEW locks). This one IS a command to the drive,
+		// which is why it runs once per insertion rather than once a second.
+		ioctl(fd, CDROM_LOCKDOOR, 0);
+		log_drive_identity(fd, dev);
+	}
 	prev_ready = 1;
 
 	// ⚠ Every reason not to mount is checked BEFORE dvd_video_probe(), which is
@@ -399,8 +599,15 @@ int dvd_phys_eject(void)
 		{
 			ioctl(fd, CDROM_LOCKDOOR, 0);            // a playing disc may be locked
 			if (ioctl(fd, CDROMEJECT, 0) < 0)
-				phys_log("DVD_PHYS: eject: tray would not open on %s (errno %d)",
-				         dev, errno);
+			{
+				// Not the end: the kernel refuses for reasons the drive never
+				// hears about. See eject_scsi().
+				int e = errno;
+				phys_log("DVD_PHYS: eject: CDROMEJECT refused on %s (errno %d) -- "
+				         "asking the drive directly", dev, e);
+				if (e == EBUSY) log_drive_holders(dev);
+				eject_scsi(fd, dev);
+			}
 			else
 				phys_log("DVD_PHYS: eject: tray opened on %s", dev);
 			close(fd);
