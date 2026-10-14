@@ -123,7 +123,9 @@ See [Physical discs](../formats/physical-discs.md).
 ### The disc will not eject
 
 Both **Eject** (B19) and the drive's own button should work at any time, including during
-playback. If neither does, the player wrote what happened to `/tmp/dvd_report.log`:
+playback. On some drives the button only starts working a few seconds after a disc goes in,
+so wait a moment and press it again. If neither works, the player wrote what happened to
+`/tmp/dvd_report.log`:
 
 - A `DVD_PHYS: drive ...` line, written when the disc went in. It names the drive, its USB
   adapter and speed, and whether the drive says it `can open tray` and `can lock`.

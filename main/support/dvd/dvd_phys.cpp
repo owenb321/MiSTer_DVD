@@ -155,26 +155,44 @@ static int open_ready_drive(char *out, int out_sz)
 // Everything below exists because the rig's drive is one drive. What it does
 // not exercise, a user's drive will. See docs/physical_disc.md "Drive compatibility".
 
-// ★ THE KERNEL LOCKS THE TRAY WHILE WE PLAY. Any open of /dev/srN WITHOUT
-// O_NONBLOCK runs the cdrom layer's open-for-data path, which sends PREVENT
-// MEDIUM REMOVAL whenever the drive's CDO_LOCK option is set -- and register_cdrom()
-// sets it from the dev.cdrom.lock sysctl, default 1. libdvdcss, the raw fallback
-// and the VCD source all open that way, so from the mount to the teardown the
-// drive's own button was dead (the lock is dropped only when the LAST handle
-// closes). The rig never showed it: its slim USB drive ignores PREVENT, and its
-// button ejects mid-play. A drive that obeys the lock -- a desktop or slot-loading
-// drive behind a USB adapter that passes the command through -- cannot be
-// ejected by hand once the core holds the disc.
+// ★ NOTHING MAY KEEP THE TRAY LOCKED WHILE THE DVD CORE OWNS THE DRIVE. Two
+// things lock it, and the second is the one that matters on MiSTer:
 //
-// Clearing CDO_LOCK makes every drive behave like the rig's. That is safe because
-// a disc vanishing mid-read is already a handled, HW-tested path (the tick below
-// tears down to idle; dvd_readahead.cpp leaves gaps so the probe sees it).
-// ⚠ Per drive, not the global sysctl: the sysctl is applied only at registration,
-// so a drive plugged in after a write to it would lock again, and it would change
-// the machine for every other core. Clearing is a flag write with no I/O.
+//  1. The kernel. Any open of /dev/srN WITHOUT O_NONBLOCK (libdvdcss, the raw
+//     fallback, the VCD source) sends PREVENT MEDIUM REMOVAL while the drive's
+//     CDO_LOCK option is set, which register_cdrom() takes from dev.cdrom.lock
+//     (default 1), and drops it only when the LAST handle closes.
+//  2. udev. MiSTer's stock 60-cdrom_id.rules runs `cdrom_id --lock-media` on
+//     EVERY media change. That clears CDO_LOCK (so 1 never fires once udev has
+//     seen the drive) and then locks the tray itself with CDROM_LOCKDOOR(1),
+//     "to enable eject request events": a locked drive turns a button press
+//     into an eject REQUEST, and the same rule answers it with
+//     `cdrom_id --eject-media`. That works only on a drive that REPORTS eject
+//     requests (GET EVENT STATUS NOTIFICATION; /sys/block/srN/events lists
+//     eject_request). A drive or USB bridge that does not has a DEAD BUTTON for
+//     as long as a disc is in it.
+//
+// MEASURED on the second rig (LG GUD1N behind an Initio INIC-1618L, 2026-10-14):
+// after insertion the drive reports Lock State = 1 (MODE SENSE page 2A); with
+// udev's eject-request handling paused, the v0.9.1 Main played a disc and the
+// button did nothing. The first rig's button "worked" only because udev answered
+// its eject requests -- not, as first written here, because its drive ignores
+// PREVENT.
+//
+// So: clear CDO_LOCK (for 1, and for a system without udev) and send
+// CDROM_LOCKDOOR(0) on EVERY ready scan. Every scan, not once per insertion: udev
+// locks on its own schedule after a media change and would otherwise win the
+// race with the insertion edge. MEASURED cost on that drive, mid-playback: 1.3 ms
+// median, 13 ms max over 20 (the scan is already skipped while a read is in
+// flight). An unlocked drive's button ejects mechanically, whether or not it can
+// report a request, and a disc vanishing mid-read is the handled, HW-tested
+// teardown path below.
+// ⚠ Per drive, never the global sysctl: that is copied into a drive only at
+// registration, and udev clears the per-drive flag anyway.
 static void drive_never_lock(int fd)
 {
 	ioctl(fd, CDROM_CLEAR_OPTIONS, CDO_LOCK);
+	ioctl(fd, CDROM_LOCKDOOR, 0);
 }
 
 static void sysfs_str(const char *path, char *out, int out_sz)
@@ -455,9 +473,9 @@ void dvd_phys_tick(void)
 		return;
 	}
 
-	// ★ Never let the kernel lock the tray -- see drive_never_lock(). On EVERY
-	// ready scan, not once: it must land before the mount below opens the drive,
-	// and it is a flag write with no I/O, so repeating it costs nothing.
+	// ★ Never leave the tray locked -- see drive_never_lock(). On EVERY ready
+	// scan: it must land before the mount below opens the drive, and udev
+	// re-locks after each media change on its own schedule.
 	drive_never_lock(fd);
 
 	// An insertion edge clears the "somebody else has the slot" latch: putting a
@@ -468,10 +486,6 @@ void dvd_phys_tick(void)
 	if (!prev_ready)
 	{
 		foreign = 0; probed_unrecognized = 0;
-		// Release a lock somebody else's handle may already hold (the flag
-		// cleared above only stops NEW locks). This one IS a command to the drive,
-		// which is why it runs once per insertion rather than once a second.
-		ioctl(fd, CDROM_LOCKDOOR, 0);
 		log_drive_identity(fd, dev);
 	}
 	prev_ready = 1;

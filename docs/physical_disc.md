@@ -893,55 +893,83 @@ mirror on a sound disc:
 - list IFO sectors → the log line, and telemetry flags 000;
 - list an IFO sector **and** its BUP twin → `ifo_nogood` and the old behaviour.
 
-## Drive compatibility: the tray lock, the eject fallback, the identity line (2026-10-13, branch `feature/drive-compat`)
+## Drive compatibility: the tray lock, the eject fallback, the identity line (2026-10-13/14, PR #177)
 
 **Status:** host-gated (`main/tests/run_tests.sh --red`, `dvd_phys_test` [15]/[16]).
-✅ **HW on the rig (2026-10-13), A/B vs the installed Main:** with `sleep 120 < /dev/sr0`
-holding the drive during playback, Eject on the installed Main logged `tray would not open
-(errno 16)` and the tray stayed shut (control). On this branch it logged `CDROMEJECT refused
-(errno 16)`, then `held open by pid ... (sleep), 1 handle(s)` (no `that is US` line, so the
-eject's own fd was skipped), then `tray opened ... (direct SCSI eject)`, and the tray opened.
-`CDROM_SET_OPTIONS(0)` (a pure read) gave options `0x5`, so `CDO_LOCK` was cleared while
-`dev.cdrom.lock` stayed 1. The identity line read `Dell DVD+/-RW DW316 rev A1C3, USB 413c:9016
-... at 480 Mb/s, can open tray 1, can lock 1`. ⏳ Still open: the drive's own button on a
-drive that obeys the lock, which the rig cannot show (below).
+✅ **HW, two rigs, A/B vs the shipped v0.9.1 Main:**
+- **Second rig (LG GUD1N behind an Initio INIC-1618L bridge, v0.9.1 core), 2026-10-14.**
+  This is the reporter's case. udev's eject-request handling was paused
+  (`udevadm control --stop-exec-queue`) so that, like a drive that cannot report eject
+  requests, a button press got no answer. The drive was locked the way udev locks it.
+  - **v0.9.1 Main:** the drive reported Lock State 1 during playback, and the drive's button
+    did nothing (the maintainer pressed it).
+  - **This branch:** the Main released the lock 6–8 s after the udev-style lock was applied,
+    because this drive's slow readiness check had backed the scan off to 10 s. The button then
+    opened the tray and the core went to idle (`disc removed while playing it`).
+- **First rig (Dell DW316), 2026-10-13, the eject fallback.** With `sleep 120 < /dev/sr0`
+  holding the drive during playback:
+  - **Installed Main:** logged `tray would not open (errno 16)`, and the tray stayed shut.
+  - **This branch:** logged `CDROMEJECT refused (errno 16)`, then
+    `held open by pid ... (sleep), 1 handle(s)`, then `tray opened ... (direct SCSI eject)`,
+    and the tray opened.
+- Both identity lines were correct, for example `HL-DT-ST DVDRAM GUD1N rev 1.01, USB
+  13fd:0840 "External" at 480 Mb/s, can open tray 1, can lock 1`.
 
 **Field report:** a slot-loading IDE drive on a USB adapter could not be ejected once the core
 was loaded, neither with the core's Eject nor with the drive's own button. No logs. Rather
 than chase one drive, this removes three assumptions that held only because the rig's drive
-(a Dell DW316 slim USB drive) happened to satisfy them. All three live in
-`main/support/dvd/dvd_phys.cpp`, so no new `apply_integration.py` step.
+happened to satisfy them. All three live in `main/support/dvd/dvd_phys.cpp`, so there is no
+new `apply_integration.py` step.
 
-### 1. The kernel locked the tray for the whole session
+### 1. udev locks the tray on every insertion, and only some drives can get past it
 
-Linux `drivers/cdrom/cdrom.c` (checked against v5.15, the rig's `5.15.1-MiSTer`):
-`open_for_data()`, the path for any open WITHOUT `O_NONBLOCK`, sends PREVENT MEDIUM
-REMOVAL when the drive's `CDO_LOCK` option is set, and `register_cdrom()` sets that option
-from the `dev.cdrom.lock` sysctl (default 1; 1 on the rig). The lock is dropped only in
-`cdrom_release()` when the LAST handle closes. libdvdcss, the no-libdvdcss raw fallback and
-the VCD source all open without `O_NONBLOCK`, so from the mount to the teardown the tray was
-locked. A drive that obeys PREVENT then ignores its own button.
+Two things lock the tray. The first one written down here was the minor one.
 
-The rig never showed this: its drive's button ejects mid-playback (that is what the
-read-ahead's idle gaps were tuned against, `dvd_readahead.cpp`). So either the drive or its
-built-in bridge ignores PREVENT. A desktop or slot-loading drive behind an adapter that passes
-the command through will obey it. A slot-loader has no tray to pull and usually no
-emergency-release hole either.
+- **udev (what actually locks it on MiSTer).** The stock `/lib/udev/rules.d/60-cdrom_id.rules`
+  (systemd 243 on the MiSTer image) runs `cdrom_id --lock-media` on every media change.
+  `media_lock()` in `cdrom_id.c` first clears the kernel's `CDO_LOCK` ("disable the kernel's
+  lock logic"), then locks the tray itself with `CDROM_LOCKDOOR(1)`. The rule says this is
+  "to enable eject request events". A locked drive turns a button press into an eject
+  REQUEST (GET EVENT STATUS NOTIFICATION, `/sys/block/srN/events` = `eject_request`), and
+  the same rule answers it with `cdrom_id --eject-media`, which unlocks and sends START STOP
+  UNIT LoEj. **A drive or bridge that does not report eject requests therefore has a dead
+  button for as long as a disc is in it, on any core.** udev's lock outlives every handle,
+  because `CDROM_LOCKDOOR(1)` sets `keeplocked` and `cdrom_release()` then leaves the tray
+  locked.
+- **The kernel.** `open_for_data()` in `drivers/cdrom/cdrom.c` (v5.15, the rig's
+  `5.15.1-MiSTer`) sends PREVENT on any open without `O_NONBLOCK` while `CDO_LOCK` is set,
+  which `register_cdrom()` takes from `dev.cdrom.lock` (default 1). libdvdcss, the raw
+  fallback and the VCD source all open that way. Once udev has run on a drive this never
+  fires, because udev cleared the flag (`.201` read options `0x5` before our Main ever ran
+  there). It still applies to a system without the rule.
 
-**Fix:** `drive_never_lock()` issues `CDROM_CLEAR_OPTIONS(CDO_LOCK)` on every ready scan
-(a flag write in the kernel, no I/O), which always precedes the mount. On each insertion edge
-the tick also sends one `CDROM_LOCKDOOR(0)` to release a lock another handle already holds.
-That one is a real command, so it is not sent once a second. Every drive then behaves like
-the rig's, and a disc pulled mid-read is the existing, HW-tested teardown path.
+⚠ **Correction:** the first draft of this section said the first rig's Dell button worked
+mid-play because "the drive ignores PREVENT". That was never measured. Both rigs run the same
+udev rule and both drives report `eject_request`, so udev most likely answered the press. The
+read-ahead's idle gaps (`dvd_readahead.cpp`) were tuned against that same path.
+
+**Fix:** `drive_never_lock()` sends `CDROM_CLEAR_OPTIONS(CDO_LOCK)` (a flag write, no I/O) and
+`CDROM_LOCKDOOR(0)` on **every ready scan**. That is root, so the multi-handle `EBUSY` is
+waived, and it clears `keeplocked`. An unlocked drive's button ejects mechanically, whether
+or not it can report a request. A disc that disappears mid-read takes the existing
+teardown path, which has been tested on hardware.
+- **Cost:** one ALLOW MEDIUM REMOVAL per scan, measured mid-playback on the second rig at
+  1.3 ms median and 13 ms max over 20. The scan is already skipped while a read is in flight.
+- **Latency:** after udev re-locks on an insertion, the Main releases it at its next scan,
+  normally within 1 s. It takes up to `DVD_PHYS_SCAN_MAX_S` (10 s) on a drive whose readiness
+  check is slow enough to back the scan off; the GUD1N's took 150–260 ms. For that long after
+  insertion, the button is dead on a drive that cannot report eject requests.
 
 **Rejected:**
-- *Write 0 to `/proc/sys/dev/cdrom/lock` at Main start.* The sysctl is copied into a drive's
-  options only at registration, so a drive plugged in after the write locks again. It also
-  changes the machine for every other core, and it would need a new integration hook into
-  stock Main.
-- *`CDROM_LOCKDOOR(0)` after each data open.* That needs a call at three open sites in three
-  modules (`dvd_css.cpp` twice, `dvd_vcd.cpp`) and misses any future one. Clearing the
-  option before the mount covers every open, including libdvdcss's internal one.
+- *Unlock once, at the insertion edge* (this branch's first version). It races udev, which
+  locks on its own schedule after the media-change event and usually after our edge. The
+  second rig showed udev's lock surviving the edge. Mutation arm `phys-unlock-once`.
+- *Remove or override udev's `--lock-media` rule.* That edits a system file, changes every
+  core, and needs an install step.
+- *Write 0 to `/proc/sys/dev/cdrom/lock`.* It doesn't touch udev's lock at all, it is copied
+  into a drive only at registration, and it changes the machine for every other core.
+- *`CDROM_LOCKDOOR(0)` after each data open only.* That misses udev's lock, which can arrive
+  at any time after a media change.
 
 ### 2. The core's Eject stopped at the kernel's refusal
 
@@ -977,14 +1005,11 @@ DVD's 10.08 Mb/s peak mux rate.
 
 ### Known limitations / next step
 
-- **The positive case is unverified, and the rig cannot verify it:** its drive does not obey
-  the lock. ⏳ The gate for flipping this to ✅ is a lock-honouring drive, ideally the
-  reporter's: with the new Main, the drive's own button
-  should work mid-play. On the rig, confirm only the control (normal Eject, button still fine)
-  and that the SG_IO fallback really ejects through this kernel. To force it: hold `/dev/sr0`
-  open from a shell (`sleep 60 < /dev/sr0 &`) and press Eject, which gives `EBUSY` → holder
-  line naming `sleep` → direct SCSI eject. Run the control arm first: the installed Main
-  under the same hold must log `tray would not open ... (errno 16)` and leave the tray shut.
+- **The reporter's own drive is untested.** The second rig reproduced its symptom by pausing
+  udev's eject-request handling, which is equivalent only if the reporter's drive is one
+  that cannot report eject requests. Their `DVD_PHYS: drive ...` line, together with whether
+  the button now works, settles it.
+- **Up to ~10 s after insertion** the button can still be dead on such a drive (latency, above).
 - With an image playing (not the drive's disc), Eject still does not touch the tray,
   unchanged.
 - **Seen in both HIL arms, pre-existing:** one `mister.py key eject` press logs TWO eject

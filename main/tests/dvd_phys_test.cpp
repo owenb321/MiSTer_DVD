@@ -408,10 +408,13 @@ int main(void)
     check("[15] the disc was mounted",                     mount_calls, 1);
     check("[15] kernel lock cleared before the mount",     clears_at_mount >= 1, 1);
     check("[15] a held lock released on the insertion",   unlock_calls >= 1, 1);
-    // Once per insertion, not once a second: LOCKDOOR is a command to the drive.
-    int u = unlock_calls;
+    // udev locks the tray after EVERY media change (cdrom_id --lock-media), on
+    // its own schedule, so an unlock at the insertion edge alone loses that race.
+    // Every ready scan must release it again while the disc sits there.
+    int u = unlock_calls, s0 = scan_calls;
     run_for(NOTICE_WINDOW_S);
-    check("[15] ...and not again while it sits there",     unlock_calls, u);
+    check("[15] udev's lock released on every scan",       unlock_calls - u, scan_calls - s0);
+    check("[15] ...and there were scans to release it on", scan_calls - s0 >= 3, 1);
 
     // ---------------------------------------------------------------- [16]
     // CDROMEJECT is refused by the kernel before the drive hears of it (ENOSYS

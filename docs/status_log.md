@@ -22,34 +22,42 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **DRIVE COMPATIBILITY: NO TRAY LOCK, EJECT FALLBACK, DRIVE IDENTITY LINE (2026-10-13,
-  branch `feature/drive-compat`; host-gated; ✅ rig A/B for the fallback, lock flag and
-  identity line; ⏳ the button on a lock-honouring drive).**
-  - **Rig A/B (vs the installed Main, drive held open by `sleep`):** control = `errno 16`,
-    tray shut. Branch = holder named (`sleep` only), `direct SCSI eject`, tray opened;
-    drive options `0x5` (`CDO_LOCK` off, sysctl still 1); identity line correct.
+- 🔧 **DRIVE COMPATIBILITY: NO TRAY LOCK, EJECT FALLBACK, DRIVE IDENTITY LINE (2026-10-13/14,
+  PR #177; ✅ HW A/B on two rigs vs the v0.9.1 Main; ⏳ the reporter's own drive).**
   - **Field report:** a slot-loading IDE drive on a USB adapter could not be ejected once the
     core was loaded, neither with the core's Eject nor with the drive's button. No logs.
-  - **Cause (general, not this drive):** the kernel locks the tray on every non-`O_NONBLOCK`
-    open while the drive's `CDO_LOCK` option is set (`dev.cdrom.lock`, default 1), and
-    libdvdcss opens that way, so the tray stayed locked from mount to teardown. The rig's Dell
-    DW316 ignores PREVENT (its button ejects mid-play), so the rig could never show it.
-    Separately, `CDROMEJECT` is refused by the kernel before the drive hears of it on
-    `ENOSYS` (misreported mechanism), `EBUSY` (another handle) or a rejected ALLOW.
-  - **Fix (`main/support/dvd/dvd_phys.cpp`):** `CDROM_CLEAR_OPTIONS(CDO_LOCK)` on every ready
-    scan plus one `CDROM_LOCKDOOR(0)` per insertion; on a refused `CDROMEJECT`, the util-linux
-    `eject(1)` SG_IO fallback (ALLOW, START, LoEj), with the holding pids named on `EBUSY`; one
-    `DVD_PHYS: drive ...` line per insertion (vendor/model/fw, USB id and speed, kernel's
-    can-open/can-lock).
-  - **Gates:** `main/tests/run_tests.sh --red`: `dvd_phys_test` [15] lock cleared before the
-    mount, [16] fallback on `ENOSYS` and `EBUSY` + control; arms `phys-lock-left-on`,
-    `phys-eject-no-fallback`, `phys-eject-not-loej`.
-  - **Next:** HW. The rig can confirm the control and the SG_IO eject (hold `/dev/sr0` open
-    from a shell to force `EBUSY`; control arm = the installed Main under the same hold). The
-    ⏳ → ✅ gate is NOT the rig: its drive ignores the lock, so the positive case needs a
-    lock-honouring drive (the reporter's). The manual already says the button works mid-play,
-    so this must clear before a release ships those pages. Full
-    design and rejected alternatives: `docs/physical_disc.md` "Drive compatibility".
+  - **Cause (found on the second rig, after a wrong first theory):** MiSTer's stock udev rule
+    `60-cdrom_id.rules` runs `cdrom_id --lock-media` on every media change. It locks the tray
+    itself (`CDROM_LOCKDOOR(1)`, and clears the kernel's `CDO_LOCK`) and relies on the drive
+    to report the button as an eject REQUEST, which the rule then answers. A drive or bridge
+    that cannot report eject requests has a dead button while a disc is in. ⚠ The first
+    theory blamed the kernel's open-for-data lock and said the rig's Dell "ignores PREVENT".
+    Both were wrong for MiSTer: udev clears `CDO_LOCK`, and udev answered the Dell's
+    requests. Separately, the kernel refuses `CDROMEJECT` before the drive hears of it on
+    `ENOSYS`, `EBUSY` or a rejected ALLOW.
+  - **Fix (`main/support/dvd/dvd_phys.cpp`):**
+    - `CDROM_CLEAR_OPTIONS(CDO_LOCK)` + `CDROM_LOCKDOOR(0)` on EVERY ready scan (1.3 ms median
+      measured), so udev's lock never sticks. An insertion-edge-only unlock lost the race.
+    - On a refused `CDROMEJECT`, util-linux `eject(1)`'s SG_IO fallback (ALLOW, START, LoEj),
+      naming the holding pids on `EBUSY`.
+    - One `DVD_PHYS: drive ...` identity line per insertion.
+  - **HW:**
+    - **Second rig (LG GUD1N + Initio bridge, v0.9.1 core).** With udev's eject handling
+      paused and the drive udev-locked: v0.9.1 Main, the button did nothing (Lock State 1).
+      This branch released the lock within one scan (≤10 s, slow probe), then the button
+      opened the tray and the core went to idle.
+    - **First rig.** With the drive held open by `sleep`: installed Main gave `errno 16`, tray
+      shut; this branch named the holder, ejected through the direct SCSI fallback, and
+      opened the tray.
+  - **Gates:** `main/tests/run_tests.sh --red`:
+    - `dvd_phys_test` [15]: lock cleared before the mount, and released on every scan.
+    - `dvd_phys_test` [16]: fallback on `ENOSYS` and `EBUSY`, plus a control where
+      `CDROMEJECT` works.
+    - Mutation arms `phys-lock-left-on`, `phys-unlock-once`, `phys-eject-no-fallback`,
+      `phys-eject-not-loej`.
+  - **Next:** the reporter's drive with the PR's Main. Their identity line plus whether the
+    button works settles whether theirs is a no-eject-request drive. Design:
+    `docs/physical_disc.md` "Drive compatibility".
 
 - ✅ **LINE-21 CAPTIONS: THE FIELD IS THE ENTRY'S POSITION, NOT ITS MARKER (issue #166,
   2026-10-10, ✅ MERGED PR #175; sim-proven, ✅ HW-CONFIRMED by eye on a TV).**

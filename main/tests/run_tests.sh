@@ -103,6 +103,14 @@ if [ "$RED" -eq 1 ]; then
         "s/^\tdrive_never_lock(fd);$/\t;/" \
         phys-lock-left-on
 
+    # The unlock sent only once per insertion: udev's cdrom_id --lock-media
+    # re-locks after the edge, and a drive that cannot report eject requests
+    # keeps a dead button for the whole session (the second rig, 2026-10-14).
+    red_case dvd_phys.cpp dvd_phys_test.cpp \
+        "udev's lock released on every scan" \
+        "s/^\tioctl(fd, CDROM_LOCKDOOR, 0);$/\tif (!prev_ready) ioctl(fd, CDROM_LOCKDOOR, 0);/" \
+        phys-unlock-once
+
     # A refused CDROMEJECT is the end of it: ENOSYS (a drive that misreports its
     # mechanism) and EBUSY (another handle) never reach the drive.
     red_case dvd_phys.cpp dvd_phys_test.cpp \
