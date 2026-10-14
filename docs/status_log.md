@@ -41,7 +41,10 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     mount, [16] fallback on `ENOSYS` and `EBUSY` + control; arms `phys-lock-left-on`,
     `phys-eject-no-fallback`, `phys-eject-not-loej`.
   - **Next:** HW. The rig can confirm the control and the SG_IO eject (hold `/dev/sr0` open
-    from a shell to force `EBUSY`). The positive case needs a lock-honouring drive. Full
+    from a shell to force `EBUSY`; control arm = the installed Main under the same hold). The
+    ⏳ → ✅ gate is NOT the rig: its drive ignores the lock, so the positive case needs a
+    lock-honouring drive (the reporter's). The manual already says the button works mid-play,
+    so this must clear before a release ships those pages. Full
     design and rejected alternatives: `docs/physical_disc.md` "Drive compatibility".
 
 - ✅ **LINE-21 CAPTIONS: THE FIELD IS THE ENTRY'S POSITION, NOT ITS MARKER (issue #166,

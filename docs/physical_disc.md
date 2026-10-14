@@ -970,15 +970,23 @@ DVD's 10.08 Mb/s peak mux rate.
 
 ### Known limitations / next step
 
-- **The positive case is unverified:** the rig's drive does not obey the lock. ⏳ Needs a
-  lock-honouring drive, ideally the reporter's: with the new Main, the drive's own button
+- **The positive case is unverified, and the rig cannot verify it:** its drive does not obey
+  the lock. ⏳ The gate for flipping this to ✅ is a lock-honouring drive, ideally the
+  reporter's: with the new Main, the drive's own button
   should work mid-play. On the rig, confirm only the control (normal Eject, button still fine)
   and that the SG_IO fallback really ejects through this kernel. To force it: hold `/dev/sr0`
   open from a shell (`sleep 60 < /dev/sr0 &`) and press Eject, which gives `EBUSY` → holder
-  line naming `sleep` → direct SCSI eject.
+  line naming `sleep` → direct SCSI eject. Run the control arm first: the installed Main
+  under the same hold must log `tray would not open ... (errno 16)` and leave the tray shut.
 - With an image playing (not the drive's disc), Eject still does not touch the tray,
   unchanged.
 - The support bundle does not carry `/tmp/dvd_report.log`. A reporter has to copy it by hand.
+- **The fallback blocks the poll thread** for as long as the drive takes to answer: three
+  commands at a 10 s timeout each, so ~30 s worst case on a drive that hangs, with OSD and
+  input dead meanwhile. The same timeout as util-linux. It runs only after a refused
+  `CDROMEJECT`, when the core has already been reset to idle, so no playback is lost.
+- The `EBUSY` holder walk skips the eject's own descriptor; any `-- that is US` line is a
+  real leak.
 
 ## Drive region tool (`main/Scripts/set_dvd_region.sh`)
 

@@ -238,8 +238,11 @@ static void log_drive_identity(int fd, const char *dev)
 
 // CDROMEJECT refuses with EBUSY while any other handle is open. Name them: a
 // leaked handle of our own and another program on the machine need different
-// fixes, and only the pid list tells them apart.
-static void log_drive_holders(const char *dev)
+// fixes, and only the pid list tells them apart. `own_fd` is the eject's own
+// handle, which is open while this runs and must not be reported as a holder --
+// otherwise every EBUSY would read "that is US" and send someone after a leak
+// that does not exist.
+static void log_drive_holders(const char *dev, int own_fd)
 {
 	char want[PATH_MAX];
 	if (!realpath(dev, want)) return;
@@ -250,6 +253,7 @@ static void log_drive_holders(const char *dev)
 	while ((e = readdir(d)))
 	{
 		if (e->d_name[0] < '0' || e->d_name[0] > '9') continue;
+		int is_us = atoi(e->d_name) == (int)getpid();
 		char fdir[300];
 		snprintf(fdir, sizeof(fdir), "/proc/%s/fd", e->d_name);
 		DIR *fds = opendir(fdir);
@@ -263,7 +267,9 @@ static void log_drive_holders(const char *dev)
 			ssize_t k = readlink(lnk, tgt, sizeof(tgt) - 1);
 			if (k <= 0) continue;
 			tgt[k] = 0;
-			if (!strcmp(tgt, want)) n++;
+			if (strcmp(tgt, want)) continue;
+			if (is_us && atoi(f->d_name) == own_fd) continue;
+			n++;
 		}
 		closedir(fds);
 		if (!n) continue;
@@ -271,7 +277,7 @@ static void log_drive_holders(const char *dev)
 		snprintf(cp, sizeof(cp), "/proc/%s/comm", e->d_name);
 		sysfs_str(cp, comm, sizeof(comm));
 		phys_log("DVD_PHYS: eject: %s is held open by pid %s (%s), %d handle(s)%s",
-		         dev, e->d_name, comm, n, atoi(e->d_name) == (int)getpid() ? " -- that is US" : "");
+		         dev, e->d_name, comm, n, is_us ? " -- that is US" : "");
 		found = 1;
 	}
 	closedir(d);
@@ -605,7 +611,7 @@ int dvd_phys_eject(void)
 				int e = errno;
 				phys_log("DVD_PHYS: eject: CDROMEJECT refused on %s (errno %d) -- "
 				         "asking the drive directly", dev, e);
-				if (e == EBUSY) log_drive_holders(dev);
+				if (e == EBUSY) log_drive_holders(dev, fd);
 				eject_scsi(fd, dev);
 			}
 			else
