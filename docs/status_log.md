@@ -80,6 +80,10 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     the window end. HW (second rig): first shootout 34.9/37.0 s hit, 37.3 s miss; the
     ring bottoms at 4 frames at the join, where it used to hit 0. ⏳ The saloon by ear
     (maintainer).
+  - **Regression 3, maintainer play-test on VTS 15 (`dev-cellcmdhold5`):** a 0.93 s
+    window after a PTS restart armed 0.81 s late (the ~1 s fallback; the hold had removed
+    the parse lead that hid it). Fix: a scoring window committed with the clock past its
+    start arms at once. Gate: `nav_pci_early_tb` g + N7.
   - **Next:** the maintainer's play-test, then the PR. Not yet run on HW: a loop disc such as Fairytopia, which is unchanged by
     construction because a fixed command is never held (bench P2), and Mad Dog II /
     Crime Patrol by hand. Design notes: `docs/dvd_nav.md` "A cell command with buttons

@@ -7,7 +7,7 @@
 #          iso_reader_celldur_tb, iso_reader_vm_tb, iso_reader_auddrain_tb,
 #          iso_reader_stilloff_tb
 #        + nav_pci_early_tb (a scoring window arms EARLY_LEAD before its start;
-#          arms a-f)
+#          arms a-g)
 #        + tools/check_cmd_hold_wiring.py --red (the emu.sv seam: .cc_btns is
 #          nav_pci's armed | pend, .vbuf_empty is the low-water mark, nav_pci
 #          .early_ok is the reader's .cc_scoring)
@@ -40,7 +40,10 @@
 #     N3 links-ok     : a linking button still set-only        -> c
 #     N4 no-set-ok    : an all-Nop HLI counts as set-only      -> d
 #     N5 no-guard     : a later same-timeline window leads too -> e
-#     N6 unsigned     : the guard's compare unsigned           -> f
+#     N6 unsigned     : the guard's compare unsigned           -> f g
+#                       (g commits a restarted PTS over an armed window)
+#     N7 no-restart   : a scoring window committed on the old  -> g
+#                       clock waits for the ~1 s fallback
 #
 # Usage: bench/dvd/run_cmd_hold.sh [--red]
 set -u
@@ -73,7 +76,7 @@ run vm       "ALL TESTS PASSED"     bench/dvd/iso_reader_vm_tb.sv $RD
 run auddrain "RESULT: PASS"         bench/dvd/iso_reader_auddrain_tb.sv $RD
 run stilloff "ISO_READER_STILLOFF_TB: ALL TESTS PASSED" bench/dvd/iso_reader_stilloff_tb.sv $RD
 run navearly "NAV_PCI_EARLY_TB: ALL TESTS PASSED" bench/dvd/nav_pci_early_tb.sv dvd/nav_pci.sv
-grep -E '^[a-f] PASS' "$OUT/navearly.log" | sed 's/^/    /'
+grep -E '^[a-g] PASS' "$OUT/navearly.log" | sed 's/^/    /'
 # emu.sv has no bench: the seam is read out of the file
 if python3 tools/check_cmd_hold_wiring.py --red > "$OUT/wiring.log" 2>&1; then
     echo "  PASS check_cmd_hold_wiring (+ its red self-test)"
@@ -131,7 +134,7 @@ if [ $RED -eq 1 ]; then
         fi
         timeout 300 vvp "$OUT/$name" > "$OUT/$name.log" 2>&1
         local got
-        got=$(grep -oE '^[a-f] FAIL' "$OUT/$name.log" | awk '{print $1}' | sort | tr '\n' ' ' | sed 's/ $//')
+        got=$(grep -oE '^[a-g] FAIL' "$OUT/$name.log" | awk '{print $1}' | sort | tr '\n' ' ' | sed 's/ $//')
         if grep -q "ALL TESTS PASSED" "$OUT/$name.log"; then got="(none)"; fi
         if [ "$got" = "$want" ]; then
             echo "  ok   $name -> fails [$got]"
@@ -144,7 +147,8 @@ if [ $RED -eq 1 ]; then
     nmutate N3_links_ok  "c"   "s/wire       f_setonly = f_sset && !f_slink;/wire       f_setonly = f_sset;/"
     nmutate N4_no_set_ok "d"   "s/wire       f_setonly = f_sset && !f_slink;/wire       f_setonly = !f_slink;/"
     nmutate N5_no_guard  "e"   "s/wire lead_blk_h = armed && h_so && \(\\\$signed\(f_sptm - h_sptm\) > 0\);/wire lead_blk_h = 1'b0;/"
-    nmutate N6_unsigned  "f"   "s/wire lead_blk_h = armed && h_so && \(\\\$signed\(f_sptm - h_sptm\) > 0\);/wire lead_blk_h = armed \&\& h_so \&\& ((f_sptm - h_sptm) != 32'd0);/"
+    nmutate N7_no_restart "g"   "s/\(\(nxt_pre && !nxt_dist_e\[31\]\) \|\| \(nxt_early && !nxt_pre\)\)/(nxt_pre \&\& !nxt_dist_e[31])/"
+    nmutate N6_unsigned  "f g" "s/wire lead_blk_h = armed && h_so && \(\\\$signed\(f_sptm - h_sptm\) > 0\);/wire lead_blk_h = armed \&\& h_so \&\& ((f_sptm - h_sptm) != 32'd0);/"
 fi
 
 if [ $fail -eq 0 ]; then echo "run_cmd_hold: PASS"; else echo "run_cmd_hold: FAIL"; exit 1; fi

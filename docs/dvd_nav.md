@@ -5341,6 +5341,20 @@ anything written behind it. Three `keys` Rights pushed a Select written at 36.2 
 ~36.3 s, so the first control runs scored the harness, not the core. The tool uses single
 `key <code> 30` taps, and the trap is in the hil-testing skill.
 
+**A third: a sub-second window after a PTS restart could not be hit (2026-10-18).** In
+VTS 15 (the sheriff's office on another path), cell 1's window (target 19) is followed by
+cell 2, a 0.93 s cell whose window covers the whole cell (target 20) and whose PTS
+restarts. Cell 2's HLI commits while the clock still reads cell 1's timeline, so it is
+not schedulable (`nxt_pre` = 0) and only `nav_pci`'s ~1 s fallback was left. Before the
+hold, a ~1.2 s parse lead made that fallback fire just before cell 2 appeared, by
+accident. With the hold the reader reaches cell 2 only ~0.2 s ahead, so the window armed
+0.81 s into its 0.93 s life. That figure comes from replaying the disc's real NAV
+packets through `nav_pci`, with a scratch session model of the display clock and parse
+lead. Fix: a scoring window committed with the clock already past its start
+(`nxt_early && !nxt_pre`) arms at once, which is libdvdnav's read-time behaviour. A later
+window of the same cell never qualifies (`lead_blk_h`). Gate: `nav_pci_early_tb` g +
+N7; with the fix, cell 2 arms ~0.19 s before it appears.
+
 **A second regression the hold caused: the gunshot after a hit went silent (2026-10-13).**
 The maintainer reported missing gunshots in the saloon, and their recording made it
 measurable: 2 s of exact digital zero after most hits, with the picture playing on (VTS 3
@@ -5436,9 +5450,11 @@ which command a press at a display time fires:
 - (c) a linking button: arms at `s_ptm`;
 - (d) an all-Nop highlight: arms at `s_ptm`;
 - (e) a later window of the same cell waits for its own start;
-- (f) the next cell's window gets the lead after PTS restarts.
+- (f) the next cell's window gets the lead after PTS restarts;
+- (g) a restarted-PTS window committed on the old clock arms at once (regression 3 below).
 
-Six mutations, N1–N6, each fail exactly their own arm. `run_hli_window.sh --red`
+Seven mutations, N1–N7, each fail exactly their own arms (N6, the unsigned guard, also
+fails g, which commits a restarted PTS over an armed window). `run_hli_window.sh --red`
 (Scooby-Doo whack-a-mole + `nav_pci_tb`, all mutations) is unchanged and green with the
 lead tied off. `check_cmd_hold_wiring.py --red` gates `nav_pci .early_ok` = reader
 `.cc_scoring`.

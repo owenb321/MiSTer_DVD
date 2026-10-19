@@ -454,7 +454,17 @@ wire stc_trusted = (stc_fresh || settled_seen) && hli_coherent;
 // covering the stale-timeline case exactly as before.
 wire [31:0]        nxt_lead   = nxt_early ? EARLY_LEAD : 32'd0;
 wire signed [31:0] nxt_dist_e = stc[31:0] - (nxt_sptm - nxt_lead);
-wire nxt_sched = nxt_v && nxt_pre && !nxt_dist_e[31] && stc_trusted;
+// ★ A SCORING WINDOW COMMITTED WITH THE CLOCK ALREADY PAST ITS START ARMS AT ONCE
+// (2026-10-18, Mad Dog VTS 15: a 0.93 s window could not be hit). That is the
+// signature of a NEW CELL WHOSE PTS RESTARTED: the clock still reads the previous
+// cell's timeline, so the scheduled path cannot place the window (nxt_pre = 0) and
+// only the ~1 s fallback was left -- after the cell-command hold the reader reaches
+// the next cell only ~0.2 s ahead of the display, so a sub-second window was over
+// before the fallback fired (before the hold, a ~1.2 s parse lead hid it). libdvdnav
+// answers such a window from the read of its NAV pack; so does this. A later window
+// of the SAME cell never gets here: lead_blk_h keeps nxt_early low for it.
+wire nxt_sched = nxt_v && stc_trusted &&
+                 ((nxt_pre && !nxt_dist_e[31]) || (nxt_early && !nxt_pre));
 // FALLBACK promotion: an armed pending that has waited > PROMOTE_FALLBACK with
 // video live but the STC never became due (keep_vbuf STC/parse-front skew).
 // Only for a real ARM (buttons present) so an ss=0-style empty pending doesn't

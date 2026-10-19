@@ -21,6 +21,9 @@
 //       armed window keeps answering until the later one's own S
 //   (f) an EARLIER-timeline window (a new cell restarts PTS) while one is armed:
 //       gets the lead
+//   (g) Mad Dog VTS 15: the next cell's 0.93 s window (PTS restarted, start 0.108 s)
+//       commits while the clock still reads the OLD cell's timeline (~4 s): it must
+//       answer at once, not after the ~1 s fallback (the window would be over)
 //
 // Run: bench/dvd/run_cmd_hold.sh (green + mutations)
 
@@ -140,7 +143,8 @@ module nav_pci_early_tb;
     endtask
 
     localparam [31:0] S = 32'd900_000;          // the window opens at 10 s
-    logic a_ok, b_ok, c_ok, d_ok, e_ok, f_ok;
+    logic a_ok, b_ok, c_ok, d_ok, e_ok, f_ok, g_ok;
+    integer k;
     int e0;
 
     initial begin
@@ -208,6 +212,22 @@ module nav_pci_early_tb;
         expect_cmd("f", "inside the new cell's lead", C_G23);
         f_ok = (errors == e0);
         $display("f %s: the next cell's window (PTS restarted) gets the lead", f_ok ? "PASS" : "FAIL");
+
+        // ---------- (g) the next cell's window commits on the OLD clock ----------
+        reset_dut; e0 = errors;
+        early_ok <= 1; stc <= {1'b0, 32'd180_000};
+        build(2'd1, 32'd270_000, C_G21, C_NOP, C_NOP); feed;      // cell 1: 3 s window
+        press_at(32'd300_000);  expect_cmd("g", "cell 1's window armed", C_G21);
+        // the reader reaches cell 2 while the display is at ~3.9 s of cell 1
+        stc <= {1'b0, 32'd351_000};
+        build(2'd1, 32'd9_720, C_G22, C_NOP, C_NOP); feed;        // cell 2: PTS restarts
+        repeat (200) @(posedge clk);
+        nav_act <= 1; @(posedge clk); nav_act <= 0;
+        fired = 64'd1;
+        for (k = 0; k < 10; k++) begin @(posedge clk); if (btn_cmd_valid) fired = btn_cmd; end
+        expect_cmd("g", "cell 2's window must answer at once (before the re-anchor)", C_G22);
+        g_ok = (errors == e0);
+        $display("g %s: a restarted-PTS scoring window arms at its commit", g_ok ? "PASS" : "FAIL");
 
         if (errors == 0) $display("NAV_PCI_EARLY_TB: ALL TESTS PASSED");
         else             $fatal(1, "NAV_PCI_EARLY_TB: FAILED with %0d errors", errors);
