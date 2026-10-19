@@ -1628,4 +1628,7 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # version string. SEED 17 held FIRST roll: clk_dec 89.06/87.83, clk_mem 92.77/96.50
 # (@100C / @-40C). 38,535 / 41,910 ALMs (92 %), 528 / 553 M10K, 91 / 112 DSP.
 # clock_check PASS (0 fail, 0 warn). Build releases/DVD_20261011.rbf.
-set_global_assignment -name SEED 17
+# fix/cell-cmd-display (issue #176, dev-cellcmdhold5): SEED 17 fell to clk_dec 86.89/83.24
+# (below the 86 gate); SEED 7 first in the sweep: clk_dec 91.66/87.41, clk_mem
+# 102.69/103.42. Re-sweep at the merge: main's netlist will differ.
+set_global_assignment -name SEED 7
