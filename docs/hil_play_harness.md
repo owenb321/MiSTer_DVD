@@ -204,6 +204,18 @@ confusing timeout.
   - The scan script and frame grabs live in `tools/streams/hil_runs/purple_blip/`
     (gitignored).
 
+- **Verification of the #176 fix chain, run by the harness on hold7–hold12.** One
+  change per build.
+  - hold7: `EARLY_LEAD` removed and the re-judge added.
+  - hold8: `dur_hold` drains first. The saloon and VTS 15 junctions are clean.
+  - hold9: `cc_aud_low` release off. Silence does not come back, and 37.3 now hits.
+    The run exposed a re-judge race: X0 sampled the STC mirror before the re-anchor.
+  - hold10: the re-judge waits 4095 cycles. 9/9 re-judges ok over 3 VTS 15 runs.
+  - hold11: the first purple-blip fix. Refuted, 4/9.
+  - hold12: an in-title menu's expired or early SPU unit stays hidden. 0/9 blips, the
+    reticle highlight still drawn, and Scene It's 6-button title-domain menu identical to
+    hold10 (art + highlight).
+
 Harness lessons from the same day:
 - **The Main's fast-telemetry log fills the board's `/tmp`.** It appends every 20 ms row
   to `/tmp/dvd_telem_fast.jsonl` on a 246 MB tmpfs. A day of runs filled it, after which
