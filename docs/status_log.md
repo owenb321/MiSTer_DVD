@@ -22,6 +22,25 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **HIL PLAY HARNESS, SLICE B: NAV EVENT FIFO (2026-10-22, `feature/hil-play-harness`,
+  sim-proven; ⏳ fit, ⏳ HIL).** `dvd/nav_trace.sv` is a 256 × 80-bit clk_sys FIFO of
+  timestamped navigation events. There are 16 sources: GPRM writes, STC jumps, key presses,
+  button activation, HLI promotion, cell/PGC changes, flushes, audio-ring-low,
+  pause/still/live/menu, and 3 spare hooks for issue #176's branch-only signals. Each entry
+  carries the STC and a free-running 90 kHz tick. Main drains it over EXT_BUS command 0x7C
+  into `/tmp/dvd_navtrace.jsonl`, but only under the fast-telemetry arm.
+  - **Deviation from the brief:** the entry is 80 bits, not 64. The STC stops, zeroes and
+    jumps, so a free tick was needed as well, and 256 × 80 is still 2 M10K.
+  - **Never silent:** FIFO-full drops and same-source merges are counted in the drain header
+    and logged as `LOST` lines.
+  - **Gates:** `bench/dvd/run_nav_trace.sh --red` (8 arms, 13 mutations, each failing
+    exactly its arm, plus 10 wiring mutations) and `main/tests/run_tests.sh --red`
+    (`dvd_ctl_test`, 4 RED cases).
+  - **Not verified:** no Quartus fit (estimated ~200–250 ALM + 2 M10K) and no board run.
+  - **Next:** fit, then a HIL drain on a menu disc.
+  - Design, event table, protocol and limits: `docs/hil_play_harness.md` "Nav event FIFO
+    (fabric)".
+
 - ✅ **DRIVE COMPATIBILITY: NO TRAY LOCK, EJECT FALLBACK, DRIVE IDENTITY LINE (2026-10-13/14,
   ✅ MERGED PR #177; ✅ HW A/B on two rigs vs the v0.9.1 Main; ✅ reporter confirmed).**
   - **Field report:** a slot-loading IDE drive on a USB adapter could not be ejected once the
