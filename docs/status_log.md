@@ -168,9 +168,12 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
   - **`dev-cellcmdhold12`:** `spu_decode.title_menu` (in-title menu only): an expired unit
     stays hidden and the early-decode guard applies; the windowless start is kept
     (`docs/subpicture.md`, arm [F], `check_spu_title_menu_wiring.py`).
-  - **Next:** the harness on `dev-cellcmdhold12` (the first shootout's junction, several
-    passes, purple score; plus a Scene It in-title menu if one is at hand, since its
-    subpicture path changed),
+  - **HIL on `dev-cellcmdhold12` (2026-10-23): passes.** The blip: 0 purple frames in 9
+    natural cell 1 -> 2 junctions (hold11: 4/9). The shootout's reticle highlight still draws
+    on the selected button and the shot hits; VTS 15's three shots hit. Scene It's 6-button
+    in-title main menu (VTS 3 PGC 18): art and highlight identical to hold10 (arm at
+    `late_ticks` 0, Select activates).
+  - **Next:** the maintainer's play-test of `dev-cellcmdhold12`,
     then the maintainer's play-test, then the PR. Not yet run on HW: a loop disc such as
     Fairytopia, which is unchanged by construction because a fixed command is never held
     (bench P2), and Mad Dog II / Crime Patrol by hand. Design notes: `docs/dvd_nav.md` "A

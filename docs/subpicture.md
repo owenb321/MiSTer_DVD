@@ -248,7 +248,7 @@ re-sends carry *increasing* PTS — so "just reuse the menu skip" is not a fix.
 Gate: `bench/dvd/run_spu_window.sh` (+ `--red`); design history in `docs/stc_freerun.md`
 §12.1.
 
-### An early decode shows nothing until it commits (2026-10-23, issue #176 follow-up) — sim-proven, ⏳ HW (`dev-cellcmdhold12`)
+### An early decode shows nothing until it commits (2026-10-23, issue #176 follow-up) — ✅ HIL (`dev-cellcmdhold12`: 0/9 blips, Mad Dog and Scene It highlights intact)
 
 **The report.** A one-picture "purple blip" just before Mad Dog McCree's first shootout: the
 whole 7×5 reticle grid visible under a blue-purple wash, ~1 s before the shootout's window
