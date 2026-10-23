@@ -188,6 +188,22 @@ confusing timeout.
     falls short and the whole-second residual parks it. The fix (drain first, then serve
     only unspent authored time) belongs to the #176 owner.
 
+- **A one-picture purple blip in the first shootout (VTS 1 cell 2, overlay clock
+  0:00:34), present in the HDMI capture.** It's pre-existing and separate from #176.
+  - The whole frame takes a purple-blue wash and all 35 reticles of the 7×5 grid are
+    drawn at once.
+  - It falls at STC ≈ 34.0, ~0.72 s after cell 1's button disarms and ~1.5 s before
+    cell 2's window arms, with nothing armed at the time.
+  - Found by scanning every capture for frames whose (R+B)/2 − G jumps (a score of +26
+    against a median of −7). It is in 7 of 13 runs across hold1/6/7/8 and `main`'s
+    navigation, and in none of 3 v0.9.1 runs (too few to clear it).
+  - Cell 2's subpicture unit is authored fully transparent. The working theory (#176
+    owner) is that the unit is shown for one picture at commit, with a stale
+    palette/contrast.
+  - A FIFO code for "SPU unit committed / display started" would pin it.
+  - The scan script and frame grabs live in `tools/streams/hil_runs/purple_blip/`
+    (gitignored).
+
 Harness lessons from the same day:
 - **The Main's fast-telemetry log fills the board's `/tmp`.** It appends every 20 ms row
   to `/tmp/dvd_telem_fast.jsonl` on a 246 MB tmpfs. A day of runs filled it, after which
