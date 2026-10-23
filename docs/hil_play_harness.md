@@ -86,6 +86,11 @@ FIFO exists), `sleep`, `key`, `key` + `at_pts` (the picture-count fit inherited 
 - Keep scenarios with a board image path out of the repo: the path names a share layout,
   and it differs between rigs.
 
+Runs go to `tools/streams/hil_runs/<time>/` unless `--out` says otherwise. That directory is
+gitignored and on disk. ⚠ Don't point runs at a RAM-backed `/tmp`: the capture is
+~3 MB/s, so an autoplayed game is several GB. Twelve trials filled 8.7 GB of a 16 GB
+tmpfs before this default existed.
+
 Taps go through the key daemon's FIFO as single `key <code> 30` writes; the queued `keys`
 command costs 170 ms per key. Launch aborts if this launch's `mount result` line says
 FAILED. A failed mount still tells the core a disc arrived, which otherwise shows up as a

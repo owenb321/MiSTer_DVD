@@ -48,7 +48,7 @@ queued `keys` command, 170 ms per key -- .claude/skills/hil-testing). The FIFO w
 stamped; the daemon's make follows within a few ms (measured by the `latency` scenario,
 not assumed: docs/hil_play_harness.md).
 
-Output (--out): scenario.json, agent.jsonl (one JSON object per press, mark, wait and
+Output (--out, default tools/streams/hil_runs/<time>, gitignored): scenario.json, agent.jsonl (one JSON object per press, mark, wait and
 telemetry sample), clock.json, cap.mkv, and with "align" in the scenario timeline.json +
 report.txt from hil_timeline.py, with the presses placed on the capture timeline.
 """
@@ -569,7 +569,9 @@ def main():
     for n in ('run', 'sweep'):
         p = sp.add_parser(n)
         p.add_argument('scenario')
-        p.add_argument('--out', required=True)
+        p.add_argument('--out', help='run directory (default tools/streams/hil_runs/<time>: '
+                       'gitignored and on disk; a game-length capture is ~3 MB/s, too big '
+                       'for a RAM-backed /tmp)')
         p.add_argument('--no-capture', action='store_true')
         p.add_argument('--local-iso', help='host copy of the image, for the alignment')
         if n == 'run':
@@ -578,6 +580,8 @@ def main():
             p.add_argument('--vary', required=True, help='NAME=v1,v2,...')
             p.add_argument('--rbf', action='append', help='repeat to A/B builds')
     a = ap.parse_args()
+    if not a.out:
+        a.out = os.path.join(HERE, 'streams', 'hil_runs', time.strftime('%Y%m%d_%H%M%S'))
     if shutil.which('ffmpeg') is None:
         sys.exit('ffmpeg not found')
     if a.cmd == 'run':
