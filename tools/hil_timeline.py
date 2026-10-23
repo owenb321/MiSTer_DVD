@@ -455,9 +455,14 @@ def arm_events(frames, timing):
     """Every change of overlay block #1, placed on the picture then on screen, against
     the authored window of the cell's highlight. vs = how far the edge is from the
     authored start (rise) or end (fall), in seconds of PTS; + = after."""
-    out, prev, last_pic = [], None, None
+    out, prev, last_pic, cell_t0 = [], None, None, {}
+    rr = {}
+    for c in timing['cells']:
+        rr[c['cell']] = c
     for r in frames:
         if r.get('cell') is not None:
+            if not last_pic or last_pic['cell'] != r['cell']:
+                cell_t0 = {'cell': r['cell'], 't': r['t']}     # the cut onto this cell
             last_pic = r
         a = r.get('armed')
         if a is None:
@@ -490,6 +495,15 @@ def arm_events(frames, timing):
                         'vs': ('%+.3f s vs authored %s' % (last_pic['pts'] - ref,
                                                           'start' if a else 'end'))
                         if ref is not None else 'no authored window in this cell'})
+            # The same edge by ELAPSED time since the cut onto this cell, against the
+            # authored offset from its first picture. Static shots cannot fool this one;
+            # it carries the display's ~2-picture lag behind the STC and any skipped
+            # first picture (~0.1 s early for an exact arm).
+            first = rr.get(last_pic['cell'], {}).get('first_ptm')
+            if ref is not None and first and cell_t0.get('cell') == last_pic['cell']:
+                el = r['t'] - cell_t0['t']
+                out[-1]['vs'] += ' | by elapsed time: %.3f s after the cut vs authored %.3f (%+.3f)' % (
+                    el, ref - first / 9e4, el - (ref - first / 9e4))
         prev = a
     return out
 
