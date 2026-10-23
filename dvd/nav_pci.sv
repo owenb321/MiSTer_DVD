@@ -218,7 +218,11 @@ module nav_pci #(
     // One pulse when an HLI with buttons is PROMOTED onto the screen (the display
     // reached it). emu's dvd/hl_mask.sv uses it to know the highlight now belongs
     // to the cell whose subpicture is up (2026-09-18, Harry Potter Player Mode).
-    output reg         hli_arm
+    output reg         hli_arm,
+    // DVD-FORK DEBUG (nav_trace, docs/hil_play_harness.md): the promoted HLI's
+    // authored start PTS (hli_s_ptm), valid from the hli_arm pulse on, so the
+    // event log can say how late a menu's buttons went live against the STC.
+    output wire [31:0] dbg_h_sptm
 );
 
 // =========================================================================
@@ -360,6 +364,7 @@ wire       act_hold = (act_tmr != 24'd0);
 assign btns_armed = armed && (h_btn_ns != 6'd0);
 assign btns_pend  = (nxt_v && (nxt_btn_ns != 6'd0)) || (nx2_v && (nx2_btn_ns != 6'd0));
 assign dbg_btn_ns = h_btn_ns;
+assign dbg_h_sptm = h_sptm;
 // early multi-button-menu detect: pending (parsed, pre-promote) OR committed.
 assign hli_seen   = (nxt_v && (nxt_btn_ns > 6'd1)) || (armed && (h_btn_ns > 6'd1));
 
