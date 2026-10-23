@@ -631,8 +631,11 @@ The 1 s scoring-window lead (2026-10-13) is RETIRED (2026-10-23): it let the con
 duel be won before the gunman drew; the reference is now the authored window, as a
 set-top player shows it. A window whose PTS restarts is re-judged at the clock's
 re-anchor instead (Mad Dog VTS 15 cell 2). Measured on the HIL play harness
-(`docs/hil_play_harness.md`). Next step: the harness on `dev-cellcmdhold7` (VTS 15,
-the duel, the saloon audio), then the maintainer's play-test, then the PR. Open: the
+(`docs/hil_play_harness.md`). HIL on `dev-cellcmdhold7`: VTS 15, the duel and the first
+shootout behave as authored; the saloon gunshots and a VTS 15 freeze were the
+authored-duration still overrunning video cells, fixed in `dev-cellcmdhold8` (the drain
+first). Next step: the harness on `dev-cellcmdhold8`, then hold9 without the `cc_aud_low`
+release, then the maintainer's play-test, then the PR. Open: the
 5+1 pictures lost at every PTS-restart junction (pre-existing, every build), and the
 `cc_aud_low` release costing ~0.2 s of window. Still unchecked on HW: a loop disc
 (Fairytopia), unchanged by construction, and Mad Dog II / Crime Patrol by hand. Design and the library sweep

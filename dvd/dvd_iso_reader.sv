@@ -5723,7 +5723,21 @@ always @(posedge clk or negedge rst_n) begin
                                     strm_done   <= 1'b1;
                                     still_pend  <= 1'b1;   // drain, then S_STILL
                                 end else if (vm_mode && cm_rd[7:0] != 8'd0) begin
-                                    if (dur_hold_w) begin
+                                    // ★ BUTTONS UP: THE DRAIN COMES FIRST (issue #176,
+                                    // 2026-10-23). dur_hold measures the cell in WHOLE
+                                    // seconds from the reader's LOAD and rounds C_PBTM
+                                    // up, so on an ordinary video cell it can overshoot
+                                    // the displayed end by up to ~1 s: Mad Dog VTS 15
+                                    // cell 1 (3.87 s, jump-entered) parked a 2 s timed
+                                    // still from 2.87 s, freezing the picture 0.85 s
+                                    // past its last frame with the audio run dry (HIL:
+                                    // main and dev-cellcmdhold7 alike). With buttons up
+                                    // the display-referenced drain (cmd_hold_w) runs
+                                    // first; the settle block then serves whatever
+                                    // authored time is STILL unspent (a genuine still:
+                                    // Weakest Link's one-I-frame 17 s answer window)
+                                    // before the command. A video cell has none left.
+                                    if (dur_hold_w && !cmd_hold_w) begin
                                         // AUTHORED CELL DURATION: the cell's
                                         // sectors are delivered but its C_PBTM
                                         // has not elapsed on the display (the
@@ -5911,6 +5925,21 @@ always @(posedge clk or negedge rst_n) begin
                         vmw_pgc      <= 1'b1;
                         vmw_tmr      <= 24'd0;
                         state        <= S_VM_WAIT;
+                    end else if (vmw_cmd_pend && dur_hold_w) begin
+                        // Issue #176: drained, and the cell's authored duration is
+                        // still >= RESID_MIN unspent: a genuine still (one frame
+                        // authored to hold). Serve the residual as the timed still
+                        // the cell end would have (STILL_CMD), then the command.
+                        // cm_rd / cell_secs still describe this cell (cell_i has not
+                        // moved since the cell end).
+                        vmw_cmd_pend <= 1'b0;
+                        still_secs   <= dur_resid_w;
+                        still_timed  <= 1'b1;
+                        still_act    <= 1'b1;
+                        still_last   <= vmw_last;
+                        still_next   <= STILL_CMD;
+                        still_pend   <= 1'b1;
+                        state        <= S_STILL;
                     end else if (vmw_cmd_pend) begin
                         // Issue #176: the cell has been displayed to its end
                         // -> its cell command's turn (vmw_last was set at the

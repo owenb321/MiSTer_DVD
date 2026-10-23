@@ -115,7 +115,20 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     and promotes at its own `s_ptm` (VTS 15 cell 2 arms 3 ms after its first picture in
     the NAV replay). Gate: `nav_pci_rejudge_tb` a–e + N1–N7 in `run_cmd_hold.sh --red`.
     nav_trace X0/X1 now log re-judges and fallback promotions.
-  - **Next:** the harness on `dev-cellcmdhold7` (VTS 15, the duel, the saloon audio at X2),
+  - **HIL on `dev-cellcmdhold7` (2026-10-23):** VTS 15 both shots hit (cell 1 armed at
+    0.188, cell 2 re-judged and armed at 0.108, `late_ticks` 0; `main` takes cell 2's
+    verdict at STC 0.520, before its arm at 1.032: the maintainer's "unhittable"); the duel
+    misses before the draw and hits after; the first shootout is live at its authored start
+    and hits at 37.0 s. No fallback promotion in any scoring cell. NEW: a 0.95 s freeze +
+    silence at VTS 15 cell 1 → 2 (also on `main`), and the saloon gunshots silent for
+    ~1.1 s on hold7 while `main` is clean: both the authored-duration still overrunning
+    video cells (`docs/dvd_nav.md` "A fourth").
+  - **`dev-cellcmdhold8`:** with the cell-command hold in force, the drain comes before the
+    authored-duration still, and only authored time still unspent after it is served
+    (bench G/H, R13/R14). `cc_aud_low` kept for this build (one change per flash); if
+    hold8's saloon is clean, hold9 removes it to win back ~0.2 s of window.
+  - **Next:** the harness on `dev-cellcmdhold8` (saloon route 2, VTS 15 route 1, the duel,
+    the first shootout at 37.0/37.3), then hold9 without `cc_aud_low`,
     then the maintainer's play-test, then the PR. Not yet run on HW: a loop disc such as
     Fairytopia, which is unchanged by construction because a fixed command is never held
     (bench P2), and Mad Dog II / Crime Patrol by hand. Design notes: `docs/dvd_nav.md` "A

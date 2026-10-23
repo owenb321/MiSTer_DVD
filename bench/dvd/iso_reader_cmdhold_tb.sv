@@ -22,7 +22,12 @@
 //   Title 3 (PGC@1400): POST Nop
 //     cell 0 (0xB7) cmd_nr 5 (past nr_cell: invalid)
 //     cell 1 (0xB8) cmd 1 = LinkTailPGC
-// Every cell is two sectors with last_vobu_start = first_sector and 1 s of playback:
+//   Title 4 (PGC@2100): POST Nop                     <- authored durations (G, H)
+//     cell 0 (0xB9) cmd 1 = g[1] = 1, 4 s of playback  <- a VIDEO cell
+//     cell 1 (0xBA) cmd 2 = g[2] = 1, 6 s of playback  <- a still (one frame, held)
+//     cell 2 (0xBB) plain, last
+// Every cell of titles 1-3 is two sectors with last_vobu_start = first_sector and 1 s
+// of playback:
 // one sector, or last_vobu_start = last_sector, makes a libdvdnav HEURISTIC still,
 // and 1 s is under RESID_MIN, so neither still path can take the cell end.
 //
@@ -45,6 +50,13 @@
 //   F  the audio ring runs low (cc_aud_low) during a hold with the VBUF still full:
 //      the hold releases, so the reader resumes before the old audio runs dry
 //      (Mad Dog's saloon: back-to-back short scoring cells lost the gunshot).
+//   G  a VIDEO cell with buttons up, read before any of its authored 4 s displayed:
+//      no timed still (dur_hold would have parked one, counted in whole seconds from
+//      the load, and frozen past the last picture: Mad Dog VTS 15 cell 1). The drain
+//      holds the command; once the display has shown the 4 s it runs at once.
+//   H  a STILL cell with buttons up (6 s authored, nothing displayed at the drain):
+//      after the drain the unspent 6 s is served as a timed still, then the command.
+//      The tb drives disp_tick (disp_fps 4: 4 ticks = 1 display-second) only in G/H.
 //
 // Run: bench/dvd/run_cmd_hold.sh [--red]
 
@@ -52,7 +64,7 @@
 
 module iso_reader_cmdhold_tb;
 
-    localparam IMG_BYTES = 46*2048;
+    localparam IMG_BYTES = 50*2048;
     localparam [30:0] DRAIN_WD_TB = 31'd200000;
 
     reg         clk = 0;
@@ -75,6 +87,7 @@ module iso_reader_cmdhold_tb;
     reg         cc_btns = 0;
     reg         vbuf_empty = 1;
     reg         cc_aud_low = 0;
+    reg         disp_tick = 0;
 
     reg  [7:0]  img [0:IMG_BYTES-1];
 
@@ -113,7 +126,7 @@ module iso_reader_cmdhold_tb;
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(7'd0),
         .aud_drained(1'b1), .vbuf_empty(vbuf_empty),
-        .disp_tick(1'b0), .disp_fps(6'd4),
+        .disp_tick(disp_tick), .disp_fps(6'd4),
         .jump_ttn(vm_jump_ttn), .jump_pgn(vm_jump_pgn), .jump_ptt(vm_jump_ptt),
         .still_off(1'b0), .vm_mode(1'b1), .vm_adv(vm_adv_w), .vm_replay(vm_replay_w),
         .vm_cell_cmd(vm_cell_cmd_w), .vm_pgc_end(vm_pgc_end_w), .nat_wait_o(nat_wait_w),
@@ -205,6 +218,15 @@ module iso_reader_cmdhold_tb;
         if (vm_pgc_end_w)  n_pe = n_pe + 1;
         if (vm_replay_w)   n_rep = n_rep + 1;
         if (dut.vmw_cmd_pend) pend_seen = 1;
+    end
+    // a timed still parked (G must see none; H reads its length at entry)
+    reg still_seen = 0;
+    reg still_q = 0;
+    reg [15:0] still_secs_in = 0;
+    always @(posedge clk) begin
+        still_q <= still_active;
+        if (still_active) still_seen = 1;
+        if (still_active && !still_q) still_secs_in = dut.still_secs;
     end
 
     // ---- mock HPS: one 2048-byte block per sd_rd ----
@@ -311,6 +333,29 @@ module iso_reader_cmdhold_tb;
         end
     endtask
 
+    // the same cell with an authored playback time (BCD C_PBTM, 30 fps)
+    task put_cell_d(input integer pa, input [15:0] cpo, input integer idx,
+                    input [7:0] cmdnr, input [31:0] sec, input [31:0] pbtm);
+        integer c;
+        begin
+            put_cell(pa, cpo, idx, cmdnr, sec);
+            c = pa + cpo + idx*24;
+            be32(c+4, pbtm);
+        end
+    endtask
+
+    // pulse N display refreshes (disp_fps=4 -> 4 ticks = 1 display-second)
+    task tick_disp(input integer n);
+        integer k;
+        begin
+            for (k = 0; k < n; k = k + 1) begin
+                @(negedge clk); disp_tick = 1;
+                @(negedge clk); disp_tick = 0;
+                repeat (3) @(negedge clk);
+            end
+        end
+    endtask
+
     // command table: up to 4 commands, laid out pre, post, cell in order
     task put_cmdtbl(input integer pa, input [15:0] off,
                     input integer npre, input integer npost, input integer ncell,
@@ -337,6 +382,7 @@ module iso_reader_cmdhold_tb;
     localparam [63:0] C_JUMPTT1  = 64'h3002000000010000;
     localparam [63:0] C_JUMPTT2  = 64'h3002000000020000;
     localparam [63:0] C_JUMPTT3  = 64'h3002000000030000;
+    localparam [63:0] C_JUMPTT4  = 64'h3002000000040000;
     localparam [63:0] C_G1_1     = 64'h7100000100010000;   // g[1] = 1
     localparam [63:0] C_G2_1     = 64'h7100000200010000;   // g[2] = 1
     localparam [63:0] C_TOPC     = 64'h2001000000000001;   // LinkTopC
@@ -361,10 +407,10 @@ module iso_reader_cmdhold_tb;
             put_rec(cur, 17, 2048, 8'h02, 128'h00, 1, cur);
             put_rec(cur, 17, 2048, 8'h02, 128'h01, 1, cur);
             put_rec(cur, 19, 6144, 8'h00, "VIDEO_TS.IFO;1", 14, cur);
-            put_rec(cur, 44, 2048, 8'h00, "VIDEO_TS.VOB;1", 14, cur);
+            put_rec(cur, 49, 2048, 8'h00, "VIDEO_TS.VOB;1", 14, cur);
             put_rec(cur, 22, 6144, 8'h00, "VTS_01_0.IFO;1", 14, cur);
             put_rec(cur, 25, 4096, 8'h00, "VTS_01_0.VOB;1", 14, cur);
-            put_rec(cur, 27, 32768, 8'h00, "VTS_01_1.VOB;1", 14, cur); // 27..42
+            put_rec(cur, 27, 45056, 8'h00, "VTS_01_1.VOB;1", 14, cur); // 27..48
 
             // VMGI_MAT @19: FP @400; TT_SRPT @+1 (20); VMGM_PGCI_UT @+2 (21)
             be32(19*2048+132, 32'd400);
@@ -373,11 +419,12 @@ module iso_reader_cmdhold_tb;
             put_pgc(19*2048+400, 8'd0, 8'd0, 16'd236, 16'd0, 16'd0);
             put_cmdtbl(19*2048+400, 16'd236, 1, 0, 0, C_JUMPTT1, C_NOP, C_NOP, C_NOP);
 
-            // TT_SRPT @20: 2 titles, both VTS_01
-            be16(20*2048+0, 16'd3);
+            // TT_SRPT @20: 4 titles, all VTS_01
+            be16(20*2048+0, 16'd4);
             img[20*2048+14] = 8'd1; img[20*2048+15] = 8'd1;
             img[20*2048+26] = 8'd1; img[20*2048+27] = 8'd2;
             img[20*2048+38] = 8'd1; img[20*2048+39] = 8'd3;
+            img[20*2048+50] = 8'd1; img[20*2048+51] = 8'd4;
 
             // VMGM PGCI_UT @21 (unused)
             be16(21*2048+0, 16'd1);
@@ -396,11 +443,12 @@ module iso_reader_cmdhold_tb;
             be32(22*2048+204, 32'd1);
             be32(22*2048+208, 32'd2);
 
-            // VTS_PGCIT @23: titles 1/2/3 -> PGC@16 / @700 / @1400
-            be16(23*2048+0, 16'd3);
+            // VTS_PGCIT @23: titles 1/2/3/4 -> PGC@16 / @700 / @1400 / @2100
+            be16(23*2048+0, 16'd4);
             img[23*2048+8]  = 8'h81; be32(23*2048+8+4,  32'd16);
             img[23*2048+16] = 8'h82; be32(23*2048+16+4, 32'd700);
             img[23*2048+24] = 8'h83; be32(23*2048+24+4, 32'd1400);
+            img[23*2048+32] = 8'h84; be32(23*2048+32+4, 32'd2100);
 
             // title 1: PRE g[0]=0; POST Nop; cell cmds {score, g[2]=1}
             put_pgc(23*2048+16, 8'd3, 8'd3, 16'd400, 16'd240, 16'd256);
@@ -430,10 +478,20 @@ module iso_reader_cmdhold_tb;
             put_cell(23*2048+1400, 16'd256, 1, 8'd1, 32'd14); // B8: LinkTailPGC
             put_cmdtbl(23*2048+1400, 16'd400, 0, 1, 1, C_NOP, C_TAILPGC, C_NOP, C_NOP);
 
+            // title 4: POST Nop; cell cmds {g[1]=1, g[2]=1} (Sets: held with buttons up)
+            put_pgc(23*2048+2100, 8'd3, 8'd3, 16'd400, 16'd236, 16'd256);
+            img[23*2048+2100+236] = 8'd1;
+            img[23*2048+2100+237] = 8'd2;
+            img[23*2048+2100+238] = 8'd3;
+            put_cell_d(23*2048+2100, 16'd256, 0, 8'd1, 32'd16, 32'h000004C0); // B9: 4 s video
+            put_cell_d(23*2048+2100, 16'd256, 1, 8'd2, 32'd18, 32'h000006C0); // BA: 6 s still
+            put_cell  (23*2048+2100, 16'd256, 2, 8'd0, 32'd20);               // BB: last
+            put_cmdtbl(23*2048+2100, 16'd400, 0, 1, 2, C_NOP, C_G1_1, C_G2_1, C_NOP);
+
             for (j = 0; j < 2048; j = j + 1) begin
                 img[25*2048+j] = 8'hD0;
                 img[26*2048+j] = 8'hD1;
-                img[44*2048+j] = 8'hC0;
+                img[49*2048+j] = 8'hC0;
             end
             for (j = 0; j < 4096; j = j + 1) begin
                 img[27*2048+j] = 8'hB0;
@@ -444,6 +502,9 @@ module iso_reader_cmdhold_tb;
                 img[37*2048+j] = 8'hB6;
                 img[39*2048+j] = 8'hB7;
                 img[41*2048+j] = 8'hB8;
+                img[43*2048+j] = 8'hB9;
+                img[45*2048+j] = 8'hBA;
+                img[47*2048+j] = 8'hBB;
             end
         end
     endtask
@@ -493,11 +554,11 @@ module iso_reader_cmdhold_tb;
     endfunction
 
     integer s0, c0, e0, p0, r0;
-    integer a1_ok, a2_ok, b_ok, c_ok, d_ok, e_ok, f_ok, p1_ok, p2_ok, p3_ok, p4_ok;
+    integer a1_ok, a2_ok, b_ok, c_ok, d_ok, e_ok, f_ok, g_ok, h_ok, p1_ok, p2_ok, p3_ok, p4_ok;
 
     initial begin
         a1_ok = 1; a2_ok = 1; b_ok = 1; c_ok = 1; d_ok = 1; e_ok = 1;
-        p1_ok = 1; p2_ok = 1; p3_ok = 1; p4_ok = 1; f_ok = 1;
+        p1_ok = 1; p2_ok = 1; p3_ok = 1; p4_ok = 1; f_ok = 1; g_ok = 1; h_ok = 1;
         build_iso;
         file_size = IMG_BYTES;
 
@@ -643,6 +704,41 @@ module iso_reader_cmdhold_tb;
         vbuf_empty = 1;                     // let the miss branch finish
         t = 0; while (n_pe == p0 && t < 4000000) begin @(posedge clk); t = t + 1; end
         $display("F %s: the audio running low releases the hold", f_ok ? "PASS" : "FAIL");
+
+        // ---------- G: a video cell with buttons up -> no timed still, the drain holds ----------
+        repeat (2000) @(posedge clk);
+        cc_btns = 1; vbuf_empty = 0; cc_aud_low = 0;
+        c0 = n_cc; s0 = seq_n;
+        @(posedge clk); still_seen = 0;
+        press(C_JUMPTT4);
+        wait_hold(4000000);
+        if (dut.vmw_cmd_pend !== 1'b1) begin fail("G: no drain hold at the B9 cell end"); g_ok = 0; end
+        repeat (20000) @(posedge clk);
+        if (still_seen) begin fail("G: a video cell's end parked a timed still"); g_ok = 0; end
+        if (n_cc != c0) begin fail("G: the command ran with the VBUF full"); g_ok = 0; end
+        tick_disp(16);                      // the display shows the cell's 4 s
+        vbuf_empty = 1;                     // ... and reaches its end
+        t = 0; while (n_cc == c0 && t < 5000) begin @(posedge clk); t = t + 1; end
+        if (n_cc != c0 + 1) begin fail("G: the command did not run at once after the drain"); g_ok = 0; end
+        if (still_seen) begin fail("G: a timed still before the command"); g_ok = 0; end
+        $display("G %s: a video cell with buttons up waits for the drain, no timed still",
+                 g_ok ? "PASS" : "FAIL");
+
+        // ---------- H: a still cell with buttons up -> the drain, then the residual still ----------
+        // BA's end: nothing of its 6 s has displayed (no ticks), and the VBUF is empty
+        wait_hold(4000000);
+        t = 0; while (!still_active && t < 400000) begin @(posedge clk); t = t + 1; end
+        if (!still_active) begin fail("H: a still cell's unspent 6 s was not served"); h_ok = 0; end
+        else if (still_secs_in != 16'd6) begin
+            $display("FAIL: H: still_secs %0d, want 6", still_secs_in); errors = errors + 1; h_ok = 0;
+        end
+        if (n_cc != c0 + 1) begin fail("H: the command ran before the still"); h_ok = 0; end
+        t = 0; while (n_cc == c0 + 1 && t < 20000) begin @(posedge clk); t = t + 1; end
+        if (n_cc != c0 + 2) begin fail("H: the command did not run after the still"); h_ok = 0; end
+        else if (t < 4000) begin fail("H: the still ended early"); h_ok = 0; end
+        wait_pe(p0 + 1, 4000000);
+        $display("H %s: a still cell with buttons up: drain, then its unspent seconds, then the command",
+                 h_ok ? "PASS" : "FAIL");
 
         // ---------- E: a VBUF that never drains -> DRAIN_WD releases ----------
         repeat (2000) @(posedge clk);

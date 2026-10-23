@@ -5377,6 +5377,29 @@ shootout): 34.9 s and 37.0 s hit, and 37.3 s now misses, so the window is ~34.55
 before). Gates:
 `run_cmd_hold.sh` arm F + R12; `check_cmd_hold_wiring.py` checks the seam.
 
+**A fourth: the authored-duration still overran video cells (2026-10-23, HIL).** The HIL
+play harness measured a 0.95 s freeze + silence at Mad Dog VTS 15's cell 1 → 2 junction,
+and up to 1.1 s of silence exactly at the gunshots in the saloon (VTS 3 cells 4–7, every
+hit). Both are the reader's AUTHORED-DURATION hold (`dur_hold_w`, Weakest Link's fix):
+`cell_secs` counts WHOLE display seconds from the reader's LOAD of the cell and C_PBTM rounds
+UP, so at the cell end a residual ≥ `RESID_MIN` (2 s) parked a 2 s timed still that ran up
+to ~1 s past the cell's last picture, with the audio ring drained to 0 (the gunshot at the
+next cell's head). VTS 15 cell 1 does it on `main` too (jump-entered); in the saloon the
+#176 hold made it reachable, because the reader now reaches each short cell's end later
+(`main`: no silence over 0.07 s; `dev-cellcmdhold7`: 1.13 s / 1.14 s at cells 5/6).
+
+The fix (`dev-cellcmdhold8`): when the cell-command hold applies (`cmd_hold_w`: buttons up,
+a press-reading command), the display-referenced DRAIN comes first; `dur_hold` no longer
+takes that cell end. At the settle, if the authored duration is STILL ≥ `RESID_MIN`
+unspent (a genuine still: one frame authored to hold), the residual is served as the same
+timed still (`STILL_CMD`) and then the command runs; a video cell has none left by then.
+Cell ends without the hold (no buttons, or a fixed command) keep `dur_hold` exactly as
+before. Gate: `iso_reader_cmdhold_tb` G (a 4 s video cell read before any of it displayed:
+no still, the command at the drain) and H (a 6 s still cell: drain, then a 6 s still, then
+the command); mutations R13 (`dur_hold` first) and R14 (no residual still). Whether the
+`cc_aud_low` release is still needed once this is in is the next HIL question: the
+gunshot silence it was built for turned out to be this.
+
 **Known limits.**
 
 - A pause during the hold counts toward `DRAIN_WD` (60 s), the same as the PGC-end
