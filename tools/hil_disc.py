@@ -284,8 +284,9 @@ def explored(run_dir):
         return 'no nav events: this core has no nav FIFO (explore needs one)'
     pgcs, stills, vts, on = [], [], None, None
     for e in nav:
-        if e['ev'] == 'PGC' and not e.get('menu'):
-            key = '%d:%d' % (e['vts'], e['pgcn'])
+        if e['ev'] == 'PGC':
+            # menu-domain PGCs are marked M (VMGM/VTSM): a game's screens often live there
+            key = '%s%d:%d' % ('M' if e.get('menu') else '', e['vts'], e['pgcn'])
             if not pgcs or pgcs[-1] != key:
                 pgcs.append(key)
         if e['ev'] in ('PGC', 'CELL'):
@@ -298,7 +299,7 @@ def explored(run_dir):
                 on = None
     unk = [o for o in lines if o.get('autoplay') in ('unknown window', 'no target')]
     shots = [o for o in lines if o.get('autoplay') == 'aim']
-    out = ['title PGCs entered, in order: %s' % ' '.join(pgcs),
+    out = ['PGCs entered, in order (M = menu domain): %s' % ' '.join(pgcs),
            'shots the autoplayer fired: %d' % len(shots),
            'windows it could not place (%d):' % len(unk)]
     seen = set()

@@ -28,6 +28,14 @@
   {
    "text": "No ALG-style shots: every input is a menu. The main menu is a 6-button TITLE-domain highlight (VTS 3 PGC 18 cell 1, buttons set g[15]=1..4 then LinkTailPGC; fosl 2 = 'play the game'). Questions are indefinite stills with link buttons in VTS 5.",
    "why": "hil_disc draft, 2026-10-23; it needs a shot model of its own (answer = which link) before the autoplayer can score anything."
+  },
+  {
+   "text": "Explore run 1 (2026-10-23, dev-cellcmdhold12): the default path goes main menu (title 3:18, Select = b2 'play the game') -> menu-domain M3:18 -> M3:7 -> M3:2 -> M3:1 -> the game-mode menu (M2:1 / M3:1, 13 buttons: start timer, all play, my play, all play to win, final cut, tie breakers, main menu). Its preselected button is 'start timer', which plays a 1-minute timer title (2:1) and returns, so default-Select explore loops there and never reaches the questions (VTS 5).",
+   "why": "Next step for this profile: a route that picks a play mode (e.g. 'all play' = one Down + Select on the game-mode menu). also_select keys are VTS:PGCN and Scene It reuses numbers across domains (M2:1 menu vs 2:1 timer title), so the key needs a menu/title qualifier first."
+  },
+  {
+   "text": "The game-mode menu arms ~0.9 s late (HLI_ARM late_ticks ~84000-86000: the fallback promotion) on hold10 and hold12 alike.",
+   "why": "Menu-domain arm timing is outside the #176 work; worth a look if Scene It's answer windows turn out to be timed."
   }
  ],
  "scenarios": {
