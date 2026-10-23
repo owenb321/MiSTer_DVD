@@ -161,9 +161,16 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     contiguous) hides the title-domain layer until COMMIT (`spu_decode` `bm_dirty`;
     `docs/subpicture.md` "An early decode shows nothing until it commits"; gate
     `run_spu_window.sh --red` arm [E], red-dirty / red-always).
-  - **Next:** the harness on `dev-cellcmdhold10` (VTS 15 a few times for X0 ok=1, the
-    saloon, the duel, the first shootout), then hold11 for the blip (first shootout's
-    junction, several runs, HDMI capture),
+  - **HIL on `dev-cellcmdhold11`: the blip NOT fixed** (4 in 9 junction passes), always the
+    same picture (PTS 33.81-33.85, after the wash's stop at 33.18). The real mechanism: the
+    shootout's 35-button HLI raises `sp_menu_early` -> `spu_decode.menu_mode` (windowless,
+    no hold, guard excluded), the expired wash comes back and the grid decodes under it.
+  - **`dev-cellcmdhold12`:** `spu_decode.title_menu` (in-title menu only): an expired unit
+    stays hidden and the early-decode guard applies; the windowless start is kept
+    (`docs/subpicture.md`, arm [F], `check_spu_title_menu_wiring.py`).
+  - **Next:** the harness on `dev-cellcmdhold12` (the first shootout's junction, several
+    passes, purple score; plus a Scene It in-title menu if one is at hand, since its
+    subpicture path changed),
     then the maintainer's play-test, then the PR. Not yet run on HW: a loop disc such as
     Fairytopia, which is unchanged by construction because a fixed command is never held
     (bench P2), and Mad Dog II / Crime Patrol by hand. Design notes: `docs/dvd_nav.md` "A

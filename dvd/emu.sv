@@ -704,7 +704,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-cellcmdhold11"
+`define CORE_VERSION "dev-cellcmdhold12"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -6275,6 +6275,10 @@ spu_decode spu_decode_inst (
     // the highlight subpicture leads the displayed frame by the VBUF depth, same as
     // a menu-domain menu, so the STC window would gate it out.
     .menu_mode  ((menus_on && menu_active) || sp_menu_early || force_43_subp),
+    // In-title menu only (sp_menu_early already excludes the menu domain): an expired
+    // unit stays hidden and an early decode shows nothing (spu_decode title_menu; Mad
+    // Dog's purple blip). A menu-domain menu and Force 4:3 Subpics stay windowless.
+    .title_menu (sp_menu_early && !force_43_subp),
     .interlaced (fields_eff),              // interlaced raster: v_pos = absolute frame line, +2/field-line (240p: progressive, +1)
     .sp_byte        (ps_sp_byte),
     .sp_valid       (ps_sp_valid),

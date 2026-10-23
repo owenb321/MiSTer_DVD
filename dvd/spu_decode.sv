@@ -103,6 +103,19 @@ module spu_decode #(
     // from the field. The fix is not another menu_mode exemption: see the HOLD and the
     // CONTIGUITY CLAMP below, which fix the mechanism for subtitles too.
     input  wire        menu_mode,
+    // ★ IN-TITLE MENU (2026-10-23, Mad Dog McCree's purple blip). menu_mode is also
+    // raised for a multi-button HLI in the TITLE domain (emu's sp_menu_early: Scene It,
+    // Harry Potter's Player Mode, the FMV games' aiming grids), so the art shows at
+    // commit (windowless) as it was given in the days the clock led the picture. There
+    // the clock is the displayed picture's (PR #63), so two parts of windowless are
+    // wrong: an EXPIRED unit came back (Mad Dog's intro wash, stopped at 33.18 s,
+    // reappeared when the shootout's 35-button HLI was parsed at ~33.8) and an EARLY
+    // decode showed the new bitmap in that unit's colours (the whole reticle grid under
+    // the wash for one picture). With title_menu set, a unit past its STP_DSP stays
+    // hidden and the early-decode guard (bm_dirty) applies; the windowless start, the
+    // re-send guard and the hold exclusion are unchanged. emu: sp_menu_early and NOT a
+    // menu-domain menu and NOT Force 4:3 Subpics. Tie 1'b0 elsewhere.
+    input  wire        title_menu,
     // ★ NEW CELL (2026-09-18, Harry Potter Interactive's Player Mode). One pulse when
     // the DELIVERED stream enters a different cell (emu: nav_dsi's {vob_idn, c_idn}
     // changed). It opens the menu re-send guard below for the next unit. That guard
@@ -337,8 +350,9 @@ module spu_decode #(
     // the title domain, where FSTA_DSP is used for in-title HLI graphics only on a
     // display-ON SetSTN stream, which is not the forced route).
     wire visible = enable && c_valid && (!forced_only || c_forced) &&
-                   !(bm_dirty && !menu_mode) &&
-                   (menu_mode || ((stc >= c_show) && (stc < c_hide)));
+                   !(bm_dirty && (!menu_mode || title_menu)) &&
+                   (menu_mode ? (!title_menu || (stc < c_hide))
+                              : ((stc >= c_show) && (stc < c_hide)));
     assign sp_active = visible;
 
     // q_row_base tracks q_y*STRIDE via a per-line adder (no multiplier in the hot
