@@ -22,6 +22,27 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **HIL PLAY HARNESS, HOST SIDE (2026-10-23, `feature/hil-play-harness`, HW-proven on the
+  capture rig; not merged).**
+  - **Tools:**
+    - `tools/hil_play.py`: board agent, FIFO autoplayer, wall-clock capture;
+    - `tools/hil_timeline.py`: per-frame picture identification against the disc,
+      junctions, pace, audio vs reference, overlay reads, capture latency;
+    - `tools/disc_timing.py` (authored timing, shot targets);
+    - `tools/hil_disc.py` (profiles, draft, explore);
+    - `tools/hil_expect.py` (PASS/FAIL/NODATA).
+  - **Found on hardware for issue #176:**
+    - `EARLY_LEAD` makes the duel winnable before the draw;
+    - `main`'s VTS 15 cell 2 is unhittable (verdict at STC 0.520, arm at 1.032);
+    - the `dur_hold` 2.000 s still under the #176 hold causes the saloon gunshot silence
+      and the VTS 15 junction freeze;
+    - the hold9 re-judge race (STC mirror);
+    - the first-shootout purple blip's real trigger.
+  - **Verified:** hold7–hold12, one change per build. Detail: `docs/hil_play_harness.md`.
+  - **Next:**
+    - a shot model for non-ALG games;
+    - an explore run on Scene It and Scooby on the rig;
+    - merge.
 - 🔧 **HIL PLAY HARNESS, SLICE B: NAV EVENT FIFO (2026-10-22, `feature/hil-play-harness`,
   sim-proven; fitted 296 ALM + 2 M10K, SEED 17 timing PASS; ✅ drains on HW, matches the capture).** `dvd/nav_trace.sv` is a 256 × 80-bit clk_sys FIFO of
   timestamped navigation events. There are 16 sources: GPRM writes, STC jumps, key presses,

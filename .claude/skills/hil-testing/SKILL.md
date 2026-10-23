@@ -195,6 +195,32 @@ that pattern appears inside payload and yields a plausible WRONG acmod.
 - If *every* track is silent the result is INCONCLUSIVE, not a finding — there is no
   working control on that disc.
 
+## Playing an interactive disc in real time (hil_play)
+
+For timing questions on games and interactive discs (when buttons go live, whether a
+shot counts, junction freezes, missing audio), use the play harness rather than single
+key presses. The design is in `docs/hil_play_harness.md`.
+
+```bash
+tools/hil_play.py list                                    # disc profiles + scenarios
+tools/hil_play.py run --disc mad_dog --scenario vts15 --rbf releases/<core>.rbf
+cat tools/streams/hil_runs/<time>/EXPECT.txt              # PASS / FAIL / NODATA per check
+```
+
+- It plays on the board (agent, FIFO-driven autoplayer), records the HDMI capture with
+  wall-clock stamps, aligns every captured frame to the disc's own pictures, and judges
+  the scenario's expectations.
+- Runs land in `tools/streams/hil_runs/` (gitignored, on disk). ⚠ Never in `/tmp`: a
+  capture is ~3 MB/s.
+- ⚠ The capture card is on ONE rig only (see `tools/.mister_rigs.json`, gitignored).
+  Without it a run still produces the FIFO and telemetry verdicts, and capture checks
+  read NODATA.
+- The autoplayer and FIFO checks need a core built with the nav event FIFO
+  (`dvd/nav_trace.sv`) and a Main with its drain. On older cores those checks read
+  NODATA, and the capture still judges what reached the screen.
+- A new disc: `tools/hil_disc.py draft <iso>`, then its `explore` scenario, then
+  `tools/hil_disc.py explored <run>`.
+
 ## Before believing a finding
 
 1. Does it **reproduce**?

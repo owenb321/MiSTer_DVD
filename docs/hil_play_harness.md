@@ -230,6 +230,72 @@ Harness lessons from the same day:
   so `base` locks on the first `video_live` 0→1 edge after the intro's still
   (`live_edges`, `after_still`).
 
+## Disc profiles: repeatable tests after context is lost
+
+A test that lives in a scratch file and one session's memory is lost when the session
+ends. Each interactive disc therefore gets a committed **profile**,
+`tools/hil_discs/<disc>.json`, holding what is known about the disc and the named tests
+run on it. Nothing in a profile is about a rig or a workstation.
+
+| Field | Holds | Why it is there |
+|---|---|---|
+| `image` | `fingerprint` (sha1 of `VIDEO_TS.IFO`) and `name_hints` relative to the library root | The image is found by content. The two rigs file the same library under different paths (`cifs/DVD` vs `cifs/games/DVD`), which cost a failed launch. |
+| `policy` | `also_select` (named non-shot screens to answer: continue, skips) and `routes` (named route-menu choices) | The autoplayer only knows shots; every other screen that waits for input must be named, or a run stalls (Mad Dog's route menu did). |
+| `macros` | reusable step lists (`{"macro": "start_game"}`) | Every Mad Dog scenario starts the same way. |
+| `notes` | `{text, why}` lessons | Most of the Mad Dog notes each cost a hardware round or a retracted claim. |
+| `scenarios` | `{description, vars, opts, capture_s, measure, steps, expect}` | The test, and what passing means. |
+
+**Expectations** (`tools/hil_expect.py`) turn a run into PASS / FAIL / NODATA per
+assertion:
+- `reaches` / `reaches_any` and `screen_sequence` (which branch was taken: FIFO, else
+  capture);
+- `arms_on_time` (every `HLI_ARM` within ±x s of its `hli_s_ptm`; catches an early lead
+  and a late fallback alike);
+- `shots_scored` (each autoplayer shot activated its target before the cell's command);
+- `no_reader_still`, `no_silence` and `no_freeze` over named cells;
+- `no_purple`.
+
+NODATA means the instrument was absent (no FIFO, no capture, scene never reached) and
+never counts as a pass. Expectations encode the **authored** behaviour, not any build's:
+a build is judged against the disc. Re-judging the 2026-10-23 runs with the Mad Dog
+profile reproduces every hand verdict, from the hold7 saloon FAIL to the hold12 blip
+PASS.
+
+**The rig file**, `tools/.mister_rigs.json`, is gitignored. Per rig it holds `host`,
+`share_root` (where the library is mounted on the board), `library_root` (the same
+library on this host; else `$DVD_ISO_DIR`) and `capture`. `--rig` selects one;
+`"default"` names the usual.
+
+**Workflow:**
+```bash
+tools/hil_play.py list                                    # profiles + scenarios
+tools/hil_play.py run --disc mad_dog --scenario saloon --rbf releases/<core>.rbf
+tools/hil_play.py sweep --disc mad_dog --scenario first_shootout --vary SEL=36.6,37.3 \
+    --rbf <A>.rbf --rbf <B>.rbf                           # A/B, one verdict per run
+tools/hil_expect.py <run dir> --disc mad_dog --scenario saloon   # re-judge an old run
+```
+
+**A new disc:**
+1. `tools/hil_disc.py draft <iso> -o tools/hil_discs/<name>.json` lists its scoring
+   windows (and how many the autoplayer can aim at), the windows it cannot classify,
+   title-domain menus and indefinite stills with buttons. On Mad Dog it found all 15
+   route-menu stills (VTS 12 PGC 1–15) unaided.
+2. Write the `start` macro (disc menu to play).
+3. Run the drafted `explore` scenario on the rig.
+4. `tools/hil_disc.py explored <run dir>` names every window the autoplayer could not
+   place and the still it ended in. On the failed hold6 VTS 15 run it reports exactly
+   the intro skip and "still in a still at the end: 12:1", the two things found by hand
+   that day.
+5. Add policy entries; repeat until a run plays through.
+6. Write scenarios with expectations.
+
+Known gaps:
+- `shots_scored` and the autoplayer assume Set-only shots read by `if (g[R] !=/== K)`.
+  Other games (Dragon's Lair's direction moves, Scene It's answers) need their own shot
+  model in `disc_timing.scoring_targets`.
+- Mad Dog's VTS 5/6/8 have 35-button title cells that are not Set-only; `draft` lists
+  them under `title_menus_not_shots`.
+
 ## Known limits / next
 
 - `at_pts` maps PTS through picture count since `base`, so it is valid only on one
