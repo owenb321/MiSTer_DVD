@@ -200,14 +200,23 @@ for i, st in enumerate(sc["steps"]):
         need, seen, t_from = st.get("resets", 0), 0, t0
         after = t0 + st.get("after_s", 0.0)     # resets before this are ignored (an intro)
         last_c = None
-        while mono() < lim and seen < need:
+        # "live_edges": N = lock on at the Nth video_live 0->1 edge after after_s instead
+        # (a jump that keeps the VBUF does NOT reset the counters, but live still drops:
+        # Mad Dog's intro -> duel)
+        need_e, last_live = st.get("live_edges", 0), None
+        while mono() < lim and (seen < need or need_e):
             r = poll()
             if r and r["t"] >= t0:
-                if last_c is not None and r["_c"] < last_c and r["t"] >= after:
+                lv = r["flags"]["video_live"]
+                if need and last_c is not None and r["_c"] < last_c and r["t"] >= after:
                     seen += 1
                     t_from = r["t"]
                     out({"step": i, "reset": seen, "t": r["t"]})
-                last_c = r["_c"]
+                if need_e and last_live == 0 and lv == 1 and r["t"] >= after:
+                    need_e -= 1
+                    t_from = r["t"]
+                    out({"step": i, "live_edge": True, "t": r["t"], "_c": r["_c"]})
+                last_c, last_live = r["_c"], lv
             time.sleep(0.002)
         while mono() < lim and state["base"] is None:
             r = poll()
