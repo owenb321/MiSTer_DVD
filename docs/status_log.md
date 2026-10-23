@@ -23,7 +23,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 ## Hardware status (THIS fork, verified 2026-06-21)
 
 - 🔧 **HIL PLAY HARNESS, SLICE B: NAV EVENT FIFO (2026-10-22, `feature/hil-play-harness`,
-  sim-proven; ⏳ fit, ⏳ HIL).** `dvd/nav_trace.sv` is a 256 × 80-bit clk_sys FIFO of
+  sim-proven; fitted 296 ALM + 2 M10K, SEED 17 timing PASS; ⏳ HIL).** `dvd/nav_trace.sv` is a 256 × 80-bit clk_sys FIFO of
   timestamped navigation events. There are 16 sources: GPRM writes, STC jumps, key presses,
   button activation, HLI promotion, cell/PGC changes, flushes, audio-ring-low,
   pause/still/live/menu, and 3 spare hooks for issue #176's branch-only signals. Each entry

@@ -1,7 +1,7 @@
 # Real-time play-and-measure harness
 
 **Status:** 🔧 host side working end to end on the rig with the capture card (2026-10-23).
-The nav event FIFO (fabric) is merged, sim-proven and not yet fitted: "Nav event FIFO (fabric)" below.
+The nav event FIFO (fabric) is merged, sim-proven and fitted, not yet run on the board: "Nav event FIFO (fabric)" below.
 **Tools:** `tools/disc_timing.py`, `tools/hil_play.py`, `tools/hil_timeline.py`.
 **Built for:** issue #176 (Mad Dog McCree). Every fix there needed another round of the
 maintainer play-testing by hand, and each round found a timing problem that the bench
@@ -122,8 +122,15 @@ confusing timeout.
 ## Nav event FIFO (fabric)
 
 **Status:** 🔧 sim-proven (`bench/dvd/run_nav_trace.sh --red`, `main/tests/run_tests.sh
---red`), wired into `dvd/emu.sv`, **not yet compiled or run on the board** (⏳ fit: ALM / M10K
-cost and the "Inferred altsyncram" line in `DVD.map.rpt`; ⏳ HIL: a real drain on the rig).
+--red`), wired into `dvd/emu.sv`, **fitted; not yet run on the board** (⏳ HIL: a real drain on
+the rig).
+
+**Fit (2026-10-23, `DVD_playharness_20261023_1139.rbf`, SEED 17, unchanged pin):**
+- `nav_trace` takes **296 ALM** by entity (the pre-fit estimate was 200–250) and **2 M10K**,
+  inferred as one 256 × 80 simple-dual-port `altsyncram`. Whole design: 530 / 553 RAM
+  blocks; 39,080 / 41,910 ALM "needed" (that headline swings ~1.5k between fits).
+- Timing PASS: clk_dec 89.29 MHz at the worst corner (gate 86), clk_mem 92.77 MHz (gate
+  90). `clock_check` reports 0 fail, 0 warn; clk_hdmi's −2.4 ns is the known stock `ascal`.
 
 ### Why
 
