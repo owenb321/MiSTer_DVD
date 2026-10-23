@@ -250,6 +250,23 @@ module spu_decode #(
     // 86.0 gate.)
     reg  [24:0] hold_tmr;
     reg         guard_open;   // a new cell began: accept its first unit whatever its PTS
+    // ★ THE BITMAP IS BEING OVERWRITTEN (2026-10-23, issue #176 follow-up: Mad Dog
+    // McCree's "purple blip"). From the first RLE line to COMMIT the single bitmap holds
+    // the INCOMING unit's pixels while the committed params (palette, contrast, window)
+    // are still the OUTGOING unit's. When the display-order hold is cut short (its
+    // HOLD_CYCLES bound) or skipped while the outgoing unit is still inside its window,
+    // the new graphic is drawn in the old unit's colours for the ~10 ms of the decode:
+    // Mad Dog's first shootout decoded its 35-reticle grid (authored contrast 0) under
+    // the intro's full-screen wash (contrast 7), showing every reticle under a purple
+    // wash for one picture, ~1 s before the window (HDMI capture + maintainer's
+    // screenshot; main had it too). The outgoing graphic is destroyed by then anyway, so
+    // in the title domain an EARLY decode (the unit not due, an authored gap after the
+    // outgoing one: the hold was cut short) shows nothing until the commit. A due or
+    // contiguous decode keeps showing: there the outgoing window is ending on schedule,
+    // and a persistent re-send (the white rabbit) redraws the same graphic. menu_mode keeps showing
+    // (bit-identical): emu's hl_mask covers its highlight, and a menu decode lands at a
+    // transition whose old graphic is meant to be replaced.
+    reg         bm_dirty;
 
     // the unit's effective show time (COMMIT's own default when no STA_DSP delay)
     wire [32:0] w_show_eff = w_has_show ? w_show : pts_latched;
@@ -320,6 +337,7 @@ module spu_decode #(
     // the title domain, where FSTA_DSP is used for in-title HLI graphics only on a
     // display-ON SetSTN stream, which is not the forced route).
     wire visible = enable && c_valid && (!forced_only || c_forced) &&
+                   !(bm_dirty && !menu_mode) &&
                    (menu_mode || ((stc >= c_show) && (stc < c_hide)));
     assign sp_active = visible;
 
@@ -367,6 +385,7 @@ module spu_decode #(
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             state    <= S_IDLE;
+            bm_dirty <= 1'b0;
             c_valid  <= 1'b0;
             c_forced <= 1'b0;
             w_forced <= 1'b0;
@@ -641,6 +660,13 @@ module spu_decode #(
 
             // ---- start a new RLE line ----
             RLE_LINE: begin
+                // first line of the decode: an EARLY decode (the unit is not due, and
+                // the author wrote a gap after the outgoing unit, so the hold was cut
+                // short by its bound) must not show the new pixels in the old params.
+                // A due or contiguous decode is the old window ending on schedule (a
+                // re-send redraws the same graphic: The Matrix's white rabbit, [A]).
+                if (field == 1'b0 && abs_line == 12'd0)
+                    bm_dirty <= !spu_due && !spu_contig;
                 wr_row_base <= (w_sy + abs_line) * STRIDE[10:0];
                 x     <= 12'd0;
                 nstep <= 2'd0;
@@ -731,6 +757,7 @@ module spu_decode #(
                 c_show  <= (spu_contig && !spu_due) ? stc : w_show_eff;
                 c_hide  <= w_has_hide ? w_hide : 33'h1_FFFF_FFFF;  // stay if no STP_DSP
                 c_valid <= 1'b1;
+                bm_dirty <= 1'b0;          // bitmap and params describe the same unit again
                 c_forced <= w_forced;
                 c_pts   <= pts_latched;    // remember this unit's PTS (menu re-send guard)
                 guard_open <= 1'b0;        // the new cell's unit is on screen: guard again

@@ -147,8 +147,17 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     cycles after the pulse; N7 restores 255); the `cc_aud_low` release removed for good
     (the reader port, emu's `cc_aud_live`, bench arm F and every tie-off; nav_trace X2
     tied off).
+  - **`dev-cellcmdhold11`: the "purple blip" (pre-existing, `main` too).** One picture of
+    the whole 35-reticle grid under the intro's wash just before the first shootout
+    (maintainer's HDMI screenshot; ~half the harness captures). The shootout's subpicture
+    decoded early (the display-order hold's 700 ms bound expired) into the single bitmap
+    under the intro unit's still-visible params. Fix: an EARLY decode (not due, not
+    contiguous) hides the title-domain layer until COMMIT (`spu_decode` `bm_dirty`;
+    `docs/subpicture.md` "An early decode shows nothing until it commits"; gate
+    `run_spu_window.sh --red` arm [E], red-dirty / red-always).
   - **Next:** the harness on `dev-cellcmdhold10` (VTS 15 a few times for X0 ok=1, the
-    saloon, the duel, the first shootout),
+    saloon, the duel, the first shootout), then hold11 for the blip (first shootout's
+    junction, several runs, HDMI capture),
     then the maintainer's play-test, then the PR. Not yet run on HW: a loop disc such as
     Fairytopia, which is unchanged by construction because a fixed command is never held
     (bench P2), and Mad Dog II / Crime Patrol by hand. Design notes: `docs/dvd_nav.md` "A
