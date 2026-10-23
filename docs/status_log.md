@@ -137,8 +137,18 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     and a fix would change cell timing on every disc.
   - **`dev-cellcmdhold9` (experiment):** the `cc_aud_low` release off, nothing else (arm F
     inverted, R12 now restores it).
-  - **Next:** the harness on `dev-cellcmdhold9`: if the saloon stays clean, remove the
-    port and emu's `cc_aud_low` for good; if silence returns, restore the term;
+  - **HIL on `dev-cellcmdhold9`:** no silence anywhere without the release (saloon joins'
+    CELL_CMD ~0.12 s after the ring's low flag, at vbuf_empty; the ring never reached 0);
+    37.3 s now HITS on the first shootout; VTS 15 cell 2's verdict moved 0.812 -> 0.926.
+    It also caught a RE-JUDGE RACE: av_stc reaches clk_sys only on each 90 kHz tick (~300
+    clk_sys cycles) and the re-judge waited 255, so ~1 junction in 5 it judged against
+    the OLD clock (X0 ok=0; VTS 15 cell 2 then armed by the fallback after its verdict).
+  - **`dev-cellcmdhold10`:** the re-judge waits 4095 cycles (bench: the clock lands 600
+    cycles after the pulse; N7 restores 255); the `cc_aud_low` release removed for good
+    (the reader port, emu's `cc_aud_live`, bench arm F and every tie-off; nav_trace X2
+    tied off).
+  - **Next:** the harness on `dev-cellcmdhold10` (VTS 15 a few times for X0 ok=1, the
+    saloon, the duel, the first shootout),
     then the maintainer's play-test, then the PR. Not yet run on HW: a loop disc such as
     Fairytopia, which is unchanged by construction because a fixed command is never held
     (bench P2), and Mad Dog II / Crime Patrol by hand. Design notes: `docs/dvd_nav.md` "A

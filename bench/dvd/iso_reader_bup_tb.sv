@@ -81,7 +81,6 @@ module iso_reader_bup_tb;
 
     dvd_iso_reader #(.NAV_CAP(1)) dut (
         .cc_btns(1'b0),   // issue #176 hold off: a new input floats Z unless tied
-        .cc_aud_low(1'b0), // issue #176 audio-low release off: tie the new input
         // new reader inputs tied off: a floating input is X (see the port comments)
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(7'd0),

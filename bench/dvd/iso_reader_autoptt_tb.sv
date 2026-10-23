@@ -70,7 +70,6 @@ module iso_reader_autoptt_tb;
 
     dvd_iso_reader dut (
         .cc_btns(1'b0),   // issue #176 hold off: a new input floats Z unless tied
-        .cc_aud_low(1'b0), // issue #176 audio-low release off: tie the new input
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size),
         .lu_lang_pref(16'd0), .title_sel(7'd0),
         .vbuf_empty(1'b0), .aud_drained(1'b1), .disp_tick(1'b0), .disp_fps(6'd0),

@@ -47,9 +47,7 @@
 //   P2 a fixed loop (LinkTopC) replays with no hold: in-title loops stay gapless.
 //   P3 LinkTailPGC is held: it lands in POST, which reads registers.
 //   P4 a cmd_nr past the PGC's cell commands is not held (no stale fx_mem bit).
-//   F  the audio ring running low (cc_aud_low) does NOT release the hold (the
-//      dev-cellcmdhold9 experiment: the release cost ~0.2 s of every window, and the
-//      saloon silence it was built for was the authored-duration still, fixed in G/H).
+//   (F, the audio-low release of dev-cellcmdhold4..8, was removed with the release.)
 //   G  a VIDEO cell with buttons up, read before any of its authored 4 s displayed:
 //      no timed still (dur_hold would have parked one, counted in whole seconds from
 //      the load, and frozen past the last picture: Mad Dog VTS 15 cell 1). The drain
@@ -86,7 +84,6 @@ module iso_reader_cmdhold_tb;
     reg         busy = 0;
     reg         cc_btns = 0;
     reg         vbuf_empty = 1;
-    reg         cc_aud_low = 0;
     reg         disp_tick = 0;
 
     reg  [7:0]  img [0:IMG_BYTES-1];
@@ -121,7 +118,7 @@ module iso_reader_cmdhold_tb;
     wire [10:0] ptt_cur_w;
 
     dvd_iso_reader #(.SEC_DIV(1000), .DRAIN_WD(DRAIN_WD_TB)) dut (
-        .cc_btns(cc_btns), .cc_aud_low(cc_aud_low),
+        .cc_btns(cc_btns),
         .ptt_upd(ptt_upd_w), .ptt_cur(ptt_cur_w),
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(7'd0),
@@ -554,11 +551,11 @@ module iso_reader_cmdhold_tb;
     endfunction
 
     integer s0, c0, e0, p0, r0;
-    integer a1_ok, a2_ok, b_ok, c_ok, d_ok, e_ok, f_ok, g_ok, h_ok, p1_ok, p2_ok, p3_ok, p4_ok;
+    integer a1_ok, a2_ok, b_ok, c_ok, d_ok, e_ok, g_ok, h_ok, p1_ok, p2_ok, p3_ok, p4_ok;
 
     initial begin
         a1_ok = 1; a2_ok = 1; b_ok = 1; c_ok = 1; d_ok = 1; e_ok = 1;
-        p1_ok = 1; p2_ok = 1; p3_ok = 1; p4_ok = 1; f_ok = 1; g_ok = 1; h_ok = 1;
+        p1_ok = 1; p2_ok = 1; p3_ok = 1; p4_ok = 1; g_ok = 1; h_ok = 1;
         build_iso;
         file_size = IMG_BYTES;
 
@@ -688,28 +685,9 @@ module iso_reader_cmdhold_tb;
         if (n_cc != c0 + 2) begin fail("P3: LinkTailPGC did not run once the VBUF drained"); p3_ok = 0; end
         $display("P3 %s: LinkTailPGC (POST reads registers) is held", p3_ok ? "PASS" : "FAIL");
 
-        // ---------- F: the audio runs low first -> the hold releases ----------
-        repeat (2000) @(posedge clk);
-        cc_btns = 1; vbuf_empty = 0; cc_aud_low = 0;
-        c0 = n_cc;
-        press(C_JUMPTT1);
-        wait_hold(4000000);
-        if (dut.vmw_cmd_pend !== 1'b1) begin fail("F: no hold at the B0 cell end"); f_ok = 0; end
-        repeat (20000) @(posedge clk);
-        if (n_cc != c0) begin fail("F: the command ran before the audio ran low"); f_ok = 0; end
-        cc_aud_low = 1;
-        repeat (20000) @(posedge clk);
-        if (n_cc != c0) begin fail("F: audio low released the hold with the VBUF full"); f_ok = 0; end
-        cc_aud_low = 0;
-        vbuf_empty = 1;                     // the display reaches the end: now it runs
-        t = 0; while (n_cc == c0 && t < 5000) begin @(posedge clk); t = t + 1; end
-        if (n_cc != c0 + 1) begin fail("F: the command did not run at the drain"); f_ok = 0; end
-        t = 0; while (n_pe == p0 && t < 4000000) begin @(posedge clk); t = t + 1; end
-        $display("F %s: the audio running low does not release the hold", f_ok ? "PASS" : "FAIL");
-
         // ---------- G: a video cell with buttons up -> no timed still, the drain holds ----------
         repeat (2000) @(posedge clk);
-        cc_btns = 1; vbuf_empty = 0; cc_aud_low = 0;
+        cc_btns = 1; vbuf_empty = 0;
         c0 = n_cc; s0 = seq_n;
         @(posedge clk); still_seen = 0;
         press(C_JUMPTT4);

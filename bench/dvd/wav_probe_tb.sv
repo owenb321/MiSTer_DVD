@@ -71,7 +71,6 @@ module wav_probe_tb;
 
     dvd_iso_reader dut (
         .cc_btns(1'b0),   // issue #176 hold off: a new input floats Z unless tied
-        .cc_aud_low(1'b0), // issue #176 audio-low release off: tie the new input
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(4'd0), .vbuf_empty(1'b0), 
         .jump_ttn(7'd0), .jump_pgn(8'd0),
         .still_off(1'b0), .vm_mode(1'b0), .vm_adv(1'b0), .vm_replay(1'b0),

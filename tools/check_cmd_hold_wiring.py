@@ -13,13 +13,9 @@ the file. It fails if:
   * nav_pci .btns_armed / .btns_pend are not plain declared nets;
   * dvd_iso_reader .vbuf_empty is not the `vbuf_empty` register assigned from the VBUF
     low-water compare (`vbuf_fill_s1 <= 8'h01`);
-  * dvd_iso_reader .cc_aud_low is not `cc_aud_low`, assigned `aud_ring_low & cc_aud_live`
-    (without the ring-low term the hold starves the audio at every scoring join; without
-    the liveness term an audio-less title releases every hold at once);
-  * nav_trace's .x_ev/.x_pl are not the X0..X2 hooks: x_ev = {cc_aud_low XOR its
-    registered copy (either edge), nav_pci .dbg_fb_promo, .dbg_rj}, and the payloads
-    carry cc_aud_low / 1 / .dbg_rj_ok in bit 0. A tie-off would leave the HIL harness's
-    #176 events silently absent.
+  * nav_trace's .x_ev/.x_pl are not the X0..X1 hooks: x_ev = {1'b0, nav_pci
+    .dbg_fb_promo, .dbg_rj}, and the payloads carry 1 / .dbg_rj_ok in bit 0 (X2 tied
+    off). A tie-off of X0/X1 would leave the HIL harness's #176 events silently absent.
 
     python3 tools/check_cmd_hold_wiring.py [emu.sv]   # exit 0 = wired right
     python3 tools/check_cmd_hold_wiring.py --red      # each mutation must FAIL
@@ -73,14 +69,6 @@ def check(emu_raw):
     if not re.search(r"\bvbuf_empty\s*<=\s*\(\s*vbuf_fill_s1\s*<=\s*8'h01\s*\)\s*;", src):
         bad.append("vbuf_empty is not assigned from (vbuf_fill_s1 <= 8'h01)")
 
-    al = port_expr(rd, 'cc_aud_low')
-    if al is None or al.strip() != 'cc_aud_low':
-        bad.append("dvd_iso_reader .cc_aud_low is '%s', want cc_aud_low" % al)
-    m = re.search(r'\bwire\s+cc_aud_low\s*=\s*([^;]+);', src)
-    if not m or sorted(t.strip() for t in m.group(1).split('&')) != ['aud_ring_low', 'cc_aud_live']:
-        bad.append("cc_aud_low is not assigned aud_ring_low & cc_aud_live (%s)"
-                   % (m.group(1).strip() if m else 'no assign'))
-
     tr = instantiation_body(src, 'nav_trace')
     if tr is None:
         bad.append('nav_trace instance not found in emu.sv')
@@ -94,15 +82,13 @@ def check(emu_raw):
         if not IDENT.match(e):
             bad.append("nav_pci .%s is '%s' -- must be a plain net" % (port, e))
         nets[port] = e
-    if not re.search(r'\btrc_aud_low_q\s*<=\s*cc_aud_low\s*;', src):
-        bad.append('trc_aud_low_q is not registered from cc_aud_low')
     m = re.search(r'\bwire\s*\[2:0\]\s*trc_x_ev\s*=\s*([^;]+);', src)
-    want = '{cc_aud_low^trc_aud_low_q,%s,%s}' % (nets['dbg_fb_promo'], nets['dbg_rj'])
+    want = "{1'b0,%s,%s}" % (nets['dbg_fb_promo'], nets['dbg_rj'])
     if not m or re.sub(r'\s+', '', m.group(1)) != want:
         bad.append('trc_x_ev is not %s (%s)' % (want, m.group(1).strip() if m else 'no assign'))
     m = re.search(r'\bwire\s*\[77:0\]\s*trc_x_pl\s*=\s*([^;]+);', src)
     pl = re.sub(r'\s+', '', m.group(1)) if m else ''
-    want_pl = "{{9'd0,aud_frames_avail,cc_aud_low},{hl_nxt_sptm_w[24:0],1'b1},{hl_nxt_sptm_w[24:0],%s}}" % nets['dbg_rj_ok']
+    want_pl = "{26'd0,{hl_nxt_sptm_w[24:0],1'b1},{hl_nxt_sptm_w[24:0],%s}}" % nets['dbg_rj_ok']
     if pl != want_pl:
         bad.append('trc_x_pl is %s, want %s' % (pl or 'no assign', want_pl))
     return bad
@@ -117,11 +103,8 @@ MUTATIONS = [
     ('port dropped', r'\.cc_btns\s*\(hl_btns_armed \| hl_btns_pend\),', ''),
     ('pend open', r'\.btns_pend\s*\(hl_btns_pend\)', '.btns_pend  ()'),
     ('vbuf tied', r'\.vbuf_empty\s*\(vbuf_empty\)', ".vbuf_empty     (1'b1)"),
-    ('aud low tied', r'\.cc_aud_low\s*\(cc_aud_low\)', ".cc_aud_low     (1'b0)"),
-    ('aud low no live', r'wire cc_aud_low  = aud_ring_low & cc_aud_live;', 'wire cc_aud_low  = aud_ring_low;'),
     ('trace x tied', r'\.x_ev\s*\(trc_x_ev\)', ".x_ev        (3'd0)"),
-    ('trace x level', r'cc_aud_low \^ trc_aud_low_q', 'cc_aud_low'),
-    ('trace x swap', r'\{cc_aud_low \^ trc_aud_low_q, hl_fb_promo_w, hl_rj_w\}', '{cc_aud_low ^ trc_aud_low_q, hl_rj_w, hl_fb_promo_w}'),
+    ('trace x swap', r"\{1'b0, hl_fb_promo_w, hl_rj_w\}", "{1'b0, hl_rj_w, hl_fb_promo_w}"),
     ('trace rj open', r'\.dbg_rj\s*\(hl_rj_w\)', '.dbg_rj        ()'),
     ('trace pl no verdict', r'\{hl_nxt_sptm_w\[24:0\], hl_rj_ok_w\}', '{hl_nxt_sptm_w[25:0]}'),
     ('vbuf threshold', r"vbuf_empty <= \(vbuf_fill_s1 <= 8'h01\);", "vbuf_empty <= (vbuf_fill_s1 <= 8'h40);"),
@@ -158,7 +141,7 @@ def main():
         print('\n'.join('FAIL: ' + b for b in bad))
         return 1
     print('OK: reader .cc_btns = nav_pci btns_armed | btns_pend; .vbuf_empty = the '
-          'low-water mark; .cc_aud_low; nav_trace X0-X2')
+          'low-water mark; nav_trace X0-X1')
     return 0
 
 

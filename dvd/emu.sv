@@ -704,7 +704,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-cellcmdhold9"
+`define CORE_VERSION "dev-cellcmdhold10"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -3612,24 +3612,6 @@ always @(posedge clk_sys) begin
     else if (aud_frames_avail <  16'd6)    aud_ring_low <= 1'b1;
     else if (aud_frames_avail >= 16'd12)   aud_ring_low <= 1'b0;
 end
-// ★ CELL-COMMAND HOLD, AUDIO SIDE (issue #176, Mad Dog's saloon: a hit's gunshot
-// went silent for ~2 s). The reader holds a scoring cell command until the display
-// reaches the cell end; draining to vbuf_empty also emptied this ring, so on back-to-
-// back short scoring cells (the saloon's 1.9-3.9 s cells, a PTS restart at each)
-// the audio underran at EVERY join and the AC-3 resync left ~2 s of silence. The
-// hold also releases when the ring runs low (the hysteresis above, < 6 frames,
-// ~0.2 s of AC-3), so the reader resumes while the old cell's audio still plays --
-// the ordering the pre-hold build always had. Costs ~0.2 s off the window's end.
-// cc_aud_live: the title HAS audio (the ring reached 12 frames within 3 s), so an
-// audio-less title keeps the plain vbuf_empty release instead of releasing at once.
-reg  [26:0] cc_aud_live_tmr;                   // 3 s at 27 MHz
-always @(posedge clk_sys) begin
-    if (!reset_n)                          cc_aud_live_tmr <= 27'd0;
-    else if (aud_frames_avail >= 16'd12)   cc_aud_live_tmr <= 27'd81_000_000;
-    else if (cc_aud_live_tmr != 27'd0)     cc_aud_live_tmr <= cc_aud_live_tmr - 27'd1;
-end
-wire cc_aud_live = (cc_aud_live_tmr != 27'd0);
-wire cc_aud_low  = aud_ring_low & cc_aud_live;
 reg  menu_vbuf_over;
 wire menu_vbuf_throttle = menus_on & menu_active & menu_vbuf_over &
                           ~(menu_aud_live & aud_ring_low);
@@ -3774,7 +3756,6 @@ dvd_iso_reader dvd_iso_reader_inst (
     // reaches a cell's end ~a VBUF ahead of the display, where a window opening in
     // the cell's last second is still parsed-but-not-promoted.
     .cc_btns        (hl_btns_armed | hl_btns_pend),
-    .cc_aud_low     (cc_aud_low),         // issue #176: the hold also releases before the audio runs dry
 
     .vm_mode        (menus_on),           // Phase 4: the VM drives navigation
     .vm_adv         (vm_adv_w),
@@ -6465,23 +6446,16 @@ nav_pci nav_pci_inst (
 // over EXT_BUS command 0x7C (dvd_ctl.cpp, only while the harness's fast-telemetry
 // arm file exists). Placed here, below every source it reads (Verilog declaration
 // order). Wiring gated by tools/check_nav_trace_wiring.py.
-// #176 HOOKS: x_ev/x_pl carry nav_pci's re-judge and fallback promotions and the
-// cc_aud_low release as X0..X2 (codes 14..16); see trc_x_ev below.
+// #176 HOOKS: x_ev/x_pl carry nav_pci's re-judge and fallback promotions as X0..X1
+// (codes 14..15); X2 is tied off. See trc_x_ev below.
 // =========================================================================
-// Issue #176 events, X0..X2 (codes 14..16):
+// Issue #176 events, X0..X1 (codes 14..15); X2 (16) is tied off:
 //   X0 re-judge  : nav_pci re-judged its pending window at a content re-anchor (pulse);
 //                  payload {nxt_sptm[24:0], taken onto the new timeline}
 //   X1 fallback  : nav_pci promoted a pending through the ~1 s FALLBACK (pulse);
 //                  payload {nxt_sptm[24:0], 1}
-//   X2 cc_aud_low: the cell-command hold's audio release, on EITHER edge;
-//                  payload {9'd0, aud_frames_avail, new level}
-reg         trc_aud_low_q;
-always @(posedge clk_sys) begin
-    if (!reset_n) trc_aud_low_q <= 1'b0;
-    else          trc_aud_low_q <= cc_aud_low;
-end
-wire [2:0]  trc_x_ev = {cc_aud_low ^ trc_aud_low_q, hl_fb_promo_w, hl_rj_w};
-wire [77:0] trc_x_pl = {{9'd0, aud_frames_avail, cc_aud_low},
+wire [2:0]  trc_x_ev = {1'b0, hl_fb_promo_w, hl_rj_w};
+wire [77:0] trc_x_pl = {26'd0,
                         {hl_nxt_sptm_w[24:0], 1'b1},
                         {hl_nxt_sptm_w[24:0], hl_rj_ok_w}};
 nav_trace nav_trace_inst (

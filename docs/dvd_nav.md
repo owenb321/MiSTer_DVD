@@ -5367,6 +5367,11 @@ was a miss's jump transition, the same in v0.9.1.) Simulation could not reproduc
 mute: `aud_retime_tb` S13, head-after-underrun with LPCM frames, plays the head on time.
 So the fix stops the starvation itself rather than tuning the audio path.
 
+⛔ **REMOVED in `dev-cellcmdhold10`:** this paragraph's diagnosis was wrong. The silence was the
+authored-duration still overrunning video cells ("A fourth" below), and `dev-cellcmdhold9`
+ran the saloon clean without the release (no join's ring reached 0; 37.3 s then hits on the
+first shootout). Kept for the record:
+
 The fix: the hold also releases on `cc_aud_low`, emu's ring-low hysteresis (< 6 frames,
 ~0.2 s of AC-3) AND `cc_aud_live` (the ring reached 12 frames within 3 s, so a title
 without audio keeps the plain `vbuf_empty` release). The reader then resumes while the
@@ -5396,9 +5401,8 @@ timed still (`STILL_CMD`) and then the command runs; a video cell has none left 
 Cell ends without the hold (no buttons, or a fixed command) keep `dur_hold` exactly as
 before. Gate: `iso_reader_cmdhold_tb` G (a 4 s video cell read before any of it displayed:
 no still, the command at the drain) and H (a 6 s still cell: drain, then a 6 s still, then
-the command); mutations R13 (`dur_hold` first) and R14 (no residual still). Whether the
-`cc_aud_low` release is still needed once this is in is the next HIL question: the
-gunshot silence it was built for turned out to be this.
+the command); mutations R13 (`dur_hold` first) and R14 (no residual still). The `cc_aud_low`
+release built for the gunshot silence is gone (hold10): the silence was this.
 
 **Known limits.**
 

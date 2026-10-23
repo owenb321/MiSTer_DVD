@@ -148,19 +148,21 @@ module nav_pci_rejudge_tb;
     int e0;
 
     // re-anchor the clock onto a new timeline. emu's clock (av_sync's mirror) and
-    // the pulse (the anchor-delta CDC) cross separately; here the pulse lands
-    // first and the value 3 cycles later. nav_pci re-judges ~255 cycles after.
+    // the pulse (the anchor-delta CDC) cross separately, and the mirror only moves on
+    // a 90 kHz tick (~300 clk_sys cycles): here the value lands 600 cycles after the
+    // pulse, past the 255 cycles hold7-9 waited (the HIL race). nav_pci re-judges
+    // ~4095 cycles after the pulse.
     task reanchor(input [31:0] t);
         begin
             stc_reanchor <= 1; @(posedge clk); stc_reanchor <= 0;
-            repeat (2) @(posedge clk); stc <= {1'b0, t};
+            repeat (599) @(posedge clk); stc <= {1'b0, t};
         end
     endtask
 
     // press Select NOW (the clock where it is); fired = the command, or 1 for none
     task press_now;
         begin
-            repeat (500) @(posedge clk);        // re-judge (~255) + promotion + button fetch
+            repeat (4500) @(posedge clk);       // re-judge (~4095) + promotion + button fetch
             nav_act <= 1; @(posedge clk); nav_act <= 0;
             fired = 64'd1;
             for (k = 0; k < 10; k++) begin @(posedge clk); if (btn_cmd_valid) fired = btn_cmd; end

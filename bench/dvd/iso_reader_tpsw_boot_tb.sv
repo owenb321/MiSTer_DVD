@@ -45,7 +45,6 @@ module iso_reader_tpsw_boot_tb;
 
     dvd_iso_reader dut (
         .cc_btns(1'b0),   // issue #176 hold off: a new input floats Z unless tied
-        .cc_aud_low(1'b0), // issue #176 audio-low release off: tie the new input
         // new reader inputs tied off: a floating input is X, and X on
         // agl_vm_en would poison the angle resolve (see the port comments).
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),

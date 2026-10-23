@@ -87,7 +87,7 @@ scoring lead:
 |---|---|---|---|
 | 14 | X0 | `{nxt_sptm[24:0], ok}` | nav_pci re-judged its pending window at a content re-anchor (a pulse); `ok` = taken onto the new timeline; its `hli_s_ptm` |
 | 15 | X1 | `{nxt_sptm[24:0], 1}` | nav_pci promoted a pending through the ~1 s FALLBACK (a pulse); its `hli_s_ptm` |
-| 16 | X2 | `{9'd0, aud_frames_avail[15:0], cc_aud_low}` | the cell-command hold's audio-low release went high/low; the ring's frame count |
+| 16 | X2 | — | tied off again from `dev-cellcmdhold10` (it logged the cell-command hold's `cc_aud_low` release, removed there; AUD_LOW, code 12, still logs the ring's low flag) |
 
 `tools/check_cmd_hold_wiring.py --red` gates that wiring. Main's `dvd_ctl.cpp` logs them
 as `"raw"`, and the host decodes them. On main they are tied off; main has no

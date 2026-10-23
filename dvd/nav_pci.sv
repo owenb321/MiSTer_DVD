@@ -436,16 +436,20 @@ reg hli_coherent;
 // s_ptm, and past FUTURE_HORIZON the fallback still rescues it (nxt_future). This replaces dev-cellcmdhold5's
 // "a scoring window committed past its start arms at once", which armed on the
 // commit, up to a reader lead before the picture.
-// ⚠ The clock and the re-anchor pulse cross from clk_dec on SEPARATE paths (av_sync's
-// mirror vs the anchor-delta CDC), so either can land first by a few cycles. The
-// re-judge waits 255 clk_sys cycles (~9.4 us, nothing at a frame's scale) so it
-// always reads the NEW clock.
-reg  [7:0] rj_cnt;
+// ⚠ The clock and the re-anchor pulse cross from clk_dec on SEPARATE paths, and the
+// clock's path (emu pts_cdc_stc -> av_sync's mirror) only delivers a new value on
+// each 90 kHz STC tick, i.e. every ~300 clk_sys cycles. dev-cellcmdhold7..9 waited
+// 255 cycles -- less than one mirror period -- and so sometimes judged against the OLD
+// timeline (HIL, hold9: X0 ok=0 logged at STC 4.074, just before the jump to 0.108;
+// VTS 15 cell 2 then armed by the fallback, after its verdict). The re-judge now
+// waits 4095 cycles (~152 us at 27 MHz, ~13 mirror updates; nothing at a frame's
+// scale), so it always reads the NEW clock.
+reg [11:0] rj_cnt;
 always @(posedge clk)
-    if (!rst_n)              rj_cnt <= 8'd0;
-    else if (stc_reanchor)   rj_cnt <= 8'd255;
-    else if (rj_cnt != 8'd0) rj_cnt <= rj_cnt - 8'd1;
-wire               rj_go  = (rj_cnt == 8'd1);
+    if (!rst_n)               rj_cnt <= 12'd0;
+    else if (stc_reanchor)    rj_cnt <= 12'd4095;
+    else if (rj_cnt != 12'd0) rj_cnt <= rj_cnt - 12'd1;
+wire               rj_go  = (rj_cnt == 12'd1);
 wire signed [31:0] rj_d   = nxt_sptm - stc[31:0];
 wire signed [31:0] rj_d2  = nx2_sptm - stc[31:0];
 wire rj_ok  = nxt_v && (nxt_btn_ns != 6'd0) && (rj_d  >= -$signed(RJ_TOL));

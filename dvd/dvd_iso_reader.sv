@@ -325,10 +325,6 @@ module dvd_iso_reader #(
     // waits until the display has caught up with the cell's end before it runs,
     // so a button pressed in the cell's last second still counts. See vmw_cmd_pend.
     input             cc_btns,
-    // The audio ring is nearly dry (emu: < 6 frames, and the title has audio). The
-    // cell-command hold releases on this OR vbuf_empty, so the reader resumes
-    // before the old cell's audio runs out (issue #176, Mad Dog's saloon).
-    input             cc_aud_low,
 
     // ---------------------------------------------------------------------
     // Phase-4 DVD-VM coupling. vm_mode (= O[1] Disc Menus) hands navigation
@@ -1452,11 +1448,12 @@ end
 // decoder is not (rtl/mpeg2/watchdog.v decoder_active <= ~busy).
 reg [30:0] drain_tmr;   // 31 bits: DRAIN_WD is now 60 s @ 27 MHz
 wire       drain_wd_hit = (drain_tmr >= DRAIN_WD);
-// ⚠ EXPERIMENT (dev-cellcmdhold9, issue #176): the cc_aud_low release is OFF.
-// It was built (hold4) for the saloon's silent gunshots, which the HIL harness has
-// since traced to the authored-duration still overrunning video cells (fixed in
-// hold8). If hold9's saloon stays clean, the port and emu's cc_aud_low go; if the
-// silence returns, this term comes back.
+// ⛔ No audio-low release (issue #176). dev-cellcmdhold4..8 also released the cell-
+// command hold when the audio ring ran low (cc_aud_low), for the saloon's silent
+// gunshots; it cost ~0.2 s of every scoring window. The HIL harness traced that
+// silence to the authored-duration still overrunning video cells (fixed in hold8),
+// and hold9 ran the saloon clean without the release (no join's ring reached 0), so
+// it was removed. Do not bring it back for an audio gap without re-measuring.
 wire       tail_wait = ((vmw_pgc_pend && ~vbuf_empty) ||
                         (vmw_cmd_pend && ~vbuf_empty)) &&
                        ~menu_dom && ~drain_wd_hit;
