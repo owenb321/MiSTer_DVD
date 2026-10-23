@@ -196,7 +196,7 @@ def dump(iso, vts, pgcn, want=(), every_nav=False):
     return out
 
 
-_CMP = re.compile(r'^if \(g\[(\d+)\] != (0x[0-9a-f]+|\d+)\)')
+_CMP = re.compile(r'^if \(g\[(\d+)\] (!=|==) (0x[0-9a-f]+|\d+)\)')
 _SET = re.compile(r'^SetMode Register g\[(\d+)\] = (0x[0-9a-f]+|\d+)$')
 
 
@@ -267,10 +267,13 @@ def scoring_targets(iso, vts_list=None):
                             continue
                         tg = []
                         if m:
-                            reg, val = int(m.group(1)), _num(m.group(2))
+                            # `!= K Link`: survive by setting g[R] = K. `== K Link`: survive
+                            # by setting g[R] to anything else.
+                            reg, op, val = int(m.group(1)), m.group(2), _num(m.group(3))
                             for b in h['buttons']:
                                 sm = _SET.match(b['cmd'])
-                                if sm and int(sm.group(1)) == reg and _num(sm.group(2)) == val:
+                                if sm and int(sm.group(1)) == reg and (
+                                        (_num(sm.group(2)) == val) == (op == '!=')):
                                     tg.append(b['n'])
                         hm = homing(h['buttons'])
                         aim = None
