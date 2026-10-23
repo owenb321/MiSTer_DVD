@@ -147,6 +147,12 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     cycles after the pulse; N7 restores 255); the `cc_aud_low` release removed for good
     (the reader port, emu's `cc_aud_live`, bench arm F and every tie-off; nav_trace X2
     tied off).
+  - **HIL on `dev-cellcmdhold10` (2026-10-23): passes.** VTS 15 x3: every PTS-restart cell
+    (2, 3, 4) re-judged ok=1 against the NEW clock (9/9, no fallback), armed at `s_ptm`
+    (`late_ticks` 12-13), all shots hit, cell 2's verdict at the drain (0.926 of 1.009).
+    Saloon: every shot hit, no still, no ring-empty, audio gaps <= 0.09 s. Duel: hit after
+    the draw, miss before. First shootout: 37.0 and 37.3 both HIT (37.3 missed on hold4-8).
+    The only fallback arm is the VTS 2 menu (not a scoring cell).
   - **`dev-cellcmdhold11`: the "purple blip" (pre-existing, `main` too).** One picture of
     the whole 35-reticle grid under the intro's wash just before the first shootout
     (maintainer's HDMI screenshot; ~half the harness captures). The shootout's subpicture
