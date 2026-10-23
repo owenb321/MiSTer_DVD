@@ -480,7 +480,11 @@ def arm_events(frames, timing):
             e = h and (h['e_ptm'] / 9e4 if h['e_ptm'] is not None else None)
             ref = s if a else e
             out.append({'t': r['t'], 'edge': 'LIVE' if a else 'dead',
-                        'cell': last_pic['cell'], 'pts': '%.3f' % last_pic['pts'],
+                        'cell': last_pic['cell'],
+                        # a static shot matches many pictures equally (margin ~0): its
+                        # PTS is not a measurement, so say so rather than print it bare
+                        'pts': '%.3f%s' % (last_pic['pts'], '' if last_pic.get('margin', 0) > 0.02
+                                           else ' (static shot: PTS uncertain)'),
                         's_ptm': '%.3f' % s if s is not None else '-',
                         'e_ptm': '%.3f' % e if e is not None else 'forever',
                         'vs': ('%+.3f s vs authored %s' % (last_pic['pts'] - ref,
