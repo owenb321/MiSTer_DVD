@@ -6,11 +6,11 @@
 #        + the benches that share the drain gate and the cell-end dispatch:
 #          iso_reader_celldur_tb, iso_reader_vm_tb, iso_reader_auddrain_tb,
 #          iso_reader_stilloff_tb
-#        + nav_pci_early_tb (a scoring window arms EARLY_LEAD before its start;
-#          arms a-g)
+#        + nav_pci_rejudge_tb (a window arms at its authored start; a window whose
+#          PTS restarted is re-judged at the clock's re-anchor; arms a-e)
 #        + tools/check_cmd_hold_wiring.py --red (the emu.sv seam: .cc_btns is
-#          nav_pci's armed | pend, .vbuf_empty is the low-water mark, nav_pci
-#          .early_ok is the reader's .cc_scoring)
+#          nav_pci's armed | pend, .vbuf_empty is the low-water mark, .cc_aud_low,
+#          and the nav_trace X0-X2 hooks)
 #        bench/dvd/run_hli_window.sh --red (nav_pci_tb + the window sequences) is
 #        the other gate nav_pci's promotion must keep green; run it too.
 #        Bit-identity of every other reader bench with the hold tied off is
@@ -34,16 +34,19 @@
 #     R10 set-fixed   : a Set (types 2-6) classed as fixed    -> C
 #     R11 cond-fixed  : the compare op ignored                -> A1 A2 B D E F
 #     R12 no-aud-low  : the hold ignores cc_aud_low            -> F
-#   the scoring-window lead (nav_pci, nav_pci_early_tb):
-#     N1 no-lead      : EARLY_LEAD = 0                         -> a f
-#     N2 any-cell     : early_ok ignored                       -> b
-#     N3 links-ok     : a linking button still set-only        -> c
-#     N4 no-set-ok    : an all-Nop HLI counts as set-only      -> d
-#     N5 no-guard     : a later same-timeline window leads too -> e
-#     N6 unsigned     : the guard's compare unsigned           -> f g
-#                       (g commits a restarted PTS over an armed window)
-#     N7 no-restart   : a scoring window committed on the old  -> g
-#                       clock waits for the ~1 s fallback
+#   the re-judge at a re-anchor (nav_pci, nav_pci_rejudge_tb):
+#     N1 no-coherent  : a re-judged pending stays untrusted    -> b c e
+#     N2 no-pre       : a re-judged pending keeps nxt_pre = 0  -> b e
+#     N3 no-tol-guard : any pending is taken, however far      -> d
+#                       behind the new clock
+#     N4 tol-zero     : RJ_TOL = 0                             -> e
+#     N5 lead-back    : windows arm 1 s before s_ptm (the      -> a c d
+#                       retired EARLY_LEAD; d's pending then arms
+#                       before the re-anchor)
+#     N6 arm-at-once  : a commit past its start arms at once   -> b
+#                       (dev-cellcmdhold5's rule)
+#     N7 too-soon     : re-judge one cycle after the pulse,    -> b d e
+#                       before the new clock has landed
 #
 # Usage: bench/dvd/run_cmd_hold.sh [--red]
 set -u
@@ -75,8 +78,8 @@ run celldur  "ALL TESTS PASSED"     bench/dvd/iso_reader_celldur_tb.sv $RD
 run vm       "ALL TESTS PASSED"     bench/dvd/iso_reader_vm_tb.sv $RD
 run auddrain "RESULT: PASS"         bench/dvd/iso_reader_auddrain_tb.sv $RD
 run stilloff "ISO_READER_STILLOFF_TB: ALL TESTS PASSED" bench/dvd/iso_reader_stilloff_tb.sv $RD
-run navearly "NAV_PCI_EARLY_TB: ALL TESTS PASSED" bench/dvd/nav_pci_early_tb.sv dvd/nav_pci.sv
-grep -E '^[a-g] PASS' "$OUT/navearly.log" | sed 's/^/    /'
+run navrejudge "NAV_PCI_REJUDGE_TB: ALL TESTS PASSED" bench/dvd/nav_pci_rejudge_tb.sv dvd/nav_pci.sv
+grep -E '^[a-e] PASS' "$OUT/navrejudge.log" | sed 's/^/    /'
 # emu.sv has no bench: the seam is read out of the file
 if python3 tools/check_cmd_hold_wiring.py --red > "$OUT/wiring.log" 2>&1; then
     echo "  PASS check_cmd_hold_wiring (+ its red self-test)"
@@ -121,7 +124,7 @@ if [ $RED -eq 1 ]; then
     mutate R10_set_fixed  "C"           's/\(\(cmd_b0\[7:5\] == 3'"'"'d0\) \|\|/((cmd_b0[7:5] != 3'"'"'d1) ||/'
     mutate R12_no_aud_low "F"           's/\(vmw_cmd_pend && ~vbuf_empty && ~cc_aud_low\)/(vmw_cmd_pend \&\& ~vbuf_empty)/'
     mutate R11_cond_fixed "A1 A2 B D E F" 's/wire       cmd_fixed_w = \(cmd_b1\[6:4\] == 3'"'"'d0\) &&/wire       cmd_fixed_w = 1'"'"'b1 \&\&/'
-    # nav_pci mutations, scored on nav_pci_early_tb's arms a-f
+    # nav_pci mutations, scored on nav_pci_rejudge_tb's arms a-e
     nmutate() {
         local name=$1 want=$2 expr=$3
         local src="$OUT/$name.sv"
@@ -129,12 +132,12 @@ if [ $RED -eq 1 ]; then
         if cmp -s dvd/nav_pci.sv "$src"; then
             echo "  FAIL $name: the expression matched nothing (mutation is stale)"; fail=1; return
         fi
-        if ! iverilog -g2012 -o "$OUT/$name" "$src" bench/dvd/nav_pci_early_tb.sv 2>"$OUT/$name.build"; then
+        if ! iverilog -g2012 -o "$OUT/$name" "$src" bench/dvd/nav_pci_rejudge_tb.sv 2>"$OUT/$name.build"; then
             echo "  FAIL $name (build)"; sed 's/^/      /' "$OUT/$name.build" | head; fail=1; return
         fi
         timeout 300 vvp "$OUT/$name" > "$OUT/$name.log" 2>&1
         local got
-        got=$(grep -oE '^[a-g] FAIL' "$OUT/$name.log" | awk '{print $1}' | sort | tr '\n' ' ' | sed 's/ $//')
+        got=$(grep -oE '^[a-e] FAIL' "$OUT/$name.log" | awk '{print $1}' | sort | tr '\n' ' ' | sed 's/ $//')
         if grep -q "ALL TESTS PASSED" "$OUT/$name.log"; then got="(none)"; fi
         if [ "$got" = "$want" ]; then
             echo "  ok   $name -> fails [$got]"
@@ -142,13 +145,13 @@ if [ $RED -eq 1 ]; then
             echo "  FAIL $name: failed [$got], expected [$want]"; fail=1
         fi
     }
-    nmutate N1_no_lead   "a f" "s/parameter \[31:0\] EARLY_LEAD      = 32'd90_000/parameter [31:0] EARLY_LEAD      = 32'd0/"
-    nmutate N2_any_cell  "b"   "s/wire early_new  = f_setonly && early_ok && !lead_blk_h;/wire early_new  = f_setonly \&\& !lead_blk_h;/"
-    nmutate N3_links_ok  "c"   "s/wire       f_setonly = f_sset && !f_slink;/wire       f_setonly = f_sset;/"
-    nmutate N4_no_set_ok "d"   "s/wire       f_setonly = f_sset && !f_slink;/wire       f_setonly = !f_slink;/"
-    nmutate N5_no_guard  "e"   "s/wire lead_blk_h = armed && h_so && \(\\\$signed\(f_sptm - h_sptm\) > 0\);/wire lead_blk_h = 1'b0;/"
-    nmutate N7_no_restart "g"   "s/\(\(nxt_pre && !nxt_dist_e\[31\]\) \|\| \(nxt_early && !nxt_pre\)\)/(nxt_pre \&\& !nxt_dist_e[31])/"
-    nmutate N6_unsigned  "f g" "s/wire lead_blk_h = armed && h_so && \(\\\$signed\(f_sptm - h_sptm\) > 0\);/wire lead_blk_h = armed \&\& h_so \&\& ((f_sptm - h_sptm) != 32'd0);/"
+    nmutate N1_no_coherent "b c e" "s/    else if \(rj_go && rj_ok\) hli_coherent <= 1'b1;[^\n]*\n//"
+    nmutate N2_no_pre      "b e"   "s/        if \(rj_go && rj_ok\)  nxt_pre <= 1'b1;\n//"
+    nmutate N3_no_tol_guard "d"    "s/\(rj_d  >= -\\\$signed\(RJ_TOL\)\)/1'b1/"
+    nmutate N4_tol_zero    "e"     "s/parameter \[31:0\] RJ_TOL          = 32'd9_000/parameter [31:0] RJ_TOL          = 32'd0/"
+    nmutate N5_lead_back   "a c d" "s/wire nxt_sched = nxt_v && nxt_pre && !nxt_dist\[31\] && stc_trusted;/wire nxt_sched = nxt_v \&\& nxt_pre \&\& (nxt_dist >= -32'sd90000) \&\& stc_trusted;/"
+    nmutate N6_arm_at_once "b"     "s/wire nxt_sched = nxt_v && nxt_pre && !nxt_dist\[31\] && stc_trusted;/wire nxt_sched = nxt_v \&\& stc_trusted \&\& ((nxt_pre \&\& !nxt_dist[31]) || !nxt_pre);/"
+    nmutate N7_too_soon    "b d e" "s/wire               rj_go  = \(rj_cnt == 8'd1\);/wire               rj_go  = (rj_cnt == 8'd254);/"
 fi
 
 if [ $fail -eq 0 ]; then echo "run_cmd_hold: PASS"; else echo "run_cmd_hold: FAIL"; exit 1; fi

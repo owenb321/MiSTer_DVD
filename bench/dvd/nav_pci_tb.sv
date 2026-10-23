@@ -64,7 +64,6 @@ module nav_pci_tb;
         .menu_settled(menu_settled),
         .stc_fresh(1'b1),   // TB scenarios model full-flush loads (display-coherent STC)
         .stc_reanchor(stc_reanchor),
-        .early_ok(1'b0),   // issue #176 scoring lead off: a new input floats Z unless tied
         .sel_force(sel_force), .sel_force_btn(sel_force_btn),
         .hl_btnn(hl_btnn),
         .num_sel(num_sel), .num_btn(num_btn),

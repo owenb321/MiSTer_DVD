@@ -83,14 +83,10 @@ module nav_pci #(
     // comfortably above any real VBUF parse lead (~2 s) and far below the stuck
     // compares the fallback exists to rescue. See nxt_future below.
     parameter [31:0] FUTURE_HORIZON  = 32'd360_000,
-    // SCORING-WINDOW LEAD (issue #176): a scoring highlight (see early_ok) arms this
-    // many 90 kHz ticks BEFORE its hli_s_ptm. 1.0 s, a player model, not a user
-    // option: libdvdnav players (VLC and most software players) answer a button as
-    // soon as they READ its NAV pack (highlight.c get_current_button tests hli_ss
-    // only; hli_s_ptm is just the highlight's draw time), which is the NAV's VOBU
-    // start (~0.4 s before s_ptm on Mad Dog) minus their read-ahead. A gameplay
-    // video of Mad Dog on such a player shoots ~1 s before this core could.
-    parameter [31:0] EARLY_LEAD      = 32'd90_000
+    // RE-JUDGE TOLERANCE (issue #176): at a content re-anchor, a pending window
+    // whose s_ptm sits at most this far BEHIND the new clock still belongs to the
+    // new timeline (its window opens with the cell's first picture). 0.1 s.
+    parameter [31:0] RJ_TOL          = 32'd9_000
 ) (
     input  wire        clk,           // clk_sys
     input  wire        rst_n,         // pipe_rst_n: a load/seek/jump clears nav state
@@ -151,14 +147,6 @@ module nav_pci #(
     // replaces the old keep_vbuf guess: keep_vbuf asked "was this hop the kind that
     // usually skews the clock", this asks whether the clock actually moved.
     input  wire        stc_reanchor,
-    // SCORING CELL (issue #176): the reader's current title cell has a cell command
-    // that can see a press (dvd_iso_reader cc_scoring: not one of the FIXED commands
-    // in its fx_mem). An HLI committed while it is high whose buttons are ALL
-    // Set-or-nothing with at least one Set (f_setonly) is a SCORING window -- its
-    // buttons do nothing by themselves, a later command reads what they set -- and
-    // arms EARLY_LEAD before its s_ptm instead of at it. Highlights whose buttons
-    // link (menus, the white rabbit, commentary toggles) are untouched.
-    input  wire        early_ok,
 
     // gamepad (1-cycle pulses from emu edge detect)
     // Phase-4 VM selection force (SetHL_BTNN / link button fields): sets the
@@ -239,11 +227,12 @@ module nav_pci #(
     // authored start PTS (hli_s_ptm), valid from the hli_arm pulse on, so the
     // event log can say how late a menu's buttons went live against the STC.
     output wire [31:0] dbg_h_sptm,
-    // DVD-FORK DEBUG (nav_trace X0/X1, issue #176): the armed HLI is a scoring
-    // window (h_so), and the parked next HLI takes the scoring lead (nxt_early),
-    // with the parked HLI's s_ptm for the X1 payload.
-    output wire        dbg_h_so,
-    output wire        dbg_nxt_early,
+    // DVD-FORK DEBUG (nav_trace X0/X1, issue #176): a re-judge at a content
+    // re-anchor (pulse; dbg_rj_ok = the pending window was taken onto the new
+    // timeline) and a FALLBACK promotion (pulse), with the head pending's s_ptm.
+    output wire        dbg_rj,
+    output wire        dbg_rj_ok,
+    output wire        dbg_fb_promo,
     output wire [31:0] dbg_nxt_sptm
 );
 
@@ -271,23 +260,6 @@ reg        f_forever;          // hli_e_ptm == 0xFFFFFFFF (area pass 2026-09-10:
 reg [5:0]  f_btn_ns, f_fosl, f_foac;
 reg [1:0]  f_grns;             // hl_gi.btngr_ns (1..3; 0 treated as 1)
 reg [2:0]  f_g1ty, f_g2ty, f_g3ty;   // btngrX_dsp_ty (bit0 wide, bit1 LB, bit2 P&S)
-// SET-ONLY scan of the button commands as they stream past (issue #176): each
-// 18-byte btni record from 0x8E carries its 8-byte command at +10..+17. For the
-// first f_btn_ns records, classify each command from bytes 0, 1 and 7:
-//   nothing = type 0 (Nop/Goto/Break/SetTmpPML)
-//   set     = type 2/3 with no link op (byte1[3:0] == 0), or type 4/5/6 with no
-//             link sub-instruction (byte 7 == 0)
-//   link    = anything else (type 1 link/jump, a Set that also links, type 7)
-// tools/cell_cmd_btn_scan.py btn_kind() is the same test.
-reg [4:0]  fb_pos;                   // byte position within the current record
-reg [5:0]  fb_i;                     // record number
-reg [7:0]  fb_c0, fb_c1;             // command bytes 0 and 1 of the current record
-reg        f_slink, f_sset;          // some button links / some button sets
-wire [2:0] fb_t      = fb_c0[7:5];
-wire       fb_set    = ((fb_t == 3'd2 || fb_t == 3'd3) && fb_c1[3:0] == 4'd0) ||
-                       ((fb_t == 3'd4 || fb_t == 3'd5 || fb_t == 3'd6) && pci_byte == 8'd0);
-wire       fb_link   = (fb_t != 3'd0) && !fb_set;
-wire       f_setonly = f_sset && !f_slink;
 
 // PENDING slots, waiting for the STC to reach their windows. ARM (ss=1/2/3)
 // and DISARM (ss=0) are held SEPARATELY (a cell-boundary ss=0 must not fight
@@ -308,7 +280,6 @@ reg [31:0] nxt_sptm;
 reg        nxt_pre;       // commit happened before its s_ptm (crossing-only schedule gate)
 reg [5:0]  nxt_btn_ns, nxt_fosl, nxt_foac;
 reg        nxt_forever;         // pending arm authored hli_e_ptm == 0xFFFFFFFF (never auto-disarm)
-reg        nxt_so, nxt_early;   // set-only buttons; arms EARLY_LEAD before s_ptm (issue #176)
 reg [1:0]  nxt_grns;
 reg [2:0]  nxt_g1ty, nxt_g2ty, nxt_g3ty;
 // ★ SECOND PENDING STAGE (2026-09-14). One slot is not enough when the disc
@@ -333,7 +304,6 @@ reg [31:0] nx2_sptm;
 reg        nx2_pre;
 reg [5:0]  nx2_btn_ns, nx2_fosl, nx2_foac;
 reg        nx2_forever;
-reg        nx2_so, nx2_early;
 reg [1:0]  nx2_grns;
 reg [2:0]  nx2_g1ty, nx2_g2ty, nx2_g3ty;
 reg        off_v;              // pending disarm
@@ -381,7 +351,6 @@ reg [2:0]  h_g1ty, h_g2ty, h_g3ty;
 // hold forever (T2 boot "theatrical/special" selector - the highlight vanished ~10 s in,
 // then Select mis-routed to resume). Gating off_due on this preserves the forever HLI.
 reg        h_forever;
-reg        h_so;                // the armed HLI's buttons are set-only (a scoring window)
 
 // fetch FSM: pulls the selected button's 18-byte record + its colour group's
 // {sel, act} words out of the display bank into registers.
@@ -407,8 +376,6 @@ assign btns_armed = armed && (h_btn_ns != 6'd0);
 assign btns_pend  = (nxt_v && (nxt_btn_ns != 6'd0)) || (nx2_v && (nx2_btn_ns != 6'd0));
 assign dbg_btn_ns = h_btn_ns;
 assign dbg_h_sptm = h_sptm;
-assign dbg_h_so      = h_so;
-assign dbg_nxt_early = nxt_early;
 assign dbg_nxt_sptm  = nxt_sptm;
 // early multi-button-menu detect: pending (parsed, pre-promote) OR committed.
 assign hli_seen   = (nxt_v && (nxt_btn_ns > 6'd1)) || (armed && (h_btn_ns > 6'd1));
@@ -455,30 +422,44 @@ always @(posedge clk)
 reg hli_commit_p;                       // one clk: a PTM was committed
 wire hli_commit = hli_commit_p;
 reg hli_coherent;
+// ★ RE-JUDGE AT A CONTENT RE-ANCHOR (issue #176, 2026-10-23). A cell whose PTS
+// RESTARTS sends its HLI while the clock still reads the previous cell's timeline
+// (the reader leads the display), so the commit cannot be scheduled, and the clock's
+// re-anchor at the new cell's first picture then declared it incoherent: only the
+// ~1 s fallback was left, timed from the commit, not from the picture. Mad Dog VTS 15
+// cell 2 is a 0.93 s window that armed 0.81 s late that way. So, shortly after a
+// re-anchor (once the new clock value has landed in av_sync), a pending window whose s_ptm
+// is no more than RJ_TOL BEHIND the NEW clock is taken onto the new timeline:
+// coherent, and nxt_pre = 1, so it promotes at its own s_ptm (at once if it opens with
+// the cell's first picture). A pending further behind is from some other timeline and
+// is left untrusted, exactly as before, for the fallback. One far AHEAD waits for its
+// s_ptm, and past FUTURE_HORIZON the fallback still rescues it (nxt_future). This replaces dev-cellcmdhold5's
+// "a scoring window committed past its start arms at once", which armed on the
+// commit, up to a reader lead before the picture.
+// ⚠ The clock and the re-anchor pulse cross from clk_dec on SEPARATE paths (av_sync's
+// mirror vs the anchor-delta CDC), so either can land first by a few cycles. The
+// re-judge waits 255 clk_sys cycles (~9.4 us, nothing at a frame's scale) so it
+// always reads the NEW clock.
+reg  [7:0] rj_cnt;
 always @(posedge clk)
-    if (!rst_n)           hli_coherent <= 1'b0;
+    if (!rst_n)              rj_cnt <= 8'd0;
+    else if (stc_reanchor)   rj_cnt <= 8'd255;
+    else if (rj_cnt != 8'd0) rj_cnt <= rj_cnt - 8'd1;
+wire               rj_go  = (rj_cnt == 8'd1);
+wire signed [31:0] rj_d   = nxt_sptm - stc[31:0];
+wire signed [31:0] rj_d2  = nx2_sptm - stc[31:0];
+wire rj_ok  = nxt_v && (nxt_btn_ns != 6'd0) && (rj_d  >= -$signed(RJ_TOL));
+wire rj_ok2 = nx2_v && (nx2_btn_ns != 6'd0) && (rj_d2 >= -$signed(RJ_TOL));
+always @(posedge clk)
+    if (!rst_n)            hli_coherent <= 1'b0;
     else if (stc_reanchor) hli_coherent <= 1'b0;   // the clock left this timeline
     else if (hli_commit)   hli_coherent <= 1'b1;   // a PTM arrived on the current one
+    else if (rj_go && rj_ok) hli_coherent <= 1'b1; // the pending belongs to the new one
+assign dbg_rj    = rj_go && nxt_v;
+assign dbg_rj_ok = rj_ok;
 
 wire stc_trusted = (stc_fresh || settled_seen) && hli_coherent;
-// A SCORING window (nxt_early) is due EARLY_LEAD before its s_ptm. nxt_pre stays
-// against the UNSHIFTED s_ptm: a commit landing inside the lead promotes at once
-// (that is the libdvdnav behaviour being modelled), while a commit after s_ptm
-// still takes only the fallback, so stc_trusted and the crossing-only rule keep
-// covering the stale-timeline case exactly as before.
-wire [31:0]        nxt_lead   = nxt_early ? EARLY_LEAD : 32'd0;
-wire signed [31:0] nxt_dist_e = stc[31:0] - (nxt_sptm - nxt_lead);
-// ★ A SCORING WINDOW COMMITTED WITH THE CLOCK ALREADY PAST ITS START ARMS AT ONCE
-// (2026-10-18, Mad Dog VTS 15: a 0.93 s window could not be hit). That is the
-// signature of a NEW CELL WHOSE PTS RESTARTED: the clock still reads the previous
-// cell's timeline, so the scheduled path cannot place the window (nxt_pre = 0) and
-// only the ~1 s fallback was left -- after the cell-command hold the reader reaches
-// the next cell only ~0.2 s ahead of the display, so a sub-second window was over
-// before the fallback fired (before the hold, a ~1.2 s parse lead hid it). libdvdnav
-// answers such a window from the read of its NAV pack; so does this. A later window
-// of the SAME cell never gets here: lead_blk_h keeps nxt_early low for it.
-wire nxt_sched = nxt_v && stc_trusted &&
-                 ((nxt_pre && !nxt_dist_e[31]) || (nxt_early && !nxt_pre));
+wire nxt_sched = nxt_v && nxt_pre && !nxt_dist[31] && stc_trusted;
 // FALLBACK promotion: an armed pending that has waited > PROMOTE_FALLBACK with
 // video live but the STC never became due (keep_vbuf STC/parse-front skew).
 // Only for a real ARM (buttons present) so an ss=0-style empty pending doesn't
@@ -523,6 +504,7 @@ wire nxt_due = nxt_sched || nxt_fallback;
 wire off_due = off_v && !off_dist[31] && stc_trusted &&
                (!nxt_due || $signed(off_sptm - nxt_sptm) <= 0) &&
                !(armed && h_forever);
+assign dbg_fb_promo = nxt_fallback && !nxt_sched && !off_due;   // nav_trace X1
 // timeline restart: a new arm >0.7 s (63000 ticks) behind the parked one
 wire arm_restart = nxt_v && $signed(f_sptm - nxt_sptm) < -32'sd63000;
 
@@ -553,18 +535,6 @@ wire arm_is_cont = armed && (f_ss == 2'd2) && (f_sptm == h_sptm);
 // for: those commits SHARE an s_ptm, and stc only advances, so a later commit of
 // the same window can never regain the schedulability an earlier one lacked.
 wire sched_outranks = nxt_v && !nxt_pre && ($signed(stc[31:0] - f_sptm) < 0);
-
-// ★ THE LEAD IS FOR A CELL'S SCORING WINDOW, NOT FOR EVERY WINDOW OF A SEQUENCE
-// (issue #176). The shooting games author ONE scoring window per cell (3,923 cells
-// on 12 images); Bambi disc 2 and the Harry Potter games author 7-15 per cell,
-// some 2 s apart, where a 1 s lead would hand the last second of each window to
-// the next (the hli_window_tb [D] failure). So a later window on the SAME timeline
-// as a scoring window already armed (or parked ahead of it) gets no lead and waits
-// for its own s_ptm. The compare is SIGNED: back-to-back shootouts restart the PTS
-// timeline (Mad Dog cell 2 -> cell 3), so the next cell's window reads EARLIER and
-// still gets the lead.
-wire lead_blk_h = armed && h_so && ($signed(f_sptm - h_sptm) > 0);
-wire early_new  = f_setonly && early_ok && !lead_blk_h;
 
 
 // ---- button-group choice by display mode ------------------------------------
@@ -612,17 +582,6 @@ always @(posedge clk or negedge rst_n) begin
         nxt_fosl  <= 6'd0;
         nxt_foac  <= 6'd0;
         nxt_forever<= 1'b0;
-        nxt_so    <= 1'b0;
-        nxt_early <= 1'b0;
-        nx2_so    <= 1'b0;
-        nx2_early <= 1'b0;
-        h_so      <= 1'b0;
-        fb_pos    <= 5'd0;
-        fb_i      <= 6'd36;
-        fb_c0     <= 8'd0;
-        fb_c1     <= 8'd0;
-        f_slink   <= 1'b0;
-        f_sset    <= 1'b0;
         nx2_v     <= 1'b0;
         nx2_bank  <= 2'd1;
         nx2_ss    <= 2'd0;
@@ -708,6 +667,12 @@ always @(posedge clk or negedge rst_n) begin
         end else
             pend_age <= 27'd0;
 
+        // RE-JUDGE (see rj_go): a pending taken onto the new timeline is a
+        // commit made BEFORE its window. Placed ahead of FILL so a commit in the
+        // same cycle (which sets nxt_pre itself) wins.
+        if (rj_go && rj_ok)  nxt_pre <= 1'b1;
+        if (rj_go && rj_ok2) nx2_pre <= 1'b1;
+
         // ------------------------------------------------------------
         // FILL: capture header fields + store the HLI window. Commit at
         // the last HLI byte (0x315).
@@ -715,25 +680,6 @@ always @(posedge clk or negedge rst_n) begin
         if (pci_valid) begin
             fidx <= cur + 10'd1;
             facc <= {facc[15:0], pci_byte};
-            // set-only scan (see fb_set): records start at 0x8E
-            if (cur == 10'h08D) begin
-                fb_pos  <= 5'd0;
-                fb_i    <= 6'd0;
-                f_slink <= 1'b0;
-                f_sset  <= 1'b0;
-            end else if (cur >= 10'h08E && fb_i < 6'd36) begin
-                if (fb_pos == 5'd10) fb_c0 <= pci_byte;
-                if (fb_pos == 5'd11) fb_c1 <= pci_byte;
-                if (fb_pos == 5'd17) begin
-                    if (fb_i < f_btn_ns) begin
-                        if (fb_link) f_slink <= 1'b1;
-                        if (fb_set)  f_sset  <= 1'b1;
-                    end
-                    fb_pos <= 5'd0;
-                    fb_i   <= fb_i + 6'd1;
-                end else
-                    fb_pos <= fb_pos + 5'd1;
-            end
             case (cur)
             10'h00F: f_vptm   <= {facc, pci_byte};   // pci_gi.vobu_s_ptm
             10'h061: f_ss     <= pci_byte[1:0];      // hli_ss (low 2 of u16)
@@ -788,8 +734,6 @@ always @(posedge clk or negedge rst_n) begin
                     nxt_fosl  <= f_fosl;
                     nxt_foac  <= (f_ss == 2'd1) ? f_foac : 6'd0;
                     nxt_forever<= f_forever;
-                    nxt_so    <= f_setonly;
-                    nxt_early <= early_new;
                     nxt_grns  <= f_grns;
                     nxt_g1ty  <= f_g1ty;
                     nxt_g2ty  <= f_g2ty;
@@ -824,10 +768,6 @@ always @(posedge clk or negedge rst_n) begin
                     nx2_fosl   <= f_fosl;
                     nx2_foac   <= (f_ss == 2'd1) ? f_foac : 6'd0;
                     nx2_forever<= f_forever;
-                    nx2_so     <= f_setonly;
-                    // queued behind a parked SCORING window: no lead (the head is
-                    // earlier on this timeline by construction)
-                    nx2_early  <= early_new && !nxt_so;
                     nx2_grns   <= f_grns;
                     nx2_g1ty   <= f_g1ty;
                     nx2_g2ty   <= f_g2ty;
@@ -865,8 +805,6 @@ always @(posedge clk or negedge rst_n) begin
             nxt_fosl   <= nx2_fosl;
             nxt_foac   <= nx2_foac;
             nxt_forever<= nx2_forever;
-            nxt_so     <= nx2_so;
-            nxt_early  <= nx2_early;
             nxt_grns   <= nx2_grns;
             nxt_g1ty   <= nx2_g1ty;
             nxt_g2ty   <= nx2_g2ty;
@@ -885,7 +823,6 @@ always @(posedge clk or negedge rst_n) begin
                 h_sptm    <= nxt_sptm;      // which authored window is now on screen
                 h_foac    <= nxt_foac;
                 h_forever <= nxt_forever;
-                h_so      <= nxt_so;
                 h_grns    <= nxt_grns;
                 h_g1ty    <= nxt_g1ty;
                 h_g2ty    <= nxt_g2ty;

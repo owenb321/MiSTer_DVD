@@ -704,7 +704,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-cellcmdhold6"
+`define CORE_VERSION "dev-cellcmdhold7"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -1931,7 +1931,6 @@ wire rt_edge    = joy_eff[0] & ~joy_prev[0];
 // nav_pci interface (Phase 3)
 wire        hl_btns_armed;
 wire        hl_btns_pend;           // an HLI with buttons parsed, not yet promoted
-wire        cc_scoring_w;           // reader: the cell being read has a press-reading cell command (issue #176)
 // STC display-coherence latch for nav_pci's scheduled promotion path: 1 when the
 // most recent load/seek/jump FLUSHED the decoder (keep_vbuf=0 — STC anchor and
 // display reset together). A keep_vbuf menu->menu hop clears it (the re-anchored
@@ -3775,7 +3774,6 @@ dvd_iso_reader dvd_iso_reader_inst (
     // reaches a cell's end ~a VBUF ahead of the display, where a window opening in
     // the cell's last second is still parsed-but-not-promoted.
     .cc_btns        (hl_btns_armed | hl_btns_pend),
-    .cc_scoring     (cc_scoring_w),       // issue #176: nav_pci arms a scoring window early
     .cc_aud_low     (cc_aud_low),         // issue #176: the hold also releases before the audio runs dry
 
     .vm_mode        (menus_on),           // Phase 4: the VM drives navigation
@@ -6377,7 +6375,8 @@ wire [31:0] hl_coli;
 
 wire hli_arm_w;                           // nav_pci: an HLI with buttons was promoted
 wire [31:0] hl_sptm_w;                    // nav_pci: that HLI's start PTS (nav_trace)
-wire        hl_h_so_w, hl_nxt_early_w;    // nav_pci: scoring window armed / parked with the lead (nav_trace X0/X1)
+wire        hl_rj_w, hl_rj_ok_w;          // nav_pci: re-judge at a re-anchor, and its verdict (nav_trace X0)
+wire        hl_fb_promo_w;                // nav_pci: a fallback promotion (nav_trace X1)
 wire [31:0] hl_nxt_sptm_w;                // nav_pci: the parked HLI's start PTS (X1 payload)
 nav_pci nav_pci_inst (
     .hli_arm    (hli_arm_w),
@@ -6424,7 +6423,6 @@ nav_pci nav_pci_inst (
     // fact about the clock, not a thing to throttle, and a suppressed second
     // re-anchor would leave nav_pci trusting a timeline the clock had already left.
     .stc_reanchor (rephase_req),           // THE STC IS A CLOCK: it just moved to another timeline
-    .early_ok     (cc_scoring_w),          // issue #176: a scoring window arms EARLY_LEAD ahead
                                          // (keep_vbuf hop => scheduled path blocked
                                          //  until a still park proves catch-up)
     .sel_force  (vm_btn_force),          // Phase 4: SetHL_BTNN / link buttons
@@ -6452,8 +6450,9 @@ nav_pci nav_pci_inst (
     .dbg_btn_ns (hl_btn_ns),         // gate in-title multi-button menu nav (Scene It)
     .hli_seen   (hl_menu_seen),      // early menu-HLI detect -> open the subpicture gate in time
     .dbg_h_sptm (hl_sptm_w),         // -> nav_trace HLI_ARM payload
-    .dbg_h_so      (hl_h_so_w),      // -> nav_trace X0 (issue #176)
-    .dbg_nxt_early (hl_nxt_early_w), // -> nav_trace X1
+    .dbg_rj        (hl_rj_w),        // -> nav_trace X0 (issue #176): re-judge at a re-anchor
+    .dbg_rj_ok     (hl_rj_ok_w),
+    .dbg_fb_promo  (hl_fb_promo_w),  // -> nav_trace X1: a FALLBACK promotion
     .dbg_nxt_sptm  (hl_nxt_sptm_w)
 );
 
@@ -6466,23 +6465,25 @@ nav_pci nav_pci_inst (
 // over EXT_BUS command 0x7C (dvd_ctl.cpp, only while the harness's fast-telemetry
 // arm file exists). Placed here, below every source it reads (Verilog declaration
 // order). Wiring gated by tools/check_nav_trace_wiring.py.
-// #176 HOOKS: x_ev/x_pl carry nav_pci's h_so / nxt_early and the cc_aud_low
-// release as X0..X2 (codes 14..16); see the edge detectors below.
+// #176 HOOKS: x_ev/x_pl carry nav_pci's re-judge and fallback promotions and the
+// cc_aud_low release as X0..X2 (codes 14..16); see trc_x_ev below.
 // =========================================================================
-// Issue #176 events, X0..X2 (codes 14..16): one pulse on EITHER edge, the new
-// level in payload bit 0.
-//   X0 h_so      : the armed HLI is a scoring window;    payload[25:1] = its s_ptm[24:0]
-//   X1 nxt_early : the parked HLI takes EARLY_LEAD;      payload[25:1] = its s_ptm[24:0]
-//   X2 cc_aud_low: the cell-command hold's audio release; payload[16:1] = aud_frames_avail
-reg  [2:0]  trc_x_q;
+// Issue #176 events, X0..X2 (codes 14..16):
+//   X0 re-judge  : nav_pci re-judged its pending window at a content re-anchor (pulse);
+//                  payload {nxt_sptm[24:0], taken onto the new timeline}
+//   X1 fallback  : nav_pci promoted a pending through the ~1 s FALLBACK (pulse);
+//                  payload {nxt_sptm[24:0], 1}
+//   X2 cc_aud_low: the cell-command hold's audio release, on EITHER edge;
+//                  payload {9'd0, aud_frames_avail, new level}
+reg         trc_aud_low_q;
 always @(posedge clk_sys) begin
-    if (!reset_n) trc_x_q <= 3'd0;
-    else          trc_x_q <= {cc_aud_low, hl_nxt_early_w, hl_h_so_w};
+    if (!reset_n) trc_aud_low_q <= 1'b0;
+    else          trc_aud_low_q <= cc_aud_low;
 end
-wire [2:0]  trc_x_ev = {cc_aud_low, hl_nxt_early_w, hl_h_so_w} ^ trc_x_q;
+wire [2:0]  trc_x_ev = {cc_aud_low ^ trc_aud_low_q, hl_fb_promo_w, hl_rj_w};
 wire [77:0] trc_x_pl = {{9'd0, aud_frames_avail, cc_aud_low},
-                        {hl_nxt_sptm_w[24:0], hl_nxt_early_w},
-                        {hl_sptm_w[24:0], hl_h_so_w}};
+                        {hl_nxt_sptm_w[24:0], 1'b1},
+                        {hl_nxt_sptm_w[24:0], hl_rj_ok_w}};
 nav_trace nav_trace_inst (
     .clk         (clk_sys),
     .rst_n       (reset_n),

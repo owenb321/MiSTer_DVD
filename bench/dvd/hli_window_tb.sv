@@ -85,7 +85,6 @@ module hli_window_tb;
         .menu_settled(menu_settled),
         .stc_fresh(stc_fresh),
         .stc_reanchor(stc_reanchor),
-        .early_ok(1'b0),   // issue #176 scoring lead off: a new input floats Z unless tied
         .sel_force(1'b0), .sel_force_btn(6'd0),
         .hl_btnn(6'd0),
         .num_sel(1'b0), .num_btn(6'd0),

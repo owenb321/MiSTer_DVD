@@ -5350,10 +5350,11 @@ hold, a ~1.2 s parse lead made that fallback fire just before cell 2 appeared, b
 accident. With the hold the reader reaches cell 2 only ~0.2 s ahead, so the window armed
 0.81 s into its 0.93 s life. That figure comes from replaying the disc's real NAV
 packets through `nav_pci`, with a scratch session model of the display clock and parse
-lead. Fix: a scoring window committed with the clock already past its start
-(`nxt_early && !nxt_pre`) arms at once, which is libdvdnav's read-time behaviour. A later
-window of the same cell never qualifies (`lead_blk_h`). Gate: `nav_pci_early_tb` g +
-N7; with the fix, cell 2 arms ~0.19 s before it appears.
+lead. First fix (`dev-cellcmdhold5`): a scoring window committed with the clock already past
+its start (`nxt_early && !nxt_pre`) arms at once, libdvdnav's read-time behaviour; cell 2
+then armed ~0.19 s before it appeared. ⛔ SUPERSEDED in `dev-cellcmdhold7` by the
+re-judge at the re-anchor (below), which arms cell 2 with its first picture: arming at
+the commit put cell 2's buttons over the last ~0.2 s of cell 1.
 
 **A second regression the hold caused: the gunshot after a hit went silent (2026-10-13).**
 The maintainer reported missing gunshots in the saloon, and their recording made it
@@ -5388,7 +5389,63 @@ before). Gates:
 - The pause on a continuing verdict (Mad Dog's hit) is the price of exactness. If it ever
   matters, the fix is a time-referenced release, not a byte threshold (see above).
 
-### A scoring window arms 1 s before its start time (issue #176, 2026-10-13) — ✅ HW-CONFIRMED (`dev-cellcmdhold2`)
+### A window committed on the old timeline is re-judged at the re-anchor (issue #176, 2026-10-23) — sim-proven, ⏳ HIL (`dev-cellcmdhold7`)
+
+**The reference changed.** The maintainer can hit every Mad Dog window on a SET-TOP player,
+consistently, and the HIL play harness (`docs/hil_play_harness.md`) measured what this core
+does against the authored windows. That retired the 1 s lead below and the build-5
+arm-at-once rule: both answered a window before it was on screen. On `dev-cellcmdhold6`
+the continue-screen duel (VTS 4 PGC 1 cells 4/6/8, entered by a jump, window +0.50 to
++0.80 s into the cell, where the gunman draws) armed at the HLI's commit with the
+flushed clock at 0, and a Select at STC 0.445 scored a hit 0.417 s before `hli_s_ptm`.
+The reference is now the authored window: buttons answer from `hli_s_ptm` on the display
+clock, as `nav_pci` always scheduled them before issue #176.
+
+**What still needed fixing: a window whose PTS restarts.** The reader leads the display, so
+a cell whose PTS restarts (Mad Dog's back-to-back shootout cells; VTS 15 cell 2, a 0.93 s
+window at s_ptm 0.108) sends its HLI while the clock still reads the PREVIOUS cell's
+timeline. The commit is not schedulable (`nxt_pre` = 0), and the clock's re-anchor at the
+new cell's first picture then marks it incoherent, so only the ~1 s fallback, timed from the
+commit, was left. On `main` that armed VTS 15 cell 2 0.81 s into its 0.93 s life.
+
+**The rule.** 255 clk_sys cycles after a content re-anchor (`stc_reanchor`, i.e. emu's
+`rephase_req`; the wait covers the clock and the pulse crossing from clk_dec on separate
+paths), a pending window whose `s_ptm` is no more than `RJ_TOL` (0.1 s) BEHIND the new
+clock is taken onto the new timeline: `hli_coherent` = 1 and `nxt_pre` = 1, so it promotes
+at its own `s_ptm` (at once when it opens with the cell's first picture). The same holds for
+the queued slot (`nx2_pre`). A pending further behind belongs to some other timeline and
+stays untrusted for the fallback, exactly as before; one far ahead waits for its `s_ptm`,
+and past `FUTURE_HORIZON` the fallback still rescues it. The session replay of VTS 15's
+real NAV packets arms cell 2 3 ms after its first picture, and cell 1 keeps answering until
+then.
+
+**Removed with the lead:** `nav_pci`'s set-only button scan, `nxt_early`/`h_so`/`lead_blk_h`,
+the `early_ok` input and the reader's `cc_scoring` output. `fx_mem` stays (the hold uses it).
+
+**Gates.** `bench/dvd/nav_pci_rejudge_tb.sv` (in `run_cmd_hold.sh --red`), scored on which
+command a press at a display time fires:
+
+- (a) a scoring-shaped window arms at its start, not before;
+- (b) VTS 15: before the re-anchor cell 1 still answers; at it, cell 2 answers at once;
+- (c) the duel: a window 0.86 s in after a flush arms at 0.86 s, with or without a
+  re-anchor in between;
+- (d) a pending 2 s behind the new clock is not taken;
+- (e) one 50 ms behind (inside `RJ_TOL`) is.
+
+Mutations N1–N7 each fail exactly their arms (no coherence → b c e; no `nxt_pre` → b e; no
+tolerance guard → d; `RJ_TOL` = 0 → e; the lead back → a c d; build 5's arm-at-once → b;
+re-judged one cycle after the pulse → b d e). `run_hli_window.sh --red` stays green, but its M4 (`sched_outranks` off) and M8 (no
+head/queue dedupe) now run with the re-judge OFF too: the re-judge also takes a
+whack-a-mole round start's pending onto the new timeline, so either mechanism alone
+keeps those arms green (verified: each fails exactly its old arms only with both off).
+The nav_trace hooks X0/X1 now
+log each re-judge (with its verdict) and each fallback promotion, so the harness can see
+which path armed a window.
+
+### ⛔ RETIRED (2026-10-23): a scoring window arms 1 s before its start time (issue #176, 2026-10-13; `dev-cellcmdhold2`..`6`)
+
+Retired by the section above: it let the continue-screen duel be won before the gunman
+drew. Kept for the record of why it was built.
 
 **The report.** With the end of the window fixed, the maintainer still found the shootouts
 far tighter than a gameplay video of the same DVD, where the player shoots about a second

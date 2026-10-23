@@ -83,11 +83,44 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
   - **Regression 3, maintainer play-test on VTS 15 (`dev-cellcmdhold5`):** a 0.93 s
     window after a PTS restart armed 0.81 s late (the ~1 s fallback; the hold had removed
     the parse lead that hid it). Fix: a scoring window committed with the clock past its
-    start arms at once. Gate: `nav_pci_early_tb` g + N7.
-  - **Next:** the maintainer's play-test, then the PR. Not yet run on HW: a loop disc such as Fairytopia, which is unchanged by
-    construction because a fixed command is never held (bench P2), and Mad Dog II /
-    Crime Patrol by hand. Design notes: `docs/dvd_nav.md` "A cell command with buttons
-    up" and "A scoring window arms 1 s before its start time".
+    start arms at once. Gate: `nav_pci_early_tb` g + N7. (Superseded in `dev-cellcmdhold7`,
+    below.)
+  - **The HIL play harness takes over the play-testing (2026-10-23).** The maintainer
+    could not keep play-testing every build; the harness session
+    (`feature/hil-play-harness`, `docs/hil_play_harness.md`) drives .236 with capture,
+    timed inputs and the nav event FIFO, merged here (X0..X2 wired) for
+    `dev-cellcmdhold6`. Its findings, all capture-scored:
+    - The ladder at Select 37.3 s (first shootout): v0.9.1 miss, hold1/2 hit, hold4/5
+      miss. The `cc_aud_low` release costs ~0.2 s of the window's end.
+    - EARLY_LEAD is visible on screen (buttons live ~1.1 s before `hli_s_ptm`), and on the
+      continue-screen duel (VTS 4 PGC 1 cells 4/6/8) it arms at the commit after the jump's
+      flush: a Select 0.417 s before `hli_s_ptm` scored on `dev-cellcmdhold6`. The
+      maintainer reports a set-top player gets every window right, so the reference is
+      the authored window.
+    - Pre-existing, every build including v0.9.1: at every PTS-restart junction the old
+      cell's last 5 pictures and the new cell's first are never shown (0.167 s; the seamless
+      junction loses nothing). ⏳ Not investigated: suspects are the vld skip/realign drops,
+      the seek/field realign, and the audio re-time.
+    - Without the lead (v0.9.1, hold1) the duel arms on time: within 1–2 frames of
+      `hli_s_ptm` on cells 6/8, measured by elapsed time from the duel's first captured
+      frame (~0.1 s of apparent earliness is the instrument: the display trails the STC by
+      ~0.067 s, and the junction loses the first picture). An early "0.25–0.7 s" reading
+      was a picture-matching artifact on the static standoff. The FIFO on main's nav
+      settles it: cells 4 and 8 arm with `late_ticks` 0, exactly at `hli_s_ptm` (STC
+      0.862 / 0.910), and nothing is left armed from the continue screen. Cell 4's
+      extra on-screen earliness is the junction picture loss again (its first 4 pictures
+      are never shown at that cut).
+  - **`dev-cellcmdhold7` (2026-10-23):** EARLY_LEAD retired, with build 5's arm-at-once
+    rule; a window committed on the old timeline is re-judged at the clock's re-anchor
+    and promotes at its own `s_ptm` (VTS 15 cell 2 arms 3 ms after its first picture in
+    the NAV replay). Gate: `nav_pci_rejudge_tb` a–e + N1–N7 in `run_cmd_hold.sh --red`.
+    nav_trace X0/X1 now log re-judges and fallback promotions.
+  - **Next:** the harness on `dev-cellcmdhold7` (VTS 15, the duel, the saloon audio at X2),
+    then the maintainer's play-test, then the PR. Not yet run on HW: a loop disc such as
+    Fairytopia, which is unchanged by construction because a fixed command is never held
+    (bench P2), and Mad Dog II / Crime Patrol by hand. Design notes: `docs/dvd_nav.md` "A
+    cell command with buttons up" and "A window committed on the old timeline is
+    re-judged at the re-anchor".
 
 - 🔧 **HIL PLAY HARNESS, SLICE B: NAV EVENT FIFO (2026-10-22, `feature/hil-play-harness`,
   sim-proven; ⏳ fit, ⏳ HIL).** `dvd/nav_trace.sv` is a 256 × 80-bit clk_sys FIFO of
