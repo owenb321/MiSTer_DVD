@@ -28,6 +28,7 @@ does not depend on that branch landing first. When both are on main, import inst
 import argparse
 import json
 import os
+import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -192,6 +193,102 @@ def dump(iso, vts, pgcn, want=(), every_nav=False):
             else:
                 prev_end = None
             out['cells'].append(ent)
+    return out
+
+
+_CMP = re.compile(r'^if \(g\[(\d+)\] != (0x[0-9a-f]+|\d+)\)')
+_SET = re.compile(r'^SetMode Register g\[(\d+)\] = (0x[0-9a-f]+|\d+)$')
+
+
+def _num(x):
+    return int(x, 16) if x.startswith('0x') else int(x)
+
+
+def homing(buttons):
+    """A tap sequence that lands on ONE button from any start, using the authored links
+    (a grid whose edge links point back at themselves): Up until nothing moves, then
+    Left until nothing moves. Returns (taps, home button) or None if it does not
+    converge."""
+    B = {b['n']: b for b in buttons}
+    cur = set(B)
+    taps = []
+    for d, key in (('up', 'up'), ('lf', 'left')):
+        for _ in range(len(B)):
+            nxt = {B[n][d] if B[n][d] in B else n for n in cur}
+            if nxt == cur:
+                break
+            cur = nxt
+            taps.append(key)
+    return (taps, cur.pop()) if len(cur) == 1 else None
+
+
+def path(buttons, src, dst):
+    """Shortest tap path from src to dst along the authored links (BFS)."""
+    B = {b['n']: b for b in buttons}
+    prev, todo = {src: None}, [src]
+    for n in todo:
+        if n == dst:
+            break
+        for d, key in (('up', 'up'), ('dn', 'down'), ('lf', 'left'), ('rt', 'right')):
+            m = B[n][d]
+            if m in B and m not in prev:
+                prev[m] = (n, key)
+                todo.append(m)
+    if dst not in prev:
+        return None
+    out, n = [], dst
+    while prev[n]:
+        n, key = prev[n]
+        out.append(key)
+    return out[::-1]
+
+
+def scoring_targets(iso, vts_list=None):
+    """Every scoring window in the title domain with the button(s) that satisfy its
+    cell command (`if (g[R] != K) Link...` and a button `SetMode Register g[R] = K`),
+    and the taps that aim at the first of them from any selection. Windows whose
+    command has another shape are listed with targets [] (aim impossible), never
+    silently dropped."""
+    out = []
+    with open(iso, 'rb') as f:
+        vtss = vts_list or range(1, 100)
+        for v in vtss:
+            try:
+                ifo = ne.find_vts_ifo(f, v)
+            except SystemExit:
+                break
+            _, _, npgc = title_pgc_addr(f, ifo, 1)
+            for pg in range(1, npgc + 1):
+                d = dump(iso, v, pg)
+                for c in d['cells']:
+                    m = _CMP.match(c['cmd'] or '')
+                    for h in c['hli']:
+                        if not h['btn_ns']:
+                            continue
+                        tg = []
+                        if m:
+                            reg, val = int(m.group(1)), _num(m.group(2))
+                            for b in h['buttons']:
+                                sm = _SET.match(b['cmd'])
+                                if sm and int(sm.group(1)) == reg and _num(sm.group(2)) == val:
+                                    tg.append(b['n'])
+                        hm = homing(h['buttons'])
+                        aim = None
+                        if tg and hm:
+                            pth = path(h['buttons'], hm[1], tg[0])
+                            aim = None if pth is None else hm[0] + pth
+                        if not tg and not h['setonly']:
+                            continue        # an ordinary menu highlight, not a shot
+                        frm = {}
+                        if tg:
+                            for b in h['buttons']:
+                                pth = path(h['buttons'], b['n'], tg[0])
+                                if pth is not None:
+                                    frm[str(b['n'])] = pth
+                        out.append({'vts': v, 'pgcn': pg, 'cell': c['cell'], 'from': frm,
+                                    's_ptm': h['s_ptm'], 'e_ptm': h['e_ptm'],
+                                    'fosl': h['fosl'], 'targets': tg, 'aim': aim,
+                                    'cmd': c['cmd']})
     return out
 
 

@@ -89,9 +89,10 @@ for line in sys.stdin:
     break
 
 FPS = 25.0 if sc.get("pal") else 30000 / 1001
+KEYS = sc.get("_keys", {})
 with open(FAST, "w") as f:
     f.write(str(sc.get("telem_ms", 20)))
-rows, last_t, nav, nav_pos = [], [None], {}, [0]
+rows, last_t, nav, nav_pos, nav_new = [], [None], {}, [0], []
 state = {"base": None}
 
 
@@ -116,7 +117,14 @@ def poll():
                 nav_pos[0] += len(ln)
                 ev = json.loads(ln)
                 out({"nav": ev})
-                nav.update(ev.get("state", {}))
+                e = ev.get("ev")
+                if e == "PGC":
+                    nav.update(vts=ev["vts"], pgcn=ev["pgcn"], menu=ev["menu"])
+                elif e == "CELL":
+                    nav["rcell"] = ev["cell"]       # the READER's 0-based cell, ~1 s ahead
+                elif e == "ARMED":
+                    nav["armed"] = ev["armed"]
+                nav_new.append(ev)
     except FileNotFoundError:
         pass
     except Exception as e:
@@ -209,6 +217,69 @@ for i, st in enumerate(sc["steps"]):
             time.sleep(0.004)
         out({"step": i, "base": state["base"] and state["base"]["t"]})
         if state["base"] is None:
+            ok = False
+            break
+    elif "play" in st:
+        # Autoplay on the nav FIFO: when a scoring window arms (HLI_ARM), find it by
+        # (VTS, hli_s_ptm low 20 bits) in the disc's target table, steer to its target
+        # (from the forced select, else from the last button aimed at, else by homing)
+        # and fire Select. Stops when `until` holds. Needs a core with the FIFO.
+        pl = st["play"]
+        lim = t0 + pl.get("timeout", 900)
+        tbl = {}
+        for w in sc.get("targets", []):
+            tbl.setdefault((w["vts"], w["s_ptm"] & 0xFFFFF), []).append(w)
+        last_aim, pending, met = None, [], False
+        del nav_new[:]
+        while mono() < lim:
+            r = poll()
+            while nav_new:
+                ev = nav_new.pop(0)
+                if ev.get("ev") != "HLI_ARM" or not ev.get("btn_ns"):
+                    continue
+                key = "%s:%s" % (nav.get("vts"), nav.get("pgcn"))
+                if key in pl.get("also_select", []):
+                    pending.append((mono() + 1.0, "select", {"why": key}))
+                    continue
+                ws = [w for w in tbl.get((nav.get("vts"), ev["sptm_lo"]), [])
+                      if w["pgcn"] == nav.get("pgcn")] or tbl.get((nav.get("vts"), ev["sptm_lo"]), [])
+                if not ws:
+                    out({"autoplay": "unknown window", "vts": nav.get("vts"),
+                         "pgcn": nav.get("pgcn"), "sptm_lo": ev["sptm_lo"], "t": mono()})
+                    continue
+                w = ws[0]
+                if not w["targets"]:
+                    out({"autoplay": "no target", "w": [w["vts"], w["pgcn"], w["cell"]], "t": mono()})
+                    continue
+                start = w["fosl"] or last_aim
+                taps = w["from"].get(str(start)) if start else None
+                how = "from b%s" % start if taps is not None else "homing"
+                if taps is None:
+                    taps = w["aim"] or []
+                ov = pl.get("override", {}).get("%d:%d:%d" % (w["vts"], w["pgcn"], w["cell"]), {})
+                if ov.get("skip"):
+                    out({"autoplay": "skipped", "w": [w["vts"], w["pgcn"], w["cell"]], "t": mono()})
+                    continue
+                tt = [tap(KEYS[k], pl.get("hold_ms", 20)) for k in taps]
+                fire = max(mono() + pl.get("delay_s", 0.15) + 0.03 * len(taps),
+                           mono() + ov.get("select_after_arm_s", 0.0))
+                pending.append((fire, "select", {"w": [w["vts"], w["pgcn"], w["cell"]]}))
+                last_aim = w["targets"][0]
+                out({"autoplay": "aim", "w": [w["vts"], w["pgcn"], w["cell"]], "target": last_aim,
+                     "how": how, "taps": taps, "t": tt[0] if tt else mono(), "arm_t": ev["t_ev"]})
+            for p_ in [p_ for p_ in pending if mono() >= p_[0]]:
+                pending.remove(p_)
+                t = tap(KEYS[p_[1]], 30)
+                out(dict(p_[2], autoplay="select", t=t))
+            try:
+                if r and eval(pl["until"], {}, env(r)):
+                    met = True
+                    break
+            except Exception as e:
+                out({"step": i, "err": "until: %s" % e}); break
+            time.sleep(0.002)
+        out({"step": i, "play_until": pl["until"], "met": met, "t": mono()})
+        if not met:
             ok = False
             break
     elif "host" in st:
@@ -335,6 +406,9 @@ def launch(sc):
 
 def run_agent(sc, out_dir):
     names = M.key_names()
+    sc['_keys'] = {k: names[k] for k in ('up', 'down', 'left', 'right', 'select')}
+    if any('play' in st for st in sc['steps']):
+        sc['targets'] = targets_for(sc.get('_local_iso'))
     for st in sc['steps']:
         if 'keys' in st:
             bad = [k for k in st['keys'] if k not in names]
@@ -377,6 +451,21 @@ def run_agent(sc, out_dir):
     p.stdin.close()
     p.wait(timeout=30)
     return clock, events
+
+
+def targets_for(iso):
+    """The disc's scoring windows with their targets and aim paths (disc_timing),
+    cached beside the run because a full disc walk takes ~30 s."""
+    import disc_timing as DT
+    if not iso:
+        sys.exit('a "play" step needs --local-iso (the target table comes from the disc)')
+    cache = os.path.join(os.environ.get('TMPDIR', '/tmp'),
+                         'hil_targets_%s.json' % os.path.basename(iso).replace(' ', '_'))
+    if os.path.exists(cache) and os.path.getmtime(cache) > os.path.getmtime(iso):
+        return json.load(open(cache))
+    t = [{k: v for k, v in w.items() if k != 'cmd'} for w in DT.scoring_targets(iso)]
+    json.dump(t, open(cache, 'w'))
+    return t
 
 
 _REFS = {}
