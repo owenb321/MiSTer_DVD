@@ -460,7 +460,13 @@ def arm_events(frames, timing):
         a = r.get('armed')
         if a is None:
             continue
-        if prev is not None and a != prev and last_pic:
+        # place an edge only on a picture actually on screen with it (a menu or the
+        # intro, which the reference does not cover, must not borrow a stale picture)
+        if prev is not None and a != prev and last_pic and r['t'] - last_pic['t'] > 0.1:
+            out.append({'t': r['t'], 'edge': 'LIVE' if a else 'dead', 'cell': '-',
+                        'pts': 'n/a', 's_ptm': '-', 'e_ptm': '-',
+                        'vs': 'no reference picture on screen'})
+        elif prev is not None and a != prev and last_pic:
             h = None
             for c in timing['cells']:
                 if c['cell'] == last_pic['cell']:
