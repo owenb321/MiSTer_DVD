@@ -273,7 +273,10 @@ for i, st in enumerate(sc["steps"]):
                 key = "%s:%s" % (nav.get("vts"), nav.get("pgcn"))
                 # "VTS:PGCN" = press Select there; "VTS:PGCN=right,right" = taps first
                 # (a route menu: pick a route other than the preselected one)
-                hit = [a for a in pl.get("also_select", []) if a.split("=")[0] == key]
+                # "VTS:PGCN@sptm_lo" names one window (e.g. Mad Dog's intro skip, VTS 1
+                # PGC 1 @16274), leaving that PGC's other windows to the shot table
+                hit = [a for a in pl.get("also_select", [])
+                       if a.split("=")[0] in (key, "%s@%d" % (key, ev["sptm_lo"]))]
                 if hit:
                     taps = [k for k in hit[0].partition("=")[2].split(",") if k]
                     for n_, k in enumerate(taps):
