@@ -185,9 +185,25 @@ for i, st in enumerate(sc["steps"]):
             break
     elif "base" in st:
         lim = t0 + st.get("timeout", 20)
+        state["base"] = None
+        # "resets": N = lock on only after the picture counter has reset N times since
+        # this step began (each jump's flush resets it), e.g. 2 = past an intro to the
+        # cell the second jump lands in
+        need, seen, t_from = st.get("resets", 0), 0, t0
+        after = t0 + st.get("after_s", 0.0)     # resets before this are ignored (an intro)
+        last_c = None
+        while mono() < lim and seen < need:
+            r = poll()
+            if r and r["t"] >= t0:
+                if last_c is not None and r["_c"] < last_c and r["t"] >= after:
+                    seen += 1
+                    t_from = r["t"]
+                    out({"step": i, "reset": seen, "t": r["t"]})
+                last_c = r["_c"]
+            time.sleep(0.002)
         while mono() < lim and state["base"] is None:
             r = poll()
-            since = [x for x in rows if x["t"] >= t0]
+            since = [x for x in rows if x["t"] >= t_from]
             if since and since[-1]["flags"]["menu"] == 0 and since[-1]["flags"]["video_live"] == 1:
                 state["base"] = min(since, key=lambda x: x["_c"])
             time.sleep(0.004)
@@ -206,6 +222,24 @@ for i, st in enumerate(sc["steps"]):
                 got = sys.stdin.readline().strip()
         out({"step": i, "host": st["host"], "reply": got, "t": mono()})
         if got != "ok":
+            ok = False
+            break
+    elif "keys" in st and "at_picture" in st:
+        # a burst of taps, written back to back: the key daemon plays them in order,
+        # hold_ms each. The FIFO's PS2 events (when present) give each one's arrival.
+        if state["base"] is None:
+            out({"step": i, "err": "at_picture before base"}); ok = False; break
+        lim = t0 + st.get("timeout", 30)
+        while mono() < lim:
+            r = poll()
+            if r and env(r)["pictures"] >= st["at_picture"]:
+                ts = [tap(c, st.get("hold_ms", 20)) for c in st["codes"]]
+                out({"step": i, "keys": st["keys"], "t": ts[0], "t_last": ts[-1],
+                     "at_picture": st["at_picture"], "pictures": env(r)["pictures"]})
+                break
+            time.sleep(0.001)
+        else:
+            out({"step": i, "err": "picture %d never reached" % st["at_picture"]})
             ok = False
             break
     elif "key" in st and "at_picture" in st:
@@ -302,6 +336,11 @@ def launch(sc):
 def run_agent(sc, out_dir):
     names = M.key_names()
     for st in sc['steps']:
+        if 'keys' in st:
+            bad = [k for k in st['keys'] if k not in names]
+            if bad:
+                sys.exit('unknown keys %r' % bad)
+            st['codes'] = [names[k] for k in st['keys']]
         if 'key' in st:
             if st['key'] not in names:
                 sys.exit('unknown key %r (mister.py options lists them)' % st['key'])
