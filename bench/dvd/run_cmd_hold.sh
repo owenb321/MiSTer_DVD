@@ -32,12 +32,13 @@
 #   the FIXED-command classifier (fx_mem / cmd_fixed_w):
 #     R7 all-held     : nothing is fixed                      -> P1 P2
 #     R8 tail-fixed   : LinkTailPGC classed as fixed          -> P3
-#     R9 no-nr-guard  : an invalid cmd_nr reads fx_mem        -> F P3 P4
+#     R9 no-nr-guard  : an invalid cmd_nr reads fx_mem        -> P3 P4
 #                       (P4's cell holds, so P3's sequence runs a cell late)
 #     R10 set-fixed   : a Set (types 2-6) classed as fixed    -> C G H
 #                       (title 4's cell commands are Sets)
 #     R11 cond-fixed  : the compare op ignored                -> A1 A2 B D E F
-#     R12 no-aud-low  : the hold ignores cc_aud_low            -> F
+#     R12 aud-low-back: cc_aud_low releases the hold again    -> F
+#                       (the release hold4-8 had; off in hold9)
 #     R13 dur-first   : the authored-duration still takes a   -> G H
 #                       buttons-up video cell's end (the
 #                       whole-second overshoot: VTS 15 cell 1)
@@ -125,13 +126,13 @@ if [ $RED -eq 1 ]; then
     mutate R2_no_buttons  "B"           's/(cmd_hold_w = vm_mode && !menu_dom && )cc_btns &&/$1/'
     mutate R3_jump_stale  "D P4"         's/vmw_cmd_pend <= 1'"'"'b0;\n(\s*jump_ack     <= 1'"'"'b1;)/$1/'
     mutate R4_no_watchdog "E"           's/\(vmw_pgc_pend \|\| vmw_cmd_pend \|\| \(jump_pending/(vmw_pgc_pend || (jump_pending/'
-    mutate R5_cache_only  "A1 A2 B E F G H P3" 's/\(vmw_cmd_pend && ~vbuf_empty && ~cc_aud_low\)/(1'"'"'b0)/'
+    mutate R5_cache_only  "A1 A2 B E F G H P3" 's/\(vmw_cmd_pend && ~vbuf_empty\)\)/(1'"'"'b0))/'
     mutate R6_vbuf_only   "C H"         's/if \(strm_done && !blk_inflight && !cache_has_data && !tail_wait\)/if (strm_done \&\& !blk_inflight \&\& (!cache_has_data || vmw_cmd_pend) \&\& !tail_wait)/'
     mutate R7_all_held    "P1 P2"       's/!fx_rd && \(cm_rd/(cm_rd/'
     mutate R8_tail_fixed  "P3"          's/pb_rdata\[4:0\] != 5'"'"'d13 && //'
-    mutate R9_no_nr_guard "F P3 P4"        's/!fx_rd && \(cm_rd\[7:0\] <= cmd_nr_cell\)/!fx_rd/'
+    mutate R9_no_nr_guard "P3 P4"          's/!fx_rd && \(cm_rd\[7:0\] <= cmd_nr_cell\)/!fx_rd/'
     mutate R10_set_fixed  "C G H"       's/\(\(cmd_b0\[7:5\] == 3'"'"'d0\) \|\|/((cmd_b0[7:5] != 3'"'"'d1) ||/'
-    mutate R12_no_aud_low "F"           's/\(vmw_cmd_pend && ~vbuf_empty && ~cc_aud_low\)/(vmw_cmd_pend \&\& ~vbuf_empty)/'
+    mutate R12_aud_low_back "F"         's/\(vmw_cmd_pend && ~vbuf_empty\)\)/(vmw_cmd_pend \&\& ~vbuf_empty \&\& ~cc_aud_low))/'
     mutate R11_cond_fixed "A1 A2 B D E F" 's/wire       cmd_fixed_w = \(cmd_b1\[6:4\] == 3'"'"'d0\) &&/wire       cmd_fixed_w = 1'"'"'b1 \&\&/'
     mutate R13_dur_first  "G H"         's/if \(dur_hold_w && !cmd_hold_w\) begin/if (dur_hold_w) begin/'
     mutate R14_no_residual "H"          's/end else if \(vmw_cmd_pend && dur_hold_w\) begin/end else if (1'"'"'b0) begin/'

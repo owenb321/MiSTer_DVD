@@ -47,9 +47,9 @@
 //   P2 a fixed loop (LinkTopC) replays with no hold: in-title loops stay gapless.
 //   P3 LinkTailPGC is held: it lands in POST, which reads registers.
 //   P4 a cmd_nr past the PGC's cell commands is not held (no stale fx_mem bit).
-//   F  the audio ring runs low (cc_aud_low) during a hold with the VBUF still full:
-//      the hold releases, so the reader resumes before the old audio runs dry
-//      (Mad Dog's saloon: back-to-back short scoring cells lost the gunshot).
+//   F  the audio ring running low (cc_aud_low) does NOT release the hold (the
+//      dev-cellcmdhold9 experiment: the release cost ~0.2 s of every window, and the
+//      saloon silence it was built for was the authored-duration still, fixed in G/H).
 //   G  a VIDEO cell with buttons up, read before any of its authored 4 s displayed:
 //      no timed still (dur_hold would have parked one, counted in whole seconds from
 //      the load, and frozen past the last picture: Mad Dog VTS 15 cell 1). The drain
@@ -698,12 +698,14 @@ module iso_reader_cmdhold_tb;
         repeat (20000) @(posedge clk);
         if (n_cc != c0) begin fail("F: the command ran before the audio ran low"); f_ok = 0; end
         cc_aud_low = 1;
-        t = 0; while (n_cc == c0 && t < 5000) begin @(posedge clk); t = t + 1; end
-        if (n_cc != c0 + 1) begin fail("F: audio low did not release the hold"); f_ok = 0; end
+        repeat (20000) @(posedge clk);
+        if (n_cc != c0) begin fail("F: audio low released the hold with the VBUF full"); f_ok = 0; end
         cc_aud_low = 0;
-        vbuf_empty = 1;                     // let the miss branch finish
+        vbuf_empty = 1;                     // the display reaches the end: now it runs
+        t = 0; while (n_cc == c0 && t < 5000) begin @(posedge clk); t = t + 1; end
+        if (n_cc != c0 + 1) begin fail("F: the command did not run at the drain"); f_ok = 0; end
         t = 0; while (n_pe == p0 && t < 4000000) begin @(posedge clk); t = t + 1; end
-        $display("F %s: the audio running low releases the hold", f_ok ? "PASS" : "FAIL");
+        $display("F %s: the audio running low does not release the hold", f_ok ? "PASS" : "FAIL");
 
         // ---------- G: a video cell with buttons up -> no timed still, the drain holds ----------
         repeat (2000) @(posedge clk);

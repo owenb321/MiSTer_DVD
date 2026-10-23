@@ -1452,8 +1452,13 @@ end
 // decoder is not (rtl/mpeg2/watchdog.v decoder_active <= ~busy).
 reg [30:0] drain_tmr;   // 31 bits: DRAIN_WD is now 60 s @ 27 MHz
 wire       drain_wd_hit = (drain_tmr >= DRAIN_WD);
+// ⚠ EXPERIMENT (dev-cellcmdhold9, issue #176): the cc_aud_low release is OFF.
+// It was built (hold4) for the saloon's silent gunshots, which the HIL harness has
+// since traced to the authored-duration still overrunning video cells (fixed in
+// hold8). If hold9's saloon stays clean, the port and emu's cc_aud_low go; if the
+// silence returns, this term comes back.
 wire       tail_wait = ((vmw_pgc_pend && ~vbuf_empty) ||
-                        (vmw_cmd_pend && ~vbuf_empty && ~cc_aud_low)) &&
+                        (vmw_cmd_pend && ~vbuf_empty)) &&
                        ~menu_dom && ~drain_wd_hit;
 
 // CELL COMMAND AT THE DISPLAYED CELL END (issue #176, docs/dvd_nav.md "A cell
