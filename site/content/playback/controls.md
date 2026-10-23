@@ -471,6 +471,9 @@ mystery. Leaving the title or loading another disc clears it.
 idle screen. With a **physical disc** it also opens the tray. With a disc image it
 simply unmounts it.
 
+The drive's own eject button works too, even while a disc is playing. The player stops and
+returns to the idle screen once the disc is out.
+
 !!! note "Needs `MiSTer_DVDcss`"
     Eject and the volume buttons are serviced by the custom Main — the core cannot
     unmount a file or open a tray by itself. Without it, these three buttons do nothing.

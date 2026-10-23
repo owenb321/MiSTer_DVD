@@ -89,6 +89,61 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     Crime Patrol by hand. Design notes: `docs/dvd_nav.md` "A cell command with buttons
     up" and "A scoring window arms 1 s before its start time".
 
+- 🔧 **HIL PLAY HARNESS, SLICE B: NAV EVENT FIFO (2026-10-22, `feature/hil-play-harness`,
+  sim-proven; ⏳ fit, ⏳ HIL).** `dvd/nav_trace.sv` is a 256 × 80-bit clk_sys FIFO of
+  timestamped navigation events. There are 16 sources: GPRM writes, STC jumps, key presses,
+  button activation, HLI promotion, cell/PGC changes, flushes, audio-ring-low,
+  pause/still/live/menu, and 3 spare hooks for issue #176's branch-only signals. Each entry
+  carries the STC and a free-running 90 kHz tick. Main drains it over EXT_BUS command 0x7C
+  into `/tmp/dvd_navtrace.jsonl`, but only under the fast-telemetry arm.
+  - **Deviation from the brief:** the entry is 80 bits, not 64. The STC stops, zeroes and
+    jumps, so a free tick was needed as well, and 256 × 80 is still 2 M10K.
+  - **Never silent:** FIFO-full drops and same-source merges are counted in the drain header
+    and logged as `LOST` lines.
+  - **Gates:** `bench/dvd/run_nav_trace.sh --red` (8 arms, 13 mutations, each failing
+    exactly its arm, plus 10 wiring mutations) and `main/tests/run_tests.sh --red`
+    (`dvd_ctl_test`, 4 RED cases).
+  - **Not verified:** no Quartus fit (estimated ~200–250 ALM + 2 M10K) and no board run.
+  - **Next:** fit, then a HIL drain on a menu disc.
+  - Design, event table, protocol and limits: `docs/hil_play_harness.md` "Nav event FIFO
+    (fabric)".
+
+- ✅ **DRIVE COMPATIBILITY: NO TRAY LOCK, EJECT FALLBACK, DRIVE IDENTITY LINE (2026-10-13/14,
+  ✅ MERGED PR #177; ✅ HW A/B on two rigs vs the v0.9.1 Main; ✅ reporter confirmed).**
+  - **Field report:** a slot-loading IDE drive on a USB adapter could not be ejected once the
+    core was loaded, neither with the core's Eject nor with the drive's button. No logs.
+  - **Cause (found on the second rig, after a wrong first theory):** MiSTer's stock udev rule
+    `60-cdrom_id.rules` runs `cdrom_id --lock-media` on every media change. It locks the tray
+    itself (`CDROM_LOCKDOOR(1)`, and clears the kernel's `CDO_LOCK`) and relies on the drive
+    to report the button as an eject REQUEST, which the rule then answers. A drive or bridge
+    that cannot report eject requests has a dead button while a disc is in. ⚠ The first
+    theory blamed the kernel's open-for-data lock and said the rig's Dell "ignores PREVENT".
+    Both were wrong for MiSTer: udev clears `CDO_LOCK`, and udev answered the Dell's
+    requests. Separately, the kernel refuses `CDROMEJECT` before the drive hears of it on
+    `ENOSYS`, `EBUSY` or a rejected ALLOW.
+  - **Fix (`main/support/dvd/dvd_phys.cpp`):**
+    - `CDROM_CLEAR_OPTIONS(CDO_LOCK)` + `CDROM_LOCKDOOR(0)` on EVERY ready scan (1.3 ms median
+      measured), so udev's lock never sticks. An insertion-edge-only unlock lost the race.
+    - On a refused `CDROMEJECT`, util-linux `eject(1)`'s SG_IO fallback (ALLOW, START, LoEj),
+      naming the holding pids on `EBUSY`.
+    - One `DVD_PHYS: drive ...` identity line per insertion.
+  - **HW:**
+    - **Second rig (LG GUD1N + Initio bridge, v0.9.1 core).** With udev's eject handling
+      paused and the drive udev-locked: v0.9.1 Main, the button did nothing (Lock State 1).
+      This branch released the lock within one scan (≤10 s, slow probe), then the button
+      opened the tray and the core went to idle.
+    - **First rig.** With the drive held open by `sleep`: installed Main gave `errno 16`, tray
+      shut; this branch named the holder, ejected through the direct SCSI fallback, and
+      opened the tray.
+  - **Gates:** `main/tests/run_tests.sh --red`:
+    - `dvd_phys_test` [15]: lock cleared before the mount, and released on every scan.
+    - `dvd_phys_test` [16]: fallback on `ENOSYS` and `EBUSY`, plus a control where
+      `CDROMEJECT` works.
+    - Mutation arms `phys-lock-left-on`, `phys-unlock-once`, `phys-eject-no-fallback`,
+      `phys-eject-not-loej`.
+  - **Reporter:** confirmed eject works with the PR's Main on the original slot-loading IDE
+    drive + USB adapter (2026-10-14). Design: `docs/physical_disc.md` "Drive compatibility".
+
 - ✅ **LINE-21 CAPTIONS: THE FIELD IS THE ENTRY'S POSITION, NOT ITS MARKER (issue #166,
   2026-10-10, ✅ MERGED PR #175; sim-proven, ✅ HW-CONFIRMED by eye on a TV).**
   - **Field report:** CC1 garbled on I, Robot. The disc is fine: `cc_scan.py --text` decodes

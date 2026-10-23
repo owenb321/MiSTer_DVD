@@ -704,7 +704,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-cellcmdhold5"
+`define CORE_VERSION "dev-cellcmdhold6"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -1203,8 +1203,13 @@ hps_io #(.CONF_STR(CONF_STR), .BLKSZ(4)) hps_io_inst (
 wire [35:0] ext_bus;
 wire        telem_drive;
 wire [15:0] telem_dout;
-assign ext_bus[32]   = telem_drive;
-assign ext_bus[15:0] = telem_dout;
+// The nav event FIFO (dvd/nav_trace.sv, command 0x7C) answers on the same bus.
+// The two never drive at once: dvd_telem takes the bus only for 0x7A/0x7B and
+// nav_trace only for 0x7C, each decided on the transaction's first strobe.
+wire        trc_drive;
+wire [15:0] trc_dout;
+assign ext_bus[32]   = telem_drive | trc_drive;
+assign ext_bus[15:0] = trc_drive ? trc_dout : telem_dout;
 
 // the audio engine's words (25..30): declared here, above their users below
 // (Verilog declaration order). cb_* is the DTS codebook copy (dts_cb_mem, further down).
@@ -1754,6 +1759,9 @@ wire [7:0]  vm_agln;                 // SPRM3 (camera angle) from the DVD-VM
 wire        vm_pre_done;             // VM finished this PGC's PRE block
 wire        vm_link_fail;      // pulse: menu link failed -> re-entered menu (HUD popup)
 wire [7:0]  vm_link_fail_pgcn; // the PGCN that failed to resolve (HUD digits)
+wire        trc_gprm_we;       // dvd_vm GPRM write snoop -> nav_trace
+wire [3:0]  trc_gprm_a;
+wire [15:0] trc_gprm_d;
 wire [7:0]  rdr_play_vtsn;
 reg         key_menu_p, key_title_p, key_return_p, key_cmenu_p;
 // The reader's mount-time Title-entry probe (audit 10b, dvd_iso_reader S_FINALIZE):
@@ -2879,7 +2887,11 @@ dvd_vm dvd_vm_inst (
     .dbg_rsm       (),
     .dbg_deadend   (),
     .link_fail     (vm_link_fail),       // failed menu link -> HUD "LINK FAIL nn"
-    .link_fail_pgcn(vm_link_fail_pgcn)
+    .link_fail_pgcn(vm_link_fail_pgcn),
+    // every GPRM write, for the nav event log (dvd/nav_trace.sv)
+    .trc_gprm_we   (trc_gprm_we),
+    .trc_gprm_a    (trc_gprm_a),
+    .trc_gprm_d    (trc_gprm_d)
 );
 
 // Transport / VM seek mux (the VM's LinkCN/LinkPGN cell seeks share the
@@ -6364,6 +6376,9 @@ wire [9:0]  hl_x1, hl_x2, hl_y1, hl_y2;
 wire [31:0] hl_coli;
 
 wire hli_arm_w;                           // nav_pci: an HLI with buttons was promoted
+wire [31:0] hl_sptm_w;                    // nav_pci: that HLI's start PTS (nav_trace)
+wire        hl_h_so_w, hl_nxt_early_w;    // nav_pci: scoring window armed / parked with the lead (nav_trace X0/X1)
+wire [31:0] hl_nxt_sptm_w;                // nav_pci: the parked HLI's start PTS (X1 payload)
 nav_pci nav_pci_inst (
     .hli_arm    (hli_arm_w),
     .clk        (clk_sys),
@@ -6435,7 +6450,75 @@ nav_pci nav_pci_inst (
     .btns_pend  (hl_btns_pend),
     .btn_sel    (hl_btn_sel),
     .dbg_btn_ns (hl_btn_ns),         // gate in-title multi-button menu nav (Scene It)
-    .hli_seen   (hl_menu_seen)       // early menu-HLI detect -> open the subpicture gate in time
+    .hli_seen   (hl_menu_seen),      // early menu-HLI detect -> open the subpicture gate in time
+    .dbg_h_sptm (hl_sptm_w),         // -> nav_trace HLI_ARM payload
+    .dbg_h_so      (hl_h_so_w),      // -> nav_trace X0 (issue #176)
+    .dbg_nxt_early (hl_nxt_early_w), // -> nav_trace X1
+    .dbg_nxt_sptm  (hl_nxt_sptm_w)
+);
+
+// =========================================================================
+// NAV EVENT FIFO (dvd/nav_trace.sv; docs/hil_play_harness.md "Nav event FIFO
+// (fabric)"). Every navigation event the HIL harness needs to TIME -- buttons
+// going live, a button activated, a cell command, a GPRM write, a key reaching
+// the fabric, a flush, an STC jump, the audio-low edge, pause/still/menu -- is
+// logged with the STC and a free-running 90 kHz tick, and drained by the HPS
+// over EXT_BUS command 0x7C (dvd_ctl.cpp, only while the harness's fast-telemetry
+// arm file exists). Placed here, below every source it reads (Verilog declaration
+// order). Wiring gated by tools/check_nav_trace_wiring.py.
+// #176 HOOKS: x_ev/x_pl carry nav_pci's h_so / nxt_early and the cc_aud_low
+// release as X0..X2 (codes 14..16); see the edge detectors below.
+// =========================================================================
+// Issue #176 events, X0..X2 (codes 14..16): one pulse on EITHER edge, the new
+// level in payload bit 0.
+//   X0 h_so      : the armed HLI is a scoring window;    payload[25:1] = its s_ptm[24:0]
+//   X1 nxt_early : the parked HLI takes EARLY_LEAD;      payload[25:1] = its s_ptm[24:0]
+//   X2 cc_aud_low: the cell-command hold's audio release; payload[16:1] = aud_frames_avail
+reg  [2:0]  trc_x_q;
+always @(posedge clk_sys) begin
+    if (!reset_n) trc_x_q <= 3'd0;
+    else          trc_x_q <= {cc_aud_low, hl_nxt_early_w, hl_h_so_w};
+end
+wire [2:0]  trc_x_ev = {cc_aud_low, hl_nxt_early_w, hl_h_so_w} ^ trc_x_q;
+wire [77:0] trc_x_pl = {{9'd0, aud_frames_avail, cc_aud_low},
+                        {hl_nxt_sptm_w[24:0], hl_nxt_early_w},
+                        {hl_sptm_w[24:0], hl_h_so_w}};
+nav_trace nav_trace_inst (
+    .clk         (clk_sys),
+    .rst_n       (reset_n),
+    .io_enable   (ext_bus[34]),
+    .io_strobe   (ext_bus[33]),
+    .io_din      (ext_bus[31:16]),
+    .drive       (trc_drive),
+    .dout        (trc_dout),
+    .tick        (stc_div == 9'd299),    // the STC's own 90 kHz tick (clk_sys/300)
+    .stc         (av_stc),
+    .gprm_we     (trc_gprm_we),
+    .gprm_a      (trc_gprm_a),
+    .gprm_d      (trc_gprm_d),
+    .joy_rise    (joy_eff[24:0] & ~joy_prev[24:0]),
+    .kbd_joy     (kbd_joy),
+    .ps2_key     (ps2_key),
+    .btn_act     (hl_btn_cmd_valid),
+    .btn_sel     (hl_btn_sel),
+    .btn_ns      (hl_btn_ns),
+    .cell_cmd    (vm_cell_cmd_w),
+    .cell_cmdnr  (cur_cell_cmdnr_w),
+    .hli_arm     (hli_arm_w),
+    .h_sptm      (hl_sptm_w),
+    .btns_armed  (hl_btns_armed),
+    .cur_cell    (cur_cell),
+    .cur_vts     (cur_vts),
+    .cur_pgcn    (cur_pgcn_rd),
+    .menu_active (menu_active),
+    .flush       ({soft_flush, mount_flush, seek_flush, aud_resync, aud_flush, load_flush}),
+    .aud_low     (aud_ring_low),
+    .aud_frames  (aud_frames_avail),
+    .pause       (pause_q),
+    .still       (still_active),
+    .video_live  (video_live_s2),
+    .x_ev        (trc_x_ev),
+    .x_pl        (trc_x_pl)
 );
 
 // =========================================================================

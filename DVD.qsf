@@ -89,6 +89,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/flush_ctl.sv
 # muted all their audio). See bench/dvd/css_detect_tb.sv, run via run_css.sh.
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/css_detect.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/dvd_telem.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/nav_trace.sv
 # PAL/NTSC verdict from the parsed frame height, hardened so a garbage sequence header
 # cannot flip it (issue #42 leg 2): a pal_eff change restarts the raster with NO flush.
 # See bench/dvd/pal_detect_tb.sv.

@@ -17,7 +17,11 @@ the file. It fails if:
     scoring-window lead would be off on every disc, or on for every set-only HLI);
   * dvd_iso_reader .cc_aud_low is not `cc_aud_low`, assigned `aud_ring_low & cc_aud_live`
     (without the ring-low term the hold starves the audio at every scoring join; without
-    the liveness term an audio-less title releases every hold at once).
+    the liveness term an audio-less title releases every hold at once);
+  * nav_trace's .x_ev/.x_pl are not the X0..X2 hooks: x_ev = the three levels
+    {cc_aud_low, nav_pci .dbg_nxt_early, .dbg_h_so} XOR their registered copies (an
+    event on either edge), each payload carrying its level in bit 0. A tie-off would
+    leave the HIL harness's #176 events silently absent.
 
     python3 tools/check_cmd_hold_wiring.py [emu.sv]   # exit 0 = wired right
     python3 tools/check_cmd_hold_wiring.py --red      # each mutation must FAIL
@@ -89,6 +93,30 @@ def check(emu_raw):
     if not m or sorted(t.strip() for t in m.group(1).split('&')) != ['aud_ring_low', 'cc_aud_live']:
         bad.append("cc_aud_low is not assigned aud_ring_low & cc_aud_live (%s)"
                    % (m.group(1).strip() if m else 'no assign'))
+
+    tr = instantiation_body(src, 'nav_trace')
+    if tr is None:
+        bad.append('nav_trace instance not found in emu.sv')
+        return bad
+    xe, xp = port_expr(tr, 'x_ev'), port_expr(tr, 'x_pl')
+    if (xe or '').strip() != 'trc_x_ev' or (xp or '').strip() != 'trc_x_pl':
+        bad.append("nav_trace .x_ev/.x_pl are '%s'/'%s', want trc_x_ev/trc_x_pl" % (xe, xp))
+    so, ne_ = port_expr(np, 'dbg_h_so'), port_expr(np, 'dbg_nxt_early')
+    so = (so or '').strip(); ne_ = (ne_ or '').strip()
+    lv = '{cc_aud_low,%s,%s}' % (ne_, so)
+    q = re.search(r'\btrc_x_q\s*<=\s*(\{[^;]*\})\s*;', src)
+    if not so or not ne_:
+        bad.append('nav_pci .dbg_h_so / .dbg_nxt_early are not connected')
+    elif not q or re.sub(r'\s+', '', q.group(1)) != lv:
+        bad.append('trc_x_q is not registered from %s' % lv)
+    m = re.search(r'\bwire\s*\[2:0\]\s*trc_x_ev\s*=\s*([^;]+);', src)
+    if not m or re.sub(r'\s+', '', m.group(1)) != lv + '^trc_x_q':
+        bad.append('trc_x_ev is not %s ^ trc_x_q (%s)' % (lv, m.group(1).strip() if m else 'no assign'))
+    m = re.search(r'\bwire\s*\[77:0\]\s*trc_x_pl\s*=\s*([^;]+);', src)
+    pl = re.sub(r'\s+', '', m.group(1)) if m else ''
+    for lvl in ('cc_aud_low', ne_, so):
+        if lvl and not re.search(re.escape(lvl) + r'\}', pl):
+            bad.append('trc_x_pl does not carry %s in its payload bit 0' % lvl)
     return bad
 
 
@@ -107,6 +135,11 @@ MUTATIONS = [
     ('scoring open', r'\.cc_scoring\s*\(cc_scoring_w\)', '.cc_scoring     ()'),
     ('aud low tied', r'\.cc_aud_low\s*\(cc_aud_low\)', ".cc_aud_low     (1'b0)"),
     ('aud low no live', r'wire cc_aud_low  = aud_ring_low & cc_aud_live;', 'wire cc_aud_low  = aud_ring_low;'),
+    ('trace x tied', r'\.x_ev\s*\(trc_x_ev\)', ".x_ev        (3'd0)"),
+    ('trace x level', r'\{cc_aud_low, hl_nxt_early_w, hl_h_so_w\} \^ trc_x_q', '{cc_aud_low, hl_nxt_early_w, hl_h_so_w}'),
+    ('trace x swap', r'trc_x_q <= \{cc_aud_low, hl_nxt_early_w, hl_h_so_w\}', 'trc_x_q <= {cc_aud_low, hl_h_so_w, hl_nxt_early_w}'),
+    ('trace h_so open', r'\.dbg_h_so\s*\(hl_h_so_w\)', '.dbg_h_so      ()'),
+    ('trace pl no level', r'\{hl_nxt_sptm_w\[24:0\], hl_nxt_early_w\}', '{hl_nxt_sptm_w[25:0]}'),
     ('vbuf threshold', r"vbuf_empty <= \(vbuf_fill_s1 <= 8'h01\);", "vbuf_empty <= (vbuf_fill_s1 <= 8'h40);"),
 ]
 

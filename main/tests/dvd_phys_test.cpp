@@ -46,6 +46,9 @@
 #include <fcntl.h>
 #include <sys/ioctl.h>
 #include <linux/cdrom.h>
+#include <scsi/sg.h>
+#include <errno.h>
+#include <stdint.h>
 
 #include "dvd_phys.h"      // staged on the include path by run_tests.sh
 
@@ -70,6 +73,15 @@ static unsigned fake_ms       = 0;   // the millisecond clock the module measure
 // the kernel refuses to eject a busy device.
 static int eject_ioctls   = 0;
 static int mounts_at_eject = -1;   // mount_calls at the moment CDROMEJECT ran
+// The drive-compatibility half (see drive_never_lock() / eject_scsi()): the
+// kernel's tray lock must be off before any mount, and a refused CDROMEJECT must
+// fall through to a direct SCSI eject.
+static int eject_errno       = 0;   // CDROMEJECT fails with this (0 = it works)
+static int clear_lock_calls  = 0;   // CDROM_CLEAR_OPTIONS(CDO_LOCK) seen
+static int clears_at_mount   = -1;  // clear_lock_calls when the drive was last mounted
+static int unlock_calls      = 0;   // CDROM_LOCKDOOR(0) seen on the scan fd
+static int sg_n              = 0;   // SG_IO commands seen on the eject fd...
+static unsigned char sg_cdb[8][2];  // ...each as (opcode, byte 4)
 #define open(path, flags) test_open(path, flags)
 #define ioctl(fd, req, arg) test_ioctl(fd, req, arg)
 
@@ -104,6 +116,7 @@ int  dvd_ra_source_busy(void) { return fake_ra_busy; }
 int user_io_file_mount(const char *name, unsigned char index = 0, char = 0, int = 0)
 {
     mount_calls++;
+    if (name && name[0] == '*') clears_at_mount = clear_lock_calls;   // a drive sentinel
     snprintf(last_mount, sizeof(last_mount), "%s", name ? name : "");
     dvd_phys_note_mount(name, index);   // Main calls this at the top of the real one
     return 1;
@@ -127,11 +140,30 @@ static int test_open(const char *path, int flags)
     // only the eject path opens by name here
     return (path && path[0] == '/') ? 98 : -1;
 }
-static int test_ioctl(int fd, unsigned long req, unsigned long arg)
+// The module passes ints for the cdrom ioctls and a pointer for SG_IO, so the
+// fake takes either through one integer and casts back where it must.
+static int test_ioctl_impl(int fd, unsigned long req, uintptr_t arg)
 {
-    (void)arg;
-    if (fd == 98 && req == CDROMEJECT) { eject_ioctls++; mounts_at_eject = mount_calls; }
+    if (req == CDROM_CLEAR_OPTIONS && arg == CDO_LOCK) clear_lock_calls++;
+    if (fd == 99 && req == CDROM_LOCKDOOR && arg == 0) unlock_calls++;
+    if (req == CDROM_GET_CAPABILITY) return CDC_OPEN_TRAY | CDC_LOCK;
+    if (fd == 98 && req == CDROMEJECT)
+    {
+        eject_ioctls++; mounts_at_eject = mount_calls;
+        if (eject_errno) { errno = eject_errno; return -1; }
+    }
+    if (fd == 98 && req == SG_IO)
+    {
+        sg_io_hdr_t *io = (sg_io_hdr_t *)arg;
+        if (sg_n < 8) { sg_cdb[sg_n][0] = io->cmdp[0]; sg_cdb[sg_n][1] = io->cmdp[4]; }
+        sg_n++;
+        io->info = SG_INFO_OK;
+    }
     return 0;
+}
+template <class T> static int test_ioctl(int fd, unsigned long req, T arg)
+{
+    return test_ioctl_impl(fd, req, (uintptr_t)arg);
 }
 
 #include "dvd_phys.cpp"
@@ -362,6 +394,52 @@ int main(void)
     fake_ra_busy = 1; dvd_phys_tick();         // busy: skipped
     fake_ra_busy = 0; dvd_phys_tick();         // same second, now idle
     check("[14] probes in the second the worker went idle", scan_calls, 1);
+
+    // ---------------------------------------------------------------- [15]
+    // The kernel locks the tray on every non-O_NONBLOCK open while the drive's
+    // CDO_LOCK option is set, which libdvdcss's open is. A drive that obeys the
+    // lock then ignores its own button for the whole session. The option must be
+    // cleared BEFORE the mount opens the drive, on every insertion.
+    printf("=== [15] the tray lock is off before the drive is mounted ===\n");
+    fake_disc_ready = 0; run_for(NOTICE_WINDOW_S);
+    clear_lock_calls = 0; clears_at_mount = -1; unlock_calls = 0; reset_counters();
+    fake_disc_is_dvd = 1; fake_disc_ready = 1;
+    run_for(NOTICE_WINDOW_S);
+    check("[15] the disc was mounted",                     mount_calls, 1);
+    check("[15] kernel lock cleared before the mount",     clears_at_mount >= 1, 1);
+    check("[15] a held lock released on the insertion",   unlock_calls >= 1, 1);
+    // udev locks the tray after EVERY media change (cdrom_id --lock-media), on
+    // its own schedule, so an unlock at the insertion edge alone loses that race.
+    // Every ready scan must release it again while the disc sits there.
+    int u = unlock_calls, s0 = scan_calls;
+    run_for(NOTICE_WINDOW_S);
+    check("[15] udev's lock released on every scan",       unlock_calls - u, scan_calls - s0);
+    check("[15] ...and there were scans to release it on", scan_calls - s0 >= 3, 1);
+
+    // ---------------------------------------------------------------- [16]
+    // CDROMEJECT is refused by the kernel before the drive hears of it (ENOSYS
+    // for a drive that misreports its mechanism, EBUSY for another open handle).
+    // The eject must then go to the drive directly: ALLOW, START, LoEj.
+    printf("=== [16] a refused CDROMEJECT falls back to a direct SCSI eject ===\n");
+    const int refusals[2] = { ENOSYS, EBUSY };
+    for (int r = 0; r < 2; r++)
+    {
+        fake_disc_ready = 0; run_for(NOTICE_WINDOW_S);
+        fake_disc_ready = 1; run_for(NOTICE_WINDOW_S);
+        check("[16] we own a mounted disc to start",       dvd_phys_device() != 0, 1);
+        eject_errno = refusals[r]; sg_n = 0; memset(sg_cdb, 0, sizeof(sg_cdb));
+        dvd_phys_eject();
+        printf("  (CDROMEJECT refused with errno %d)\n", refusals[r]);
+        check("[16] direct SCSI eject sent",               sg_n, 3);
+        check("[16] first ALLOW MEDIUM REMOVAL (allow)",   sg_cdb[0][0] == 0x1E && sg_cdb[0][1] == 0, 1);
+        check("[16] last command is START STOP UNIT LoEj", sg_cdb[2][0] == 0x1B && sg_cdb[2][1] == 0x02, 1);
+    }
+    // CONTROL: a CDROMEJECT that works sends nothing else.
+    fake_disc_ready = 0; run_for(NOTICE_WINDOW_S);
+    fake_disc_ready = 1; run_for(NOTICE_WINDOW_S);
+    eject_errno = 0; sg_n = 0;
+    dvd_phys_eject();
+    check("[16] no SCSI fallback when CDROMEJECT works",   sg_n, 0);
 
     printf("\n=== dvd_phys tests: %d error(s) ===\n", errs);
     if (errs) { printf("FAILED\n"); return 1; }
