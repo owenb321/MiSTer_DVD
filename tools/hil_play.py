@@ -420,7 +420,7 @@ def start_capture(path, seconds):
            '-video_size', '720x480', '-framerate', '60', '-t', str(seconds), '-i', vdev,
            '-f', afmt, '-ac', '2', '-ar', '48000', '-t', str(seconds), '-i', adev,
            '-copyts', '-c:v', 'copy', '-c:a', 'pcm_s16le', path]
-    return subprocess.Popen(cmd)
+    return subprocess.Popen(cmd, stdin=subprocess.PIPE)
 
 
 def launch(sc):
@@ -562,7 +562,13 @@ def cmd_run(a, sc=None, out_dir=None):
     print('  clock: board->host offset %.4f s, rtt %.1f ms'
           % (clock['board_mono_to_host_wall'], clock['rtt_s'] * 1e3))
     if cap:
-        cap.wait()
+        # capture_s is a ceiling, not the length: stop a couple of seconds after the
+        # agent finishes ('q' makes ffmpeg finalise the file cleanly)
+        time.sleep(2.0)
+        try:
+            cap.communicate(b'q', timeout=30)
+        except Exception:
+            cap.kill()
         if sc.get('align') and a.local_iso:
             al = sc['align']
             tl = os.path.join(out_dir, 'timeline.json')
