@@ -89,6 +89,22 @@ for line in sys.stdin:
     break
 
 FPS = 25.0 if sc.get("pal") else 30000 / 1001
+# The Main appends every fast-telemetry row and every nav event to these two files in
+# the board's RAM-backed /tmp (246 MB). Unattended runs filled it in hours, after which
+# the Main's writes failed silently. Start each run empty (which also keeps an earlier
+# run's events out of this one); the agent streams what it needs to the host.
+TELEM_LOG = "/tmp/dvd_telem_fast.jsonl"
+
+
+def truncate_logs():
+    for p_ in (TELEM_LOG, NAVTRACE):
+        try:
+            open(p_, "w").close()
+        except Exception:
+            pass
+
+
+truncate_logs()
 KEYS = sc.get("_keys", {})
 with open(FAST, "w") as f:
     f.write(str(sc.get("telem_ms", 20)))
@@ -376,6 +392,8 @@ try:
     os.remove(FAST)
 except Exception:
     pass
+time.sleep(0.1)
+truncate_logs()
 out({"done": ok, "t": mono()})
 '''
 
