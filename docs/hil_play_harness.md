@@ -145,6 +145,51 @@ confusing timeout.
 - **Key latency, measured:** the agent's FIFO write to the key's arrival in the fabric (the
   `PS2` make event) is 1–4 ms, with one outlier of 13.8 ms in 6 presses.
 
+- **The continue-screen duel (VTS 4 PGC 1 cells 4/6/8).**
+  - On builds with `EARLY_LEAD` the duel is winnable before the draw. Continue's jump
+    flushes the STC to 0, so `s_ptm − 1 s` is already behind it and the window arms at
+    commit. hold6 trace: `HLI_ARM` at STC 0.000 with `late_ticks` −77594. A Select at STC
+    0.445 scored, 0.417 s before `s_ptm`, and the capture shows the hit branch.
+  - Without the lead (`main` + FIFO), the window arms exactly at `s_ptm` (`late_ticks` 0,
+    cells 4 and 8). hold7 (lead removed): a pre-draw Select misses and a Select after the
+    arm hits.
+  - ⚠ An instrument lesson: the duel opens on a static standoff, so the matcher's margin
+    is ~0 and the PTS it reports there is not a measurement. An early "arms 0.4–0.7 s
+    early on v0.9.1" claim came from exactly that and was retracted. The report now flags
+    static-shot PTS and also gives every armed edge as **elapsed time since the cut**.
+- **VTS 15 cells 1–2 (issue #176's "unhittable" guy), autoplayed via the route menu (VTS 12
+  PGC 1, b1 → VTS 15):**
+  - On `main`, cell 2's `CELL_CMD` fires at STC 0.520 and its `HLI_ARM` only at 1.032
+    (`late_ticks` 83167, the fallback). The verdict is taken before the buttons arm, so
+    the window cannot be hit: the maintainer's report, reproduced.
+  - On hold7, cell 2 is re-judged at the re-anchor and arms at its first picture (STC
+    0.108); one Right + Select hits. The verdict is taken by `cc_aud_low` at STC 0.812, not
+    at the window end (1.009).
+- **A ~0.95 s freeze + silence at VTS 15's cell 1 → 2 junction, pre-existing (`main` and
+  hold7 alike).**
+  - The reader's authored-duration hold (`dur_hold`) parks it in a timed still of exactly
+    2.000 s from when it finishes reading cell 1: C_PBTM 3.87 s rounds up to 4, minus
+    `cell_secs` = 2, counted from the reader's load rather than the display.
+  - The display runs dry ~0.85 s before the still ends. Pickups stop and the audio ring
+    sits at 0.
+  - Capture: `freezedetect` 0.95 s plus `silencedetect` 0.94 s at that moment.
+  - This is the shape of the saloon's missing gunshot, and is handed to the #176 owner for
+    a reader fix.
+
+Harness lessons from the same day:
+- **The Main's fast-telemetry log fills the board's `/tmp`.** It appends every 20 ms row
+  to `/tmp/dvd_telem_fast.jsonl` on a 246 MB tmpfs. A day of runs filled it, after which
+  nav events stopped and an autoplayed run went blind. The agent now empties both logs at
+  start and end, which also stops an earlier run's nav events replaying.
+- **Mad Dog's route menu** (VTS 12 PGC 1, an indefinite still with link buttons) must be
+  answered. `also_select` takes `"VTS:PGCN"` or `"VTS:PGCN=right,..."`.
+- **`freezedetect` / `silencedetect` on the raw capture** answer "did it freeze / go
+  silent" without the picture matcher. Use them where the matcher's margin is ~0.
+- **`capture_s` is a ceiling.** The capture stops when the agent finishes.
+- **Reaching the duel:** a jump that keeps the VBUF does not reset the picture counters,
+  so `base` locks on the first `video_live` 0→1 edge after the intro's still
+  (`live_edges`, `after_still`).
+
 ## Known limits / next
 
 - `at_pts` maps PTS through picture count since `base`, so it is valid only on one
