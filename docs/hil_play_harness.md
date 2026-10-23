@@ -225,6 +225,15 @@ Harness lessons from the same day:
   answered. `also_select` takes `"VTS:PGCN"` or `"VTS:PGCN=right,..."`.
 - **`freezedetect` / `silencedetect` on the raw capture** answer "did it freeze / go
   silent" without the picture matcher. Use them where the matcher's margin is ~0.
+- **Put the agreed build back after an A/B, and read the rig before saying what is on
+  it.** A Scene It A/B flashed hold10 as its last run; the rig was then handed to the
+  maintainer as "hold12", and they tested hold10. `mister.py state` names the deployed
+  `.rbf`. Check it at every handover.
+- **Exploring a menu-driven disc:** `select_unknown_after_s` (on in drafted `explore`
+  scenarios) presses Select on any screen the autoplayer cannot place, so the disc walks
+  its default path. `hil_disc.py explored` lists menu-domain PGCs as `M<vts>:<pgcn>`. A
+  default path can loop (Scene It's "start timer"); that is the profile's next route to
+  write.
 - **`capture_s` is a ceiling.** The capture stops when the agent finishes.
 - **Reaching the duel:** a jump that keeps the VBUF does not reset the picture counters,
   so `base` locks on the first `video_live` 0→1 edge after the intro's still
