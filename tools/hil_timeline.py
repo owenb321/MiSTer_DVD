@@ -102,6 +102,50 @@ def audio(src, data=None):
     return a, (float(m.group(3)) if m else None)
 
 
+def overlay_reads(src, box, n_expect):
+    """Debug Overlay (O[2]) with Disc Menus on, read from every full-size capture frame:
+    block #1 (top-left, just left of the picture) is GREEN while nav_pci has buttons
+    armed, RED otherwise (dvd/emu.sv dbg_hl_en); the SELECTED button carries a 1-px
+    MAGENTA outline. A thin magenta outline also frames the whole picture, so magenta
+    within EDGE px of the active area's border is ignored.
+    Returns per frame (armed: 1/0/None if neither colour, sel: [x0,y0,x1,y1] in DVD
+    720x480 picture coordinates or None)."""
+    W, H = 720, 480
+    bw, bh, bx, by = box
+    EDGE = 6
+    RUN = 12                 # px: shortest outline side counted (a button is >= ~20)
+    p = subprocess.Popen(['ffmpeg', '-hide_banner', '-loglevel', 'error', '-i', src, '-an',
+                          '-vf', 'scale=%d:%d' % (W, H), '-pix_fmt', 'rgb24', '-f', 'rawvideo',
+                          '-'], stdout=subprocess.PIPE)
+    out, fs = [], W * H * 3
+    blk = (slice(9, 23), slice(max(bx - 2, 0), bx + 10))     # block #1, measured
+    while True:
+        buf = p.stdout.read(fs)
+        if len(buf) < fs:
+            break
+        f = np.frombuffer(buf, np.uint8).reshape(H, W, 3).astype(np.int16)
+        r, g, b = f[blk][..., 0].mean(), f[blk][..., 1].mean(), f[blk][..., 2].mean()
+        armed = 1 if (g > 140 and r < 100) else 0 if (r > 140 and g < 100) else None
+        a = f[by + EDGE:by + bh - EDGE, bx + EDGE:bx + bw - EDGE]
+        m = (a[..., 0] > 150) & (a[..., 2] > 150) & (a[..., 1] < 90)
+        sel = None
+        # An outline's top and bottom are long magenta rows; stray magenta-ish picture
+        # pixels never form a run that long. Its 1-px sides do NOT survive the capture's
+        # 4:2:2 chroma, so the horizontal extent comes from those rows, not from columns.
+        rows = np.flatnonzero(m.sum(axis=1) >= RUN)
+        if len(rows) >= 2:
+            cols = np.flatnonzero(m[rows].any(axis=0))
+            sx = 720.0 / bw
+            sel = [round(float((cols[0] + EDGE) * sx), 1), round(float(rows[0] + EDGE + by), 1),
+                   round(float((cols[-1] + EDGE) * sx), 1), round(float(rows[-1] + EDGE + by), 1)]
+        out.append({'armed': armed, 'sel': sel})
+    p.wait()
+    if len(out) != n_expect:
+        print('overlay: read %d frames, thumbnails had %d' % (len(out), n_expect),
+              file=sys.stderr)
+    return out
+
+
 def normalise(t):
     t = t - t.mean(axis=1, keepdims=True)
     n = np.linalg.norm(t, axis=1)
@@ -193,6 +237,11 @@ def cmd_align(a):
                            score=round(float(S[k, j]), 3), margin=round(best - second, 3))
                 prev = (int(ref_cell[jj]), float(ref_pts[jj]))
             frames.append(row)
+
+    if a.overlay:
+        ov = overlay_reads(a.capture, box, len(frames))
+        for row, o in zip(frames, ov):
+            row.update(o)
 
     au, au_t0 = audio(a.capture)
     au_t0 = au_t0 or 0.0
@@ -377,6 +426,62 @@ def capture_latency(frames, agent_jsonl, offset):
             'q75_s': round(float(q[2]), 4)}
 
 
+def hli_at(timing, cell, pts):
+    """The authored highlight a cell has committed by `pts` (its latest hli_ss 1/3 whose
+    VOBU starts at or before pts), or None."""
+    c = next((c for c in timing['cells'] if c['cell'] == cell), None)
+    if not c:
+        return None
+    cur = None
+    for h in c.get('hli', []):
+        if h['vobu_s_ptm'] / 9e4 <= pts + 1e-6:
+            cur = h
+    return cur
+
+
+def button_at(h, sel):
+    """The authored button whose rectangle best matches the magenta outline."""
+    if not h or not sel:
+        return None
+    cx, cy = (sel[0] + sel[2]) / 2, (sel[1] + sel[3]) / 2
+    best = min(h['buttons'], key=lambda b: ((b['x1'] + b['x2']) / 2 - cx) ** 2
+               + ((b['y1'] + b['y2']) / 2 - cy) ** 2, default=None)
+    return best and best['n']
+
+
+def arm_events(frames, timing):
+    """Every change of overlay block #1, placed on the picture then on screen, against
+    the authored window of the cell's highlight. vs = how far the edge is from the
+    authored start (rise) or end (fall), in seconds of PTS; + = after."""
+    out, prev, last_pic = [], None, None
+    for r in frames:
+        if r.get('cell') is not None:
+            last_pic = r
+        a = r.get('armed')
+        if a is None:
+            continue
+        if prev is not None and a != prev and last_pic:
+            h = None
+            for c in timing['cells']:
+                if c['cell'] == last_pic['cell']:
+                    for x in c.get('hli', []):
+                        if x['btn_ns']:
+                            h = x
+                            break
+            s = h and h['s_ptm'] / 9e4
+            e = h and (h['e_ptm'] / 9e4 if h['e_ptm'] is not None else None)
+            ref = s if a else e
+            out.append({'t': r['t'], 'edge': 'LIVE' if a else 'dead',
+                        'cell': last_pic['cell'], 'pts': '%.3f' % last_pic['pts'],
+                        's_ptm': '%.3f' % s if s is not None else '-',
+                        'e_ptm': '%.3f' % e if e is not None else 'forever',
+                        'vs': ('%+.3f s vs authored %s' % (last_pic['pts'] - ref,
+                                                          'start' if a else 'end'))
+                        if ref is not None else 'no authored window in this cell'})
+        prev = a
+    return out
+
+
 def cmd_report(a):
     d = json.load(open(a.run))
     fr = d['frames']
@@ -396,6 +501,11 @@ def cmd_report(a):
               'cell %2d first %7.3f (ref %7.3f, %.3f s unshown)'
               % (j['t_old'] - T0, j['old'], j['old_pts'], j['old_last_ref'], j['old_missing_s'],
                  j['gap_s'], j['new'], j['new_pts'], j['new_first_ref'], j['new_missing_s']))
+    if any('armed' in r for r in fr):
+        print('\nbuttons live (overlay block #1) against the authored window:')
+        for e in arm_events(fr, d['timing']):
+            print('  t=%8.3f %-6s cell %2s pts %s  authored hli %s..%s  -> %s' % (
+                e['t'] - T0, e['edge'], e['cell'], e['pts'], e['s_ptm'], e['e_ptm'], e['vs']))
     ps = pace_steps(fr)
     print('\ndisplay pace steps > 0.1 s within a cell (stall = held, skip = never shown): %d'
           % len(ps))
@@ -423,15 +533,21 @@ def cmd_report(a):
                 continue
             tc = o['t'] + off['board_mono_to_host_wall']
             on = None
+            sel = None
             for r in fr:                # the frame on the wire at tc arrives L later
                 if r['t'] > tc + L['median_s']:
                     break
                 if r.get('cell') is not None:
                     on = r
+                if 'sel' in r:
+                    sel = r
             print('  t=%8.3f %-8s %-15s picked up: %s' % (
                 tc + L['median_s'] - T0, o['key'],
                 ('at_pts %.3f' % o['at_pts']) if 'at_pts' in o else '',
-                'cell %d pts %.3f' % (on['cell'], on['pts'])
+                ('cell %d pts %.3f' % (on['cell'], on['pts'])
+                 + ('' if not sel else '  armed=%s sel=b%s' % (
+                     sel.get('armed'), button_at(hli_at(d['timing'], on['cell'], on['pts']),
+                                                 sel.get('sel')))))
                 if on else 'nothing matched'))
     rep = audio_vs_ref(d)
     print('\naudio: capture vs reference, placed by the video mapping')
@@ -460,6 +576,8 @@ def main():
     p.add_argument('pgcn', type=int)
     p.add_argument('--cells', type=int, nargs='*', default=[])
     p.add_argument('--min-score', type=float, default=0.80)
+    p.add_argument('--overlay', action='store_true',
+                   help='read Debug Overlay block #1 (armed) and the selected button')
     p.add_argument('--box', type=int, nargs=4, metavar=('W', 'H', 'X', 'Y'),
                    help='the capture\'s active picture (default: cropdetect)')
     p.add_argument('-o', '--out', required=True)
