@@ -22,10 +22,13 @@ A scenario is JSON:
                                                 #   non-menu run (counters reset at its flush)
         {"key": "right", "at_pts": 35.75},      # tap when picture (PTS-pts_first)*fps+1 shows
         {"key": "select", "at_pts": "$SEL"},    # $NAME: substituted by sweep --vary NAME=...
+        {"host": "continue", "timeout": 400},   # block until host vision says so (below)
+        {"key": "select", "at_picture": 12},    # tap when picture 12 after base is up
         {"mark": "shot"},
         {"sleep": 6}
      ],
      "pts_first": 0.181,                        # PTS of the base picture (disc_timing first_ptm)
+     "host_waits": {"continue": {"vts": 4, "pgcn": 3, "min_score": 0.85}},
      "pal": false}
 
 Predicates are Python expressions over the newest telemetry sample: `live`, `menu`,
@@ -62,7 +65,7 @@ sys.path.insert(0, HERE)
 import mister as M  # noqa: E402
 
 AGENT = r'''
-import json, os, sys, time
+import json, os, select, sys, time
 FIFO = "/tmp/mister_hil"
 TELEM, FAST = "/tmp/dvd_telem.json", "/tmp/dvd_telem_fast"
 NAVTRACE = "/tmp/dvd_navtrace.jsonl"
@@ -184,11 +187,41 @@ for i, st in enumerate(sc["steps"]):
         lim = t0 + st.get("timeout", 20)
         while mono() < lim and state["base"] is None:
             r = poll()
-            if r and len(rows) > 2 and r["flags"]["menu"] == 0 and r["flags"]["video_live"] == 1:
-                state["base"] = min((x for x in rows if x["t"] >= t0), key=lambda x: x["_c"])
+            since = [x for x in rows if x["t"] >= t0]
+            if since and since[-1]["flags"]["menu"] == 0 and since[-1]["flags"]["video_live"] == 1:
+                state["base"] = min(since, key=lambda x: x["_c"])
             time.sleep(0.004)
         out({"step": i, "base": state["base"] and state["base"]["t"]})
         if state["base"] is None:
+            ok = False
+            break
+    elif "host" in st:
+        # slow navigation by host vision: ask, keep polling telemetry, wait for its line
+        out({"step": i, "want_host": st["host"], "t": mono()})
+        lim, got = t0 + st.get("timeout", 300), None
+        while mono() < lim and got is None:
+            poll()
+            r, _, _ = select.select([sys.stdin], [], [], 0.005)
+            if r:
+                got = sys.stdin.readline().strip()
+        out({"step": i, "host": st["host"], "reply": got, "t": mono()})
+        if got != "ok":
+            ok = False
+            break
+    elif "key" in st and "at_picture" in st:
+        if state["base"] is None:
+            out({"step": i, "err": "at_picture before base"}); ok = False; break
+        lim = t0 + st.get("timeout", 30)
+        while mono() < lim:
+            r = poll()
+            if r and env(r)["pictures"] >= st["at_picture"]:
+                t = tap(st["code"], st.get("hold_ms", 30))
+                out({"step": i, "key": st["key"], "t": t, "at_picture": st["at_picture"],
+                     "pictures": env(r)["pictures"], "row_t": r["t"]})
+                break
+            time.sleep(0.001)
+        else:
+            out({"step": i, "err": "picture %d never reached" % st["at_picture"]})
             ok = False
             break
     elif "key" in st and "at_pts" in st:
@@ -297,11 +330,50 @@ def run_agent(sc, out_dir):
             if 'telem' not in o and 'nav' not in o:
                 events.append(o)
                 print('  agent: %s' % line.strip(), flush=True)
+            if 'want_host' in o:
+                ans = host_wait(sc['host_waits'][o['want_host']], out_dir, sc)
+                p.stdin.write(('ok' if ans else 'timeout') + '\n'); p.stdin.flush()
             if 'done' in o:
                 break
     p.stdin.close()
     p.wait(timeout=30)
     return clock, events
+
+
+_REFS = {}
+
+
+def host_wait(w, out_dir, sc):
+    """Block until a core screenshot matches one of the reference pictures named by
+    w = {"vts", "pgcn", "cells", "min_score", "timeout"}. Screenshots are the core's raw
+    raster (no pillarbox, no OSD), so they compare against the reference directly."""
+    import numpy as np
+    import hil_timeline as H
+    key = (w['vts'], w['pgcn'], tuple(w.get('cells', [])))
+    if key not in _REFS:
+        iso = sc.get('_local_iso')
+        timing = H.DT.dump(iso, w['vts'], w['pgcn'], set(w.get('cells', [])))
+        th = [H.thumbs('-', H.cut_cell(iso, c['lba_first'], c['lba_last']))[1]
+              for c in timing['cells'] if not w.get('cells') or c['cell'] in w['cells']]
+        _REFS[key] = H.normalise(np.concatenate(th))[0]
+    R = _REFS[key]
+    shot = os.path.join(out_dir, 'host_wait.png')
+    end = time.time() + w.get('timeout', 300)
+    while time.time() < end:
+        if os.path.exists(shot):
+            os.remove(shot)             # a failed shot must not re-match the last one
+        subprocess.run([sys.executable, os.path.join(HERE, 'mister.py'), 'shot', '--out', shot],
+                       capture_output=True)
+        if os.path.exists(shot):
+            _, C = H.thumbs(shot)
+            C, flat = H.normalise(C)
+            best = float((C @ R.T).max()) if not flat[0] else 0.0
+            print('  host: screenshot vs VTS %d PGC %d: %.3f' % (w['vts'], w['pgcn'], best),
+                  flush=True)
+            if best >= w.get('min_score', 0.85):
+                return True
+        time.sleep(0.5)
+    return False
 
 
 def _shq(s):
@@ -310,6 +382,7 @@ def _shq(s):
 
 def cmd_run(a, sc=None, out_dir=None):
     sc = sc or json.load(open(a.scenario))
+    sc['_local_iso'] = a.local_iso
     out_dir = out_dir or a.out
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, 'scenario.json'), 'w') as f:

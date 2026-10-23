@@ -400,6 +400,8 @@ def capture_latency(frames, agent_jsonl, offset):
     if not sc or base is None or not rows:
         return None
     fps = 25.0 if sc.get('pal') else 30000 / 1001
+    if not rows or all(t < base for t, _ in rows):
+        return None
     bc = next((c for t, c in rows if t == base), None)
     if bc is None:
         return None
