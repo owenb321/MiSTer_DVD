@@ -1,7 +1,7 @@
 # Real-time play-and-measure harness
 
 **Status:** 🔧 host side working end to end on the rig with the capture card (2026-10-23).
-The nav event FIFO (fabric) is merged, sim-proven and fitted, not yet run on the board: "Nav event FIFO (fabric)" below.
+The nav event FIFO (fabric) is merged, fitted and ✅ drains on the board (2026-10-23): "Nav event FIFO (fabric)" below.
 **Tools:** `tools/disc_timing.py`, `tools/hil_play.py`, `tools/hil_timeline.py`.
 **Built for:** issue #176 (Mad Dog McCree). Every fix there needed another round of the
 maintainer play-testing by hand, and each round found a timing problem that the bench
@@ -109,6 +109,37 @@ confusing timeout.
   37.518 and the last shown is 37.351. The seamless 1→2 junction is complete. This is
   consistent with the pre-#176 cell command running at the reader's cell end.
 
+- **Overlay ladder, first shootout, no shot.** Debug Overlay block #1 was read from the
+  capture; authored window 35.549–37.518:
+
+  | Build | Buttons live at (PTS on screen) | vs `hli_s_ptm` | Dead at |
+  |---|---|---|---|
+  | v0.9.1 | 35.483 | −0.067 s | 37.351 |
+  | hold1 | 35.483 | −0.067 s | 37.351 |
+  | hold2 / hold3 / hold4 / hold5 | 34.448 / 34.415 / 34.448 / 34.415 | ≈ −1.1 s | 37.351 |
+
+  `EARLY_LEAD` is visible on screen. **Block #1 means "drawn", not "scored":** v0.9.1
+  shows the buttons live up to 37.351 yet misses a shot at 37.3, because its cell command
+  took its verdict earlier. Only the FIFO's `CELL_CMD` gives the verdict time.
+- **Every PTS-restart junction loses 5+1 pictures, on every build.** The outgoing cell's
+  last 0.167 s and the incoming cell's first picture are never displayed, and the gap on
+  screen is one frame, so they are skipped, not delayed. The continuous-PTS junction loses
+  nothing. It is pre-existing (v0.9.1 has it) and is a separate defect from #176. It cuts
+  the tail of every window that runs to its cell's end: about 18 % of VTS 15 cell 2's
+  0.93 s window.
+- **The FIFO on the board, against the capture** (first shootout, `main`'s navigation):
+  - `HLI_ARM` and `ARMED` land at STC 35.549, exactly the authored `hli_s_ptm`.
+  - The picture on screen at that moment is 35.483: **the display trails the STC by
+    ~0.067 s (2 pictures).** That is why the overlay looks as if it arms 2 pictures early.
+  - `CELL_CMD` lands at STC 36.347. That is the verdict, and it matches the
+    hand-measured "v0.9.1 window closes ~36.3", 1.17 s before the authored end.
+  - 171 events in one run, 0 overflow; 1 merge, reported as a `LOST` line.
+  - ⚠ `CELL` / `CELL_CMD` carry the **reader's 0-based** cell index, and the reader runs
+    ~1.2 s ahead of the display (its "cell 2" arrives at STC 32.08; cell 2 shows at
+    33.28).
+- **Key latency, measured:** the agent's FIFO write to the key's arrival in the fabric (the
+  `PS2` make event) is 1–4 ms, with one outlier of 13.8 ms in 6 presses.
+
 ## Known limits / next
 
 - `at_pts` maps PTS through picture count since `base`, so it is valid only on one
@@ -122,8 +153,8 @@ confusing timeout.
 ## Nav event FIFO (fabric)
 
 **Status:** 🔧 sim-proven (`bench/dvd/run_nav_trace.sh --red`, `main/tests/run_tests.sh
---red`), wired into `dvd/emu.sv`, **fitted; not yet run on the board** (⏳ HIL: a real drain on
-the rig).
+--red`), wired into `dvd/emu.sv`, **fitted, and ✅ drains on the board** (2026-10-23, the second
+rig: `DVD_playharness_20261023_1139.rbf` + Main `MiSTer_DVDcss_hil_d0374658`).
 
 **Fit (2026-10-23, `DVD_playharness_20261023_1139.rbf`, SEED 17, unchanged pin):**
 - `nav_trace` takes **296 ALM** by entity (the pre-fit estimate was 200–250) and **2 M10K**,
