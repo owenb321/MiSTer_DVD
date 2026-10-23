@@ -12,7 +12,8 @@ A scenario is JSON:
     {"iso": "<image path ON THE MISTER>",
      "opts": {"Debug Overlay": "Off"},          # mister.py launch --opt pairs
      "capture_s": 60,                           # 0 = no capture
-     "align": {"vts": 1, "pgcn": 1, "cells": [1, 2, 3]},   # optional, for the report
+     "align": {"vts": 1, "pgcn": 1, "cells": [1, 2, 3],    # optional, for the report
+               "overlay": true},                         # read Debug Overlay (needs it On)
      "steps": [
         {"wait": "menu", "timeout": 30},        # a predicate on the live state (below)
         {"sleep": 2.5},
@@ -331,7 +332,8 @@ def cmd_run(a, sc=None, out_dir=None):
             tl = os.path.join(out_dir, 'timeline.json')
             subprocess.run([sys.executable, os.path.join(HERE, 'hil_timeline.py'), 'align',
                             cap_path, a.local_iso, str(al['vts']), str(al['pgcn']),
-                            '--cells', *map(str, al.get('cells', [])), '-o', tl])
+                            '--cells', *map(str, al.get('cells', [])), '-o', tl]
+                           + (['--overlay'] if al.get('overlay') else []))
             if not os.path.exists(tl):
                 print('  alignment failed: no timeline (see above)')
                 return events
