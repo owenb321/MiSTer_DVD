@@ -287,7 +287,14 @@ for i, st in enumerate(sc["steps"]):
                       if w["pgcn"] == nav.get("pgcn")] or tbl.get((nav.get("vts"), ev["sptm_lo"]), [])
                 if not ws:
                     out({"autoplay": "unknown window", "vts": nav.get("vts"),
-                         "pgcn": nav.get("pgcn"), "sptm_lo": ev["sptm_lo"], "t": mono()})
+                         "pgcn": nav.get("pgcn"), "sptm_lo": ev["sptm_lo"],
+                         "btn_ns": ev.get("btn_ns"), "t": mono()})
+                    # explore: take the preselected button on any screen it cannot
+                    # place, so a menu-driven disc walks its default path
+                    if pl.get("select_unknown_after_s") is not None:
+                        pending.append((mono() + pl["select_unknown_after_s"], "select",
+                                        {"why": "unknown %s:%s@%d" % (nav.get("vts"), nav.get("pgcn"),
+                                                                      ev["sptm_lo"])}))
                     continue
                 w = ws[0]
                 if not w["targets"]:

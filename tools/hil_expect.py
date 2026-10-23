@@ -271,7 +271,7 @@ def render(r, out):
     lines = ['%s / %s  (%s)' % (r.sc.get('_disc', '?'), r.sc.get('_scenario', '?'), r.d),
              'nav FIFO: %s, capture: %s, timeline: %s%s' % (
                  'yes' if r.fifo else 'NO', 'yes' if r.cap else 'NO', 'yes' if r.tl else 'NO',
-                 ', %d stale nav events from an earlier run ignored' % r.stale if r.stale else '')]
+                 ', %d nav events stamped before the run ignored (FIFO backlog or an earlier run)' % r.stale if r.stale else '')]
     for o in out:
         x = {k: v for k, v in o['expect'].items() if k != 'type'}
         lines.append('  %-6s %-16s %-34s %s' % (o['result'], o['expect']['type'],

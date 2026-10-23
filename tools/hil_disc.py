@@ -255,6 +255,7 @@ def draft(iso, root=None):
                 'opts': {'Debug Overlay': 'On'}, 'capture_s': 330,
                 'steps': [{'macro': 'start'},
                           {'play': {'until': 'False', 'timeout': 300, 'policy': [],
+                                    'select_unknown_after_s': 2.0,
                                     'delay_s': 0.15, 'hold_ms': 20}}],
                 'expect': []}},
         '_draft': {

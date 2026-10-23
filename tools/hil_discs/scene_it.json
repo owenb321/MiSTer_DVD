@@ -1,0 +1,918 @@
+{
+ "name": "scene_it",
+ "title": "Scene It? The DVD Movie Game",
+ "image": {
+  "fingerprint": "7d34069b598fa3198e768a66400bd05833c70818",
+  "name_hints": [
+   "interactive/Scene_It.iso"
+  ]
+ },
+ "pal": false,
+ "policy": {
+  "also_select": {},
+  "routes": {}
+ },
+ "macros": {
+  "start": [
+   {
+    "wait": "live and not menu",
+    "timeout": 60
+   }
+  ]
+ },
+ "notes": [
+  {
+   "text": "Drafted from the disc alone; nothing here is confirmed on HW yet.",
+   "why": "tools/hil_disc.py draft"
+  },
+  {
+   "text": "No ALG-style shots: every input is a menu. The main menu is a 6-button TITLE-domain highlight (VTS 3 PGC 18 cell 1, buttons set g[15]=1..4 then LinkTailPGC; fosl 2 = 'play the game'). Questions are indefinite stills with link buttons in VTS 5.",
+   "why": "hil_disc draft, 2026-10-23; it needs a shot model of its own (answer = which link) before the autoplayer can score anything."
+  }
+ ],
+ "scenarios": {
+  "explore": {
+   "description": "Start the disc and let the autoplayer play what it recognises for 5 minutes; then: tools/hil_disc.py explored <run dir>",
+   "opts": {
+    "Debug Overlay": "On"
+   },
+   "capture_s": 330,
+   "steps": [
+    {
+     "macro": "start"
+    },
+    {
+     "play": {
+      "until": "False",
+      "timeout": 300,
+      "policy": [],
+      "delay_s": 0.15,
+      "hold_ms": 20,
+      "select_unknown_after_s": 2.0
+     }
+    }
+   ],
+   "expect": []
+  }
+ },
+ "_draft": {
+  "scoring_windows": 0,
+  "aimable": 0,
+  "no_target": [],
+  "title_menus_not_shots": [
+   {
+    "vts": 3,
+    "pgcn": 18,
+    "cell": 1,
+    "buttons": 6,
+    "still": 0,
+    "fosl": 2,
+    "sptm_lo": 6926,
+    "commands": [
+     "SetMode Register g[15] = 0x1, LinkTailPGC (button 0)",
+     "SetMode Register g[15] = 0x2, LinkTailPGC (button 0)",
+     "SetMode Register g[15] = 0x3, LinkTailPGC (button 0)",
+     "SetMode Register g[15] = 0x4, LinkTailPGC (button 0)"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 1,
+    "cell": 2,
+    "buttons": 4,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 313465,
+    "commands": [
+     "SetMode Register g[6] = 0x3, LinkPGN 3 (button 0)",
+     "SetMode Register g[6] = 0x2, LinkPGN 3 (button 0)",
+     "SetMode Register g[6] = 0x1, LinkPGN 3 (button 0)",
+     "CallSS VMGM (pgc 4, rsm_cell 1)"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 7,
+    "cell": 2,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 597689,
+    "commands": [
+     "LinkPGN 3 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 7,
+    "cell": 5,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 647767,
+    "commands": [
+     "LinkPGN 6 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 7,
+    "cell": 8,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 640448,
+    "commands": [
+     "LinkPGCN 3",
+     "LinkPGCN 4"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 8,
+    "cell": 2,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 600693,
+    "commands": [
+     "LinkPGN 3 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 8,
+    "cell": 5,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 641619,
+    "commands": [
+     "LinkPGN 6 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 8,
+    "cell": 8,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 640531,
+    "commands": [
+     "LinkPGCN 3",
+     "LinkPGCN 4"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 9,
+    "cell": 2,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 597854,
+    "commands": [
+     "LinkPGN 3 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 9,
+    "cell": 5,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 641165,
+    "commands": [
+     "LinkPGN 6 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 9,
+    "cell": 8,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 643127,
+    "commands": [
+     "LinkPGCN 3",
+     "LinkPGCN 4"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 10,
+    "cell": 2,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 597801,
+    "commands": [
+     "LinkPGN 3 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 10,
+    "cell": 5,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 644454,
+    "commands": [
+     "LinkPGN 6 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 10,
+    "cell": 8,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 643227,
+    "commands": [
+     "LinkPGCN 3",
+     "LinkPGCN 4"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 11,
+    "cell": 2,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 600749,
+    "commands": [
+     "LinkPGN 3 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 11,
+    "cell": 5,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 644505,
+    "commands": [
+     "LinkPGN 6 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 11,
+    "cell": 8,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 643288,
+    "commands": [
+     "LinkPGCN 3",
+     "LinkPGCN 4"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 12,
+    "cell": 2,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 598094,
+    "commands": [
+     "LinkPGN 3 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 12,
+    "cell": 5,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 645253,
+    "commands": [
+     "LinkPGN 6 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 12,
+    "cell": 8,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 644259,
+    "commands": [
+     "LinkPGCN 3",
+     "LinkPGCN 4"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 13,
+    "cell": 2,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 122348,
+    "commands": [
+     "LinkPTT 6 (button 0)",
+     "LinkPTT 10 (button 0)"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 13,
+    "cell": 4,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 164695,
+    "commands": [
+     "LinkPTT 6 (button 0)",
+     "LinkPTT 10 (button 0)"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 13,
+    "cell": 6,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 218614,
+    "commands": [
+     "LinkPGCN 3",
+     "LinkPGCN 4"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 14,
+    "cell": 2,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 600703,
+    "commands": [
+     "LinkPGN 3 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 14,
+    "cell": 5,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 641462,
+    "commands": [
+     "LinkPGN 6 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 14,
+    "cell": 8,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 640176,
+    "commands": [
+     "LinkPGCN 3",
+     "LinkPGCN 4"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 15,
+    "cell": 2,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 597738,
+    "commands": [
+     "LinkPGN 3 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 15,
+    "cell": 5,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 641235,
+    "commands": [
+     "LinkPGN 6 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 15,
+    "cell": 8,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 640221,
+    "commands": [
+     "LinkPGCN 3",
+     "LinkPGCN 4"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 16,
+    "cell": 2,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 600808,
+    "commands": [
+     "LinkPGN 3 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 16,
+    "cell": 5,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 644521,
+    "commands": [
+     "LinkPGN 6 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 16,
+    "cell": 8,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 640154,
+    "commands": [
+     "LinkPGCN 3",
+     "LinkPGCN 4"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 17,
+    "cell": 2,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 597680,
+    "commands": [
+     "LinkPGN 3 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 17,
+    "cell": 5,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 623645,
+    "commands": [
+     "LinkPGN 6 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 17,
+    "cell": 8,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 640655,
+    "commands": [
+     "LinkPGCN 3",
+     "LinkPGCN 4"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 18,
+    "cell": 2,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 599465,
+    "commands": [
+     "LinkPGN 3 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 18,
+    "cell": 5,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 644429,
+    "commands": [
+     "LinkPGN 6 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 18,
+    "cell": 8,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 640400,
+    "commands": [
+     "LinkPGCN 3",
+     "LinkPGCN 4"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 19,
+    "cell": 2,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 596590,
+    "commands": [
+     "LinkPGN 3 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 19,
+    "cell": 5,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 644510,
+    "commands": [
+     "LinkPGN 6 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 19,
+    "cell": 8,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 643523,
+    "commands": [
+     "LinkPGCN 3",
+     "LinkPGCN 4"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 20,
+    "cell": 2,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 596735,
+    "commands": [
+     "LinkPGN 3 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 20,
+    "cell": 5,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 641507,
+    "commands": [
+     "LinkPGN 6 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 20,
+    "cell": 8,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 639939,
+    "commands": [
+     "LinkPGCN 3",
+     "LinkPGCN 4"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 21,
+    "cell": 2,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 596736,
+    "commands": [
+     "LinkPGN 3 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 21,
+    "cell": 5,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 644808,
+    "commands": [
+     "LinkPGN 6 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 21,
+    "cell": 8,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 640412,
+    "commands": [
+     "LinkPGCN 3",
+     "LinkPGCN 4"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 22,
+    "cell": 2,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 596578,
+    "commands": [
+     "LinkPGN 3 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 22,
+    "cell": 5,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 641814,
+    "commands": [
+     "LinkPGN 6 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 22,
+    "cell": 8,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 640440,
+    "commands": [
+     "LinkPGCN 3",
+     "LinkPGCN 4"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 23,
+    "cell": 2,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 599593,
+    "commands": [
+     "LinkPGN 3 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 23,
+    "cell": 5,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 644898,
+    "commands": [
+     "LinkPGN 6 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 23,
+    "cell": 8,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 640559,
+    "commands": [
+     "LinkPGCN 3",
+     "LinkPGCN 4"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 24,
+    "cell": 2,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 596528,
+    "commands": [
+     "LinkPGN 3 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 24,
+    "cell": 5,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 638539,
+    "commands": [
+     "LinkPGN 6 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 24,
+    "cell": 8,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 643982,
+    "commands": [
+     "LinkPGCN 3",
+     "LinkPGCN 4"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 25,
+    "cell": 2,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 596528,
+    "commands": [
+     "LinkPGN 3 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 25,
+    "cell": 5,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 638539,
+    "commands": [
+     "LinkPGN 6 (button 0)",
+     "LinkPGCN 6"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 25,
+    "cell": 8,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 640979,
+    "commands": [
+     "LinkPGCN 3",
+     "LinkPGCN 4"
+    ]
+   },
+   {
+    "vts": 5,
+    "pgcn": 26,
+    "cell": 2,
+    "buttons": 2,
+    "still": 255,
+    "fosl": 1,
+    "sptm_lo": 596467,
+    "commands": [
+     "LinkPGN 3 (button 0)",
+     "LinkPGCN 6"
+    ]
+   }
+  ],
+  "indefinite_stills_with_buttons": [
+   "5:1",
+   "5:10",
+   "5:11",
+   "5:12",
+   "5:13",
+   "5:14",
+   "5:15",
+   "5:16",
+   "5:17",
+   "5:18",
+   "5:19",
+   "5:20",
+   "5:21",
+   "5:22",
+   "5:23",
+   "5:24",
+   "5:25",
+   "5:26",
+   "5:27",
+   "5:28",
+   "5:29",
+   "5:30",
+   "5:31",
+   "5:32",
+   "5:33",
+   "5:34",
+   "5:35",
+   "5:36",
+   "5:37",
+   "5:38",
+   "5:39",
+   "5:40",
+   "5:41",
+   "5:42",
+   "5:43",
+   "5:44",
+   "5:45",
+   "5:46",
+   "5:47",
+   "5:48",
+   "5:49",
+   "5:50",
+   "5:51",
+   "5:52",
+   "5:53",
+   "5:54",
+   "5:55",
+   "5:56",
+   "5:57",
+   "5:58",
+   "5:59",
+   "5:60",
+   "5:61",
+   "5:62",
+   "5:63",
+   "5:64",
+   "5:65",
+   "5:66",
+   "5:7",
+   "5:8",
+   "5:9",
+   "7:5"
+  ],
+  "todo": [
+   "decide which of title_menus_not_shots / indefinite_stills the autoplayer must answer, and add them to policy",
+   "write a \"start\" macro that gets from the disc menu into play",
+   "confirm on HW (hil_play run --disc ... --scenario ...)"
+  ]
+ }
+}
