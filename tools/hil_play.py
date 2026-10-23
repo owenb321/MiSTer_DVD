@@ -212,7 +212,10 @@ for i, st in enumerate(sc["steps"]):
         while mono() < lim and state["base"] is None:
             r = poll()
             since = [x for x in rows if x["t"] >= t_from]
-            if since and since[-1]["flags"]["menu"] == 0 and since[-1]["flags"]["video_live"] == 1:
+            # "menu_ok": the run may carry the menu flag (a duel entered by a jump reads
+            # menu=1, still=1 throughout on these builds); otherwise a menu is not play
+            if since and since[-1]["flags"]["video_live"] == 1 and (
+                    st.get("menu_ok") or since[-1]["flags"]["menu"] == 0):
                 state["base"] = min(since, key=lambda x: x["_c"])
             time.sleep(0.004)
         out({"step": i, "base": state["base"] and state["base"]["t"]})
