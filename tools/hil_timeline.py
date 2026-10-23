@@ -136,7 +136,7 @@ def zero_runs(a, t0, min_s=0.05):
 def cmd_align(a):
     timing = DT.dump(a.iso, a.vts, a.pgcn, set(a.cells))
     cells = [c for c in timing['cells'] if not a.cells or c['cell'] in a.cells]
-    ref_pts, ref_cell, ref_t, ref_audio = [], [], [], {}
+    ref_pts, ref_cell, ref_t, ref_audio, ref_range = [], [], [], {}, {}
     for c in cells:
         data = cut_cell(a.iso, c['lba_first'], c['lba_last'])
         pts, th = thumbs('-', data)
@@ -144,6 +144,7 @@ def cmd_align(a):
         ref_cell.append(np.full(len(pts), c['cell']))
         ref_t.append(th)
         au, au0 = audio('-', data)
+        ref_range[c['cell']] = [round(float(pts.min()), 4), round(float(pts.max()), 4), len(pts)]
         ref_audio[c['cell']] = {'t0': au0, 'env_db': [round(float(x), 1) for x in envelope(au)]}
         print('ref cell %d: %d pictures, pts %.3f..%.3f (authored first_ptm %.3f)'
               % (c['cell'], len(pts), pts.min(), pts.max(), (c['first_ptm'] or 0) / 9e4),
@@ -198,7 +199,7 @@ def cmd_align(a):
     env = envelope(au)
     out = {'capture': os.path.basename(a.capture), 'timing': timing, 'box': box,
            'thumb': [TW, TH], 'min_score': a.min_score, 'frames': frames,
-           'ref_audio': ref_audio,
+           'ref_audio': ref_audio, 'ref_range': ref_range,
            'audio': {'t0': au_t0, 'bin_s': ENV_BIN / 48000,
                      'env_db': [round(float(x), 1) for x in env],
                      'zero_runs': zero_runs(au, au_t0)}}
@@ -248,25 +249,29 @@ def pace_steps(frames, min_s=0.1):
     return out
 
 
-def junctions(frames, timing):
+def junctions(frames, ref_range):
     """Each change of cell on screen: the last picture shown of the old cell against its
-    last authored picture, the time with neither on screen, and where the new one began."""
-    cells = {c['cell']: c for c in timing['cells']}
+    last decoded reference picture, the time with neither on screen, and where the new one
+    began against its first. Pictures a cell authored but the screen never showed are
+    old_missing_s / new_missing_s."""
+    rr = {int(k): v for k, v in ref_range.items()}
     out, last = [], None
     for r in frames:
         if r.get('cell') is None:
             continue
         if last and r['cell'] != last['cell']:
+            ro, rn = rr[last['cell']], rr[r['cell']]
             out.append({'t_old': last['t'], 'old': last['cell'], 'old_pts': last['pts'],
-                        'old_end_ptm': (cells[last['cell']].get('end_ptm') or 0) / 9e4,
+                        'old_last_ref': ro[1], 'old_missing_s': round(ro[1] - last['pts'], 3),
                         't_new': r['t'], 'new': r['cell'], 'new_pts': r['pts'],
-                        'new_first_ptm': (cells[r['cell']].get('first_ptm') or 0) / 9e4,
+                        'new_first_ref': rn[0], 'new_missing_s': round(r['pts'] - rn[0], 3),
                         'gap_s': round(r['t'] - last['t'], 3)})
         last = r
     return out
 
 
 LOUD_DB, QUIET_DB = -35.0, -60.0
+T0 = 0.0
 
 
 def audio_vs_ref(d, max_off=0.3):
@@ -325,28 +330,109 @@ def audio_vs_ref(d, max_off=0.3):
                         for m in missing if (m['i1'] - m['i0'] + 1) * bs >= 0.05]}
 
 
+def capture_latency(frames, agent_jsonl, offset):
+    """The capture chain's delay, measured each run: for picture k after the agent's
+    `base`, the board time its pickup counter reached k (telemetry, 20 ms rows: the
+    midpoint of the row interval) against the capture time the picture with
+    PTS = pts_first + (k-1)/fps first appeared. Only confident matches (margin > 0.02)
+    within +/- 1 s of the board's time are paired, so a restarted PTS elsewhere in the
+    run cannot pair with the wrong picture."""
+    rows, base, sc = [], None, None
+    sp = os.path.join(os.path.dirname(agent_jsonl), 'scenario.json')
+    if os.path.exists(sp):
+        sc = json.load(open(sp))
+    for line in open(agent_jsonl):
+        o = json.loads(line)
+        if 'telem' in o:
+            r = o['telem']
+            rows.append((r['t'], (r['pickups'] + r['drops']) & 0xFFFF))
+        elif 'base' in o and o['base']:
+            base = o['base']
+    if not sc or base is None or not rows:
+        return None
+    fps = 25.0 if sc.get('pal') else 30000 / 1001
+    bc = next((c for t, c in rows if t == base), None)
+    if bc is None:
+        return None
+    first_seen = {}
+    for r in frames:
+        if r.get('cell') is not None and r.get('margin', 0) > 0.02:
+            first_seen.setdefault(round(r['pts'], 2), []).append(r['t'])
+    lat, prev = [], None
+    for t, c in rows:
+        if t < base:
+            continue
+        k = ((c - bc) & 0xFFFF) + 1
+        if prev and k == prev[1] + 1:            # picture k picked up in (prev_t, t]
+            tb = (prev[0] + t) / 2 + offset
+            pts = sc['pts_first'] + (k - 1) / fps
+            cand = [x for x in first_seen.get(round(pts, 2), []) if abs(x - tb) < 1.0]
+            if cand:
+                lat.append(min(cand) - tb)
+        prev = (t, k)
+    if len(lat) < 10:
+        return None
+    q = np.percentile(lat, [25, 50, 75])
+    return {'n': len(lat), 'q25_s': round(float(q[0]), 4), 'median_s': round(float(q[1]), 4),
+            'q75_s': round(float(q[2]), 4)}
+
+
 def cmd_report(a):
     d = json.load(open(a.run))
     fr = d['frames']
-    print('capture %s: %d frames' % (d['capture'], len(fr)))
+    global T0
+    T0 = fr[0]['t']
+    print('capture %s: %d frames; times below are seconds from its first frame' % (d['capture'], len(fr)))
     print('\nsegments (capture time -> cell, PTS):')
     for s in segments(fr):
         if s['t1'] - s['t0'] < a.min_seg and s['key'] in ('none', 'flat'):
             continue
         what = ('cell %s pts %s..%s' % (s['key'], s['pts0'], s['pts1'])
                 if isinstance(s['key'], int) else s['key'])
-        print('  %8.3f..%8.3f  %5.2f s  %s' % (s['t0'], s['t1'], s['t1'] - s['t0'], what))
+        print('  %8.3f..%8.3f  %5.2f s  %s' % (s['t0'] - T0, s['t1'] - T0, s['t1'] - s['t0'], what))
     print('\ncell junctions on screen (old cell\'s last picture -> new cell\'s first):')
-    for j in junctions(fr, d['timing']):
-        print('  t=%8.3f cell %2d pts %7.3f (ends %7.3f) -> %5.3f s -> cell %2d pts %7.3f (starts %7.3f)'
-              % (j['t_old'], j['old'], j['old_pts'], j['old_end_ptm'], j['gap_s'],
-                 j['new'], j['new_pts'], j['new_first_ptm']))
+    for j in junctions(fr, d['ref_range']):
+        print('  t=%8.3f cell %2d last %7.3f (ref %7.3f, %.3f s unshown) -> %5.3f s -> '
+              'cell %2d first %7.3f (ref %7.3f, %.3f s unshown)'
+              % (j['t_old'] - T0, j['old'], j['old_pts'], j['old_last_ref'], j['old_missing_s'],
+                 j['gap_s'], j['new'], j['new_pts'], j['new_first_ref'], j['new_missing_s']))
     ps = pace_steps(fr)
     print('\ndisplay pace steps > 0.1 s within a cell (stall = held, skip = never shown): %d'
           % len(ps))
     for s in ps:
         print('  t=%8.3f cell %d pts %.3f -> %.3f  %s %+.3f s' % (
-            s['t'], s['cell'], s['pts'], s['to_pts'], s['kind'], s['step_s']))
+            s['t'] - T0, s['cell'], s['pts'], s['to_pts'], s['kind'], s['step_s']))
+    if a.keys and a.clock:
+        off = json.load(open(a.clock))
+        L = capture_latency(fr, a.keys, off['board_mono_to_host_wall'])
+        if L is None:
+            print('\ncapture latency: not measurable (no picture count overlaps the capture)')
+            L = {'median_s': 0.0}
+        else:
+            print('\ncapture latency (picture picked up on the board -> first captured): '
+                  'median %.3f s, IQR %.3f..%.3f over %d pictures'
+                  % (L['median_s'], L['q25_s'], L['q75_s'], L['n']))
+        # L spans the core's pickup -> pins delay AND the card, so removing it gives the
+        # picture the display pipeline had PICKED UP at the press: the core's own notion of
+        # "now", which is what a button's timing is judged against.
+        print('\npresses (clock +/- %.1f ms; picture = the one the core had picked up):'
+              % (off['uncertainty_s'] * 1e3))
+        for line in open(a.keys):
+            o = json.loads(line)
+            if 'key' not in o or 't' not in o:
+                continue
+            tc = o['t'] + off['board_mono_to_host_wall']
+            on = None
+            for r in fr:                # the frame on the wire at tc arrives L later
+                if r['t'] > tc + L['median_s']:
+                    break
+                if r.get('cell') is not None:
+                    on = r
+            print('  t=%8.3f %-8s %-15s picked up: %s' % (
+                tc + L['median_s'] - T0, o['key'],
+                ('at_pts %.3f' % o['at_pts']) if 'at_pts' in o else '',
+                'cell %d pts %.3f' % (on['cell'], on['pts'])
+                if on else 'nothing matched'))
     rep = audio_vs_ref(d)
     print('\naudio: capture vs reference, placed by the video mapping')
     if rep['av_offset_s'] is None:
@@ -356,12 +442,12 @@ def cmd_report(a):
               % (rep['av_offset_s'], rep['corr']))
     for g in rep['missing']:
         print('  t=%8.3f cell %2d pts %7.3f..%7.3f: reference sound (peak %5.1f dB), capture'
-              ' %s for %.3f s' % (g['t'], g['cell'], g['pts0'], g['pts1'], g['ref_peak_db'],
+              ' %s for %.3f s' % (g['t'] - T0, g['cell'], g['pts0'], g['pts1'], g['ref_peak_db'],
                                  'EXACT ZERO' if g['exact_zero'] else 'silent', g['len_s']))
     zr = d['audio']['zero_runs']
     print('\naudio exact-zero runs >= 50 ms: %d' % len(zr))
     for t, n in zr:
-        print('  t=%8.3f  %.3f s' % (t, n))
+        print('  t=%8.3f  %.3f s' % (t - T0, n))
 
 
 def main():
@@ -380,6 +466,8 @@ def main():
     p = sub.add_parser('report')
     p.add_argument('run')
     p.add_argument('--min-seg', type=float, default=0.10)
+    p.add_argument('--keys', help='hil_play agent.jsonl: place its presses on the capture')
+    p.add_argument('--clock', help='hil_play clock.json (board mono -> host wall)')
     a = ap.parse_args()
     {'align': cmd_align, 'report': cmd_report}[a.cmd](a)
 
