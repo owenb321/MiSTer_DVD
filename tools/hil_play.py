@@ -552,8 +552,36 @@ def _shq(s):
     return "'" + s.replace("'", "'\\''") + "'"
 
 
+def scenario_of(a, sets=None):
+    """The scenario to run: a JSON file, or a profile's named scenario with its image
+    resolved for this rig (tools/hil_disc.py)."""
+    if a.disc:
+        import hil_disc
+        prof = hil_disc.load(a.disc)
+        if not a.scenario:
+            sys.exit('--disc needs --scenario (tools/hil_disc.py list)')
+        sc = hil_disc.expand(prof, a.scenario, sets)
+        if not (a.iso and a.local_iso):
+            host_iso, board_iso = hil_disc.resolve_image(prof, hil_disc.rig(a.rig))
+            a.local_iso = a.local_iso or host_iso
+            sc['iso'] = a.iso or board_iso
+        else:
+            sc['iso'] = a.iso
+        if not sc.get('iso'):
+            sys.exit('no rig path for the image: set share_root in tools/.mister_rigs.json or pass --iso')
+        return sc
+    if not a.scenario:
+        sys.exit('give a scenario file, or --disc NAME --scenario NAME')
+    sc = json.load(open(a.scenario))
+    if sets:
+        sc = sub(sc, sets)
+    if a.iso:
+        sc['iso'] = a.iso
+    return sc
+
+
 def cmd_run(a, sc=None, out_dir=None):
-    sc = sc or json.load(open(a.scenario))
+    sc = sc or scenario_of(a, a._sets)
     sc['_local_iso'] = a.local_iso
     out_dir = out_dir or a.out
     os.makedirs(out_dir, exist_ok=True)
@@ -595,11 +623,18 @@ def cmd_run(a, sc=None, out_dir=None):
             with open(os.path.join(out_dir, 'report.txt'), 'w') as f:
                 f.write(rep)
             print(rep)
+    if sc.get('expect'):
+        import hil_expect
+        r, res = hil_expect.check(out_dir)
+        txt, verdict = hil_expect.render(r, res)
+        with open(os.path.join(out_dir, 'EXPECT.txt'), 'w') as f:
+            f.write(txt + '\n')
+        print(txt, flush=True)
+        a._verdicts.append((out_dir, verdict))
     return events
 
 
 def cmd_sweep(a):
-    base = json.load(open(a.scenario))
     name, _, vals = a.vary.partition('=')
     rbfs = a.rbf or [None]
     for rbf in rbfs:
@@ -607,7 +642,7 @@ def cmd_sweep(a):
             subprocess.run([sys.executable, os.path.join(HERE, 'mister.py'), 'deploy',
                             '--agent', '--rbf', rbf], check=True)
         for v in vals.split(','):
-            sc = sub(json.loads(json.dumps(base)), {name: float(v)})
+            sc = scenario_of(a, dict(a._sets, **{name: float(v)}))
             tag = '%s_%s=%s' % (os.path.basename(rbf or 'current').replace('.rbf', ''), name, v)
             print('== %s' % tag, flush=True)
             cmd_run(a, sc, os.path.join(a.out, tag))
@@ -616,9 +651,15 @@ def cmd_sweep(a):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     sp = ap.add_subparsers(dest='cmd', required=True)
+    sp.add_parser('list', help='disc profiles and their scenarios')
     for n in ('run', 'sweep'):
         p = sp.add_parser(n)
-        p.add_argument('scenario')
+        p.add_argument('scenario_file', nargs='?', help='a scenario JSON (or use --disc/--scenario)')
+        p.add_argument('--disc', help='a profile in tools/hil_discs/')
+        p.add_argument('--scenario', dest='scenario', help='a scenario of that profile')
+        p.add_argument('--rig', help='a rig in tools/.mister_rigs.json (default: its "default")')
+        p.add_argument('--set', action='append', default=[], help='NAME=value for a $NAME')
+        p.add_argument('--iso', help='the image path ON THE RIG (default: resolved)')
         p.add_argument('--out', help='run directory (default tools/streams/hil_runs/<time>: '
                        'gitignored and on disk; a game-length capture is ~3 MB/s, too big '
                        'for a RAM-backed /tmp)')
@@ -630,6 +671,25 @@ def main():
             p.add_argument('--vary', required=True, help='NAME=v1,v2,...')
             p.add_argument('--rbf', action='append', help='repeat to A/B builds')
     a = ap.parse_args()
+    if a.cmd == 'list':
+        import hil_disc
+        sys.argv = ['hil_disc.py', 'list']
+        return hil_disc.main()
+    if a.scenario_file and not a.disc:
+        a.scenario = a.scenario_file
+    a._sets = {}
+    for kv in a.set:
+        k, _, v = kv.partition('=')
+        try:
+            a._sets[k] = float(v)
+        except ValueError:
+            a._sets[k] = v
+    a._verdicts = []
+    if a.disc or a.rig:
+        import hil_disc
+        r = hil_disc.rig(a.rig)
+        if r.get('host'):
+            os.environ['MISTER_HOST'] = r['host']   # every mister.py call follows it
     if not a.out:
         a.out = os.path.join(HERE, 'streams', 'hil_runs', time.strftime('%Y%m%d_%H%M%S'))
     if shutil.which('ffmpeg') is None:
@@ -641,6 +701,11 @@ def main():
         cmd_run(a)
     else:
         cmd_sweep(a)
+    if a._verdicts:
+        print('\n'.join('%-7s %s' % (v, d) for d, v in a._verdicts))
+        rank = {'PASS': 0, 'NODATA': 2, 'FAIL': 1}
+        sys.exit(max(rank[v] for _, v in a._verdicts) if any(v == 'FAIL' for _, v in a._verdicts)
+                 else max(rank[v] for _, v in a._verdicts))
 
 
 if __name__ == '__main__':
