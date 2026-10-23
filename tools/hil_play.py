@@ -204,6 +204,9 @@ for i, st in enumerate(sc["steps"]):
         # (a jump that keeps the VBUF does NOT reset the counters, but live still drops:
         # Mad Dog's intro -> duel)
         need_e, last_live = st.get("live_edges", 0), None
+        # "after_still": count a live edge only once a still has been seen (Mad Dog's
+        # intros all end in a 2 s still; the duel is the first live edge after it)
+        saw_still = not st.get("after_still")
         while mono() < lim and (seen < need or need_e):
             r = poll()
             if r and r["t"] >= t0:
@@ -212,7 +215,9 @@ for i, st in enumerate(sc["steps"]):
                     seen += 1
                     t_from = r["t"]
                     out({"step": i, "reset": seen, "t": r["t"]})
-                if need_e and last_live == 0 and lv == 1 and r["t"] >= after:
+                if r["flags"]["still"] and r["t"] >= after:
+                    saw_still = True
+                if need_e and saw_still and last_live == 0 and lv == 1 and r["t"] >= after:
                     need_e -= 1
                     t_from = r["t"]
                     out({"step": i, "live_edge": True, "t": r["t"], "_c": r["_c"]})
