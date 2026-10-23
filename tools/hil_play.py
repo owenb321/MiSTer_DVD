@@ -271,8 +271,14 @@ for i, st in enumerate(sc["steps"]):
                 if ev.get("ev") != "HLI_ARM" or not ev.get("btn_ns"):
                     continue
                 key = "%s:%s" % (nav.get("vts"), nav.get("pgcn"))
-                if key in pl.get("also_select", []):
-                    pending.append((mono() + 1.0, "select", {"why": key}))
+                # "VTS:PGCN" = press Select there; "VTS:PGCN=right,right" = taps first
+                # (a route menu: pick a route other than the preselected one)
+                hit = [a for a in pl.get("also_select", []) if a.split("=")[0] == key]
+                if hit:
+                    taps = [k for k in hit[0].partition("=")[2].split(",") if k]
+                    for n_, k in enumerate(taps):
+                        pending.append((mono() + 0.6 + 0.1 * n_, k, {"why": key}))
+                    pending.append((mono() + 1.0 + 0.1 * len(taps), "select", {"why": key}))
                     continue
                 ws = [w for w in tbl.get((nav.get("vts"), ev["sptm_lo"]), [])
                       if w["pgcn"] == nav.get("pgcn")] or tbl.get((nav.get("vts"), ev["sptm_lo"]), [])
@@ -303,7 +309,7 @@ for i, st in enumerate(sc["steps"]):
             for p_ in [p_ for p_ in pending if mono() >= p_[0]]:
                 pending.remove(p_)
                 t = tap(KEYS[p_[1]], 30)
-                out(dict(p_[2], autoplay="select", t=t))
+                out(dict(p_[2], autoplay=p_[1], t=t))
             try:
                 if r and eval(pl["until"], {}, env(r)):
                     met = True
