@@ -176,6 +176,18 @@ confusing timeout.
   - This is the shape of the saloon's missing gunshot, and is handed to the #176 owner for
     a reader fix.
 
+- **The saloon's missing gunshot (VTS 3 cells 4–7) is a #176 regression with the same
+  cause.** The saloon was autoplayed via route 2 and every shot hit.
+  - hold7: cells 4 and 5 stay on screen ~0.9–1 s longer than authored, and the first
+    ~1.1 s of cells 5 and 6 (the gunshot) comes out silent. The FIFO shows a `dur_hold`
+    timed still of exactly 2.000 s at each short-cell join, and the audio ring empty at
+    the next cell's start.
+  - `main`: no still at any join (the reader runs each command at its own end), cell
+    lengths as authored, sound intact.
+  - Under the #176 hold the reader reaches each short cell's end later, so `cell_secs`
+    falls short and the whole-second residual parks it. The fix (drain first, then serve
+    only unspent authored time) belongs to the #176 owner.
+
 Harness lessons from the same day:
 - **The Main's fast-telemetry log fills the board's `/tmp`.** It appends every 20 ms row
   to `/tmp/dvd_telem_fast.jsonl` on a 246 MB tmpfs. A day of runs filled it, after which
