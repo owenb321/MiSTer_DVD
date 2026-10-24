@@ -518,6 +518,9 @@ class Player:
             st = self.follow(v)
         if pending is not None:
             rows.append((pending, self.state(0)))
+        # how play ended: 'play' = parked with the script used up (or a cap), 'stop' = the
+        # disc stopped playing (tools/move_key.py: a dead end is not progress)
+        self.ended = st
         return rows
 
 

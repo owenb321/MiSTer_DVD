@@ -143,6 +143,9 @@ def poll():
                     nav.update(vts=ev["vts"], pgcn=ev["pgcn"], menu=ev["menu"])
                 elif e == "CELL":
                     nav["rcell"] = ev["cell"]       # the READER's 0-based cell, ~1 s ahead
+                    # when the reader entered each cell: tells apart windows whose hli_s_ptm
+                    # low bits collide (resp_pick)
+                    nav.setdefault("cell_t", {})[(ev.get("vts"), ev["cell"])] = ev.get("t_ev")
                 elif e == "ARMED":
                     nav["armed"] = ev["armed"]
                 nav_new.append(ev)
@@ -151,6 +154,35 @@ def poll():
     except Exception as e:
         out({"warn": "navtrace: %s" % e})
     return rows[-1] if rows else None
+
+
+def resp_pick(cands, ev):
+    """One response for an arm. hli_s_ptm's low bits can COLLIDE between windows of one
+    PGC whose cells restart their PTS (Dragon's Lair II: cells 22 and 27, different
+    answers; the agent pressed 22's at 27 and died every other pass). The reader's CELL
+    events say when each cell was read, ~a second ahead of the picture, so a window arms
+    about lag + open_s after its cell was read: take the candidate that fits best, and
+    learn the lag from unambiguous matches."""
+    if len(cands) <= 1:
+        r_ = cands[0] if cands else None
+        if r_ is not None:
+            t_read = nav.get("cell_t", {}).get((r_["vts"], int(r_["at"].split("/")[3]) - 1))
+            if t_read is not None and r_.get("open_s") is not None:
+                lag = ev["t_ev"] - t_read - r_["open_s"]
+                if 0 < lag < 3:
+                    nav["lag"] = 0.8 * nav.get("lag", lag) + 0.2 * lag
+        return r_
+    lag = nav.get("lag", 1.0)
+    best, bd = None, None
+    for r_ in cands:
+        t_read = nav.get("cell_t", {}).get((r_["vts"], int(r_["at"].split("/")[3]) - 1))
+        if t_read is None or t_read > ev["t_ev"]:
+            continue
+        d = abs(ev["t_ev"] - t_read - (r_.get("open_s") or 0) - lag)
+        if bd is None or d < bd:
+            best, bd = r_, d
+    out({"resp_pick": [r_["at"] for r_ in cands], "chose": best and best["at"], "lag": round(lag, 3)})
+    return best
 
 
 def env(r):
@@ -292,9 +324,10 @@ for i, st in enumerate(sc["steps"]):
                 # draws make the order unknowable. Matched on every arm, in any order,
                 # never consumed; each answer is logged so hil_expect can check the disc
                 # took the RIGHT branch afterwards.
-                resp = next((r_ for r_ in pl.get("responses") or []
-                             if ev["sptm_lo"] == r_["sptm_lo"] and nav.get("vts") == r_["vts"]
-                             and nav.get("pgcn") == r_["pgcn"]), None)
+                cands = [r_ for r_ in pl.get("responses") or []
+                         if ev["sptm_lo"] == r_["sptm_lo"] and nav.get("vts") == r_["vts"]
+                         and nav.get("pgcn") == r_["pgcn"]]
+                resp = resp_pick(cands, ev)
                 if resp is not None:
                     start = resp["fosl"] or 1
                     taps = resp["paths"].get(str(start)) or []
@@ -303,8 +336,13 @@ for i, st in enumerate(sc["steps"]):
                                         {"respond": resp["at"]}))
                     # a timed move (tools/move_key.py): an auto-action target fires on the
                     # arrow alone, and a Select after it would land on whatever the jump
-                    # brought up; a "wait" key presses nothing
-                    if not resp.get("no_select"):
+                    # brought up; a "wait" key presses nothing. A target that is ALREADY
+                    # highlighted (no arrow to tap) still needs Select: moving onto an
+                    # auto-action button fires it, being on it does not (Dragon's Lair II's
+                    # sword is the centre button, the forced select: the agent pressed
+                    # nothing and died there five times)
+                    if not resp.get("no_select") or (not taps and resp.get("answer") != "idle"
+                                                     and resp.get("press") != "idle"):
                         pending.append((mono() + pl.get("route_delay_s", 0.3) + 0.06 * len(taps) + 0.1,
                                         "select", {"respond": resp["at"]}))
                     out({"respond": resp["at"], "button": resp.get("press", resp["answer"]),
@@ -576,6 +614,12 @@ def run_agent(sc, out_dir):
                          '  tools/move_key.py <iso> --json %s' % kf)
             st['play']['responses'] = move_key.responses(sc.get('_local_iso'), kf,
                                                          st['play'].get('pick', 'right'))
+            # windows the profile says not to answer (a tutorial the route skips past:
+            # Time Traveler's practice moves, where nothing kills and the learner's
+            # 'death' is the call that starts the game)
+            skip = tuple(st['play'].get('skip_keys') or ())
+            if skip:
+                st['play']['responses'] = [r for r in st['play']['responses'] if not r['at'].startswith(skip)]
             print('  responses: %d VM-judged timed moves' % len(st['play']['responses']), flush=True)
         if 'play' in st and st['play'].get('responses_from') == 'quiz_key' and not st['play'].get('responses'):
             import quiz_key

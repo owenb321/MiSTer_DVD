@@ -405,10 +405,20 @@ def a_moves_right(r, x):
         if not bad:
             return NODATA, '%d moves, none recognised' % len(moves)
         return PASS, '%d moves read wrong%s' % (len(bad), (', %d unrecognised' % unk) if unk else '')
+    # play that keeps coming back to one window is not progress, whatever each landing
+    # reads (Dragon's Lair II: a treasure taken 98 times read '8 right, 98 unrecognised')
+    run, worst = 1, (1, None)
+    for x, y in zip(moves, moves[1:]):
+        run = run + 1 if y['respond'] == x['respond'] else 1
+        worst = max(worst, (run, y['respond']), key=lambda t: t[0])
+    if worst[0] >= 4:
+        bad.append('%s answered %d times running: play is not getting past it' % (worst[1], worst[0]))
     if bad:
         return FAIL, '%d right, %d wrong: %s' % (ok, len(bad), '; '.join(bad[:3]))
     if not ok:
         return NODATA, '%d moves, no landing recognised' % len(moves)
+    if unk > ok:
+        return NODATA, '%d right but %d unrecognised: the check cannot see most moves' % (ok, unk)
     return PASS, '%d moves landed right%s; %d distinct' % (
         ok, (', %d unrecognised' % unk) if unk else '', len({a['respond'] for a in moves}))
 

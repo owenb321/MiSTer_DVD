@@ -38,6 +38,16 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
     The rig check is `moves_right`, by death cells: 110/110 right in 400 s; the control arm
     reads wrong 18/18.
+  - **Two more reaction discs (2026-10-24):**
+    - Dragon's Lair II: 820/820 windows keyed; 206/206 rig moves right in its "Regular
+      Moves" (< 2 s) mode.
+    - Time Traveler: 281/668 keyed. Its rig moves all die because the core runs each
+      VTS 2 cell command 0.18 s BEFORE the window arms: the reader's cell end, ~1.2 s
+      ahead of display on that low-bitrate set. Pre-existing on `main`; reported to the
+      #176 session.
+    - Rules added: per-set and disc-wide death commands, immediate retry, play-stops,
+      treasure detours, a tutorial `skip_keys`, already-highlighted Select, and colliding
+      `hli_s_ptm` resolved by read time.
   - **Lesson, twice:** a path from a cold `JumpTT` names places a mid-game rig never visits.
     Judge on the rig by something local: a score register, or a death clip in the same PGC.
   - **Gaps:**

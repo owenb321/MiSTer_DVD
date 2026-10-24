@@ -18,7 +18,10 @@ wrong option's death clip, kept if it recurs) and every cell running it is a dea
 Pass 2 walks each PGC in cell order and enters each window THROUGH the right press of the
 window that leads into it (windows chain through registers: Dragon's Lair stores a value
 unique to each window in g[0], alternately high and low, and the next cell's command
-tests it), and calls an option WRONG if its path reaches a death cell, RIGHT otherwise. ("Comes back to this cell" is not enough: from a cold start the death
+tests it), and calls an option WRONG if its path reaches a death cell, or if its first
+cell after the window is this PGC's own at or before the window (an immediate retry: a
+cell command that replays the scene without calling a handler, as on Time Traveler),
+RIGHT otherwise. ("Comes back to this cell" is not enough: from a cold start the death
 handler restarts a DIFFERENT title's scene.)
 
 A window is reached by x-tokens: JumpTT (the title that lands in its VTS) and LinkCN
@@ -34,6 +37,10 @@ import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
+
+
+STOP = (0, 0, 0)          # a path's end marker: play stopped
+BACK = (0, 0, 1)          # play came back into the window: a detour (treasure, replay)
 
 
 def _lpgcn(n):
@@ -52,7 +59,13 @@ def _tail(iso, base, script, n_tail, no_park=()):
     Q = N.Player(iso)
     Q.no_park = set(no_park)
     Q.run(' '.join(base), park_on_buttons=True)
-    return [(t[1], t[2], t[3] + 1) for t in P.trace[len(Q.trace):][:n_tail]], Q
+    path = [(t[1], t[2], t[3] + 1) for t in P.trace[len(Q.trace):][:n_tail]]
+    # play STOPPED (not parked at a later window): a dead end, marked so the verdict sees
+    # it (Time Traveler: doing nothing reaches a death dispatcher PGC that, with no death
+    # code set, falls through to a cell that ends play)
+    if getattr(P, 'ended', 'play') == 'stop' and len(path) < n_tail:
+        path.append(STOP)
+    return path, Q
 
 
 def _options(span, buttons, idle_cells=12):
@@ -116,8 +129,18 @@ def judge_move(iso, ttn, pt, buttons, n_tail=10, idle_cells=12, base=None, no_pa
     for k, scr in opts.items():
         p, Q = _tail(iso, base, scr, n_tail + (len(span) + idle_cells if k == 'idle' else 0),
                      set(no_park) | rest)
-        # the window's own cells say nothing about the outcome
-        paths[k] = [e for e in p if not (e[:2] == (v, pg) and e[2] in span)]
+        # the window's own cells say nothing about the outcome -- while play is still IN
+        # it. Coming back to it later is a detour (BACK): Dragon's Lair II's treasures
+        # play a pickup clip and LinkPTT back to the same window, and taking the treasure
+        # forever looped the rig there 98 times
+        out, left = [], False
+        for e in p:
+            inside = e[:2] == (v, pg) and e[2] in span
+            if inside and not left:
+                continue
+            left = True
+            out.append(BACK if inside else e)
+        paths[k] = out
         landed = landed or (Q.state(0) if Q.pgc is not None else None)
     if not landed or (landed['vts'], landed['pgcn'], landed['cell']) != (v, pg, c0):
         return dict(verdict='unreached', answer=None, right=[], wrong=[], death=None, paths=paths,
@@ -144,28 +167,46 @@ def judge_move(iso, ttn, pt, buttons, n_tail=10, idle_cells=12, base=None, no_pa
     return dict(verdict=verdict, answer=ans, right=right, wrong=wrong, death=list(death), paths=paths)
 
 
-def _verdict(paths, death_set):
+def _retry(p, at):
+    """The option's first cell after the window is this PGC's own, at or before the window:
+    the cell command sent play straight back (Time Traveler VTS 7: 'if (g[0] < g[1])
+    LinkPTT 1' replays the scene; no death handler is called)."""
+    if not at or not p:
+        return False
+    _, v, pg, c0 = at.split('/')
+    return tuple(p[0][:2]) == (int(v), int(pg)) and p[0][2] <= int(c0)
+
+
+def _verdict(paths, death_set, at=None):
     order = lambda k: (k != 'idle', int(k) if k != 'idle' else 0)
-    wrong = sorted((k for k, p in paths.items() if any(tuple(e) in death_set for e in p)), key=order)
+    wrong = sorted((k for k, p in paths.items()
+                    if any(tuple(e) in death_set or tuple(e) == STOP for e in p) or _retry(p, at)),
+                   key=order)
     right = sorted((k for k in paths if k not in wrong), key=order)
     if not wrong:
         return 'unjudged', None, right, wrong
     if not right:
         return 'all-wrong', None, right, wrong
+    # a right option that comes back into the window (a treasure, a replay) is not wrong,
+    # but the move that goes ON is the key; a detour only if nothing else survives
+    ahead = [k for k in right if BACK not in [tuple(e) for e in paths[k]]] or right
     if 'idle' in wrong:
-        return 'move', int(right[0]), right, wrong
+        return 'move', int(next(k for k in ahead if k != 'idle')) if any(k != 'idle' for k in ahead) else int(right[0]), right, wrong
     return 'wait', 'idle', right, wrong
 
 
 def death_commands(iso, res, min_share=0.1):
-    """The disc's DEATH, as a command: for every window judged on its own, the command of
-    the first cell each wrong option reaches that no right option visits (its death
-    clip), kept if it recurs. Dragon's Lair 20th: 'CallSS VMGM (pgc 2, rsm_cell 1)'.
+    """The disc's DEATH, as commands PER TITLE SET: for every window judged on its own,
+    the command of the first cell each wrong option reaches that no right option visits
+    (its death clip), kept if it recurs within that title set. Dragon's Lair 20th:
+    'CallSS VMGM (pgc 2, rsm_cell 1)' everywhere. Time Traveler has a handler per set
+    (pgc 5 in VTS 1, pgc 9 in VTS 6, ...), so a disc-wide share drowned all but one.
     A command, not a place: what the handler does next depends on the game's state (from
-    a cold start it restarts title 2 at cell 72; mid-game it resumes and the game moves on
-    to another scene), so 'reaches cell 72' was a cold-start artefact."""
+    a cold start Dragon's Lair restarts title 2 at cell 72; mid-game it resumes and the
+    game moves on), so 'reaches cell 72' was a cold-start artefact.
+    -> {vts: {command, ...}}"""
     import disc_timing as DT
-    cmds, c = {}, collections.Counter()
+    cmds, c = {}, collections.defaultdict(collections.Counter)
     def cmd(e):
         k = (e[0], e[1])
         if k not in cmds:
@@ -174,22 +215,44 @@ def death_commands(iso, res, min_share=0.1):
             except Exception:
                 cmds[k] = {}
         return cmds[k].get(e[2])
+    good = collections.Counter()
     for r in res:
         if r.get('verdict') != 'move':
             continue
         rc = {tuple(e) for o in r['right'] for e in r['paths'].get(o, [])}
+        # the handlers RIGHT options pass through (scene complete): never a death
+        for o in r['right']:
+            for e in r['paths'].get(o, []):
+                e = tuple(e)
+                if e[0] and cmd(e) and not sig(cmd(e)).startswith('if '):
+                    good[sig(cmd(e))] += 1
         for o in r['wrong']:
-            e = next((tuple(e) for e in r['paths'].get(o, []) if tuple(e) not in rc), None)
-            if e and cmd(e):
-                c[sig(cmd(e))] += 1
-    n = sum(c.values())
-    return {k for k, m in c.items() if m >= max(2, min_share * n)}
+            e = next((tuple(e) for e in r['paths'].get(o, []) if tuple(e) not in rc and tuple(e) != STOP), None)
+            # only an UNCONDITIONAL command is a handler call: a conditional one is the
+            # window's own test (Time Traveler VTS 15 learned 'if (g[0] > g[1]) LinkPTT 2',
+            # which every window cell of that scene runs)
+            if e and e[0] and cmd(e) and not sig(cmd(e)).startswith('if '):
+                c[e[0]][sig(cmd(e))] += 1
+    out = {}
+    for v, cv in c.items():
+        n = sum(cv.values())
+        # a handler right moves also pass through is the game going on, not a death:
+        # Dragon's Lair 20th VTS 9's windows all shared the scene-complete call (pgc 3),
+        # which per-set learning took for its death
+        keep = {k for k, m in cv.items() if m >= max(2, min_share * n) and m > good[k]}
+        if keep:
+            out[v] = keep
+    return out
 
 
 def death_cells(iso, commands):
-    """Every title-domain cell whose command is a death command."""
+    """Every title-domain cell whose command is a death command: its own title set's, and
+    every other set's too -- the handlers live in the VMGM, so they are the disc's
+    (Dragon's Lair II VTS 7 and 8: windows of 'do nothing' plus one press learn nothing on
+    their own, and their death clips call the same VMGM pgc 4 as VTS 1's)."""
     import disc_timing as DT
     import nav_extract as ne
+    every = set().union(*commands.values()) if commands else set()
     out = set()
     with open(iso, 'rb') as f:
         for v in range(1, 100):
@@ -201,9 +264,10 @@ def death_cells(iso, commands):
                 _, _, npgc = DT.title_pgc_addr(f, ifo, 1)
             except SystemExit:
                 continue
+            mine = commands.get(v, set()) | every
             for pg in range(1, npgc + 1):
                 for x in DT.dump(iso, v, pg, {0})['cells']:
-                    if x['cmd'] and sig(x['cmd']) in commands:
+                    if x['cmd'] and sig(x['cmd']) in mine:
                         out.add((v, pg, x['cell']))
     return out
 
@@ -218,7 +282,7 @@ def rejudge(res, deaths):
         if r['verdict'] in ('unreached',) or r['verdict'].startswith('error') or not r.get('paths'):
             continue
         paths = {k: [tuple(e) for e in p] for k, p in r['paths'].items()}
-        r['verdict'], r['answer'], r['right'], r['wrong'] = _verdict(paths, deaths)
+        r['verdict'], r['answer'], r['right'], r['wrong'] = _verdict(paths, deaths, r['at'])
     return res
 
 
@@ -256,7 +320,7 @@ def _chain_job(arg):
                 p = dict(p, chain_error=str(e))
         if p.get('paths') and p['verdict'] != 'unreached':
             paths = {k: [tuple(e) for e in q] for k, q in p['paths'].items()}
-            p['verdict'], p['answer'], p['right'], p['wrong'] = _verdict(paths, deaths)
+            p['verdict'], p['answer'], p['right'], p['wrong'] = _verdict(paths, deaths, p['at'])
             p['death_cells'] = sorted(e[2] for e in deaths if e[:2] == (int(p['at'].split('/')[1]), int(p['at'].split('/')[2])))
         if p['verdict'] in ('move', 'wait'):
             _, v, pg, _ = p['at'].split('/')
@@ -310,7 +374,7 @@ def scan(iso, vts_only=None, limit=None, jobs=6):
         res = list(ex.map(_job, todo))
         cmds = death_commands(iso, res)
         deaths = death_cells(iso, cmds)
-        print('death commands %s: %d cells' % (sorted(cmds), len(deaths)), flush=True)
+        print('death commands %s: %d cells' % ({v: sorted(k) for v, k in sorted(cmds.items())}, len(deaths)), flush=True)
         res = rejudge(res, deaths)
         pgcs = collections.defaultdict(list)
         for r in res:

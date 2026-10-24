@@ -1,0 +1,84 @@
+{
+ "name": "dragons_lair_2",
+ "title": "Dragon's Lair II: Time Warp (Digital Leisure, DVD)",
+ "image": {
+  "fingerprint": "9790289e27de7b8e8a1b1c4540a4e51ff11486c3",
+  "name_hints": [
+   "dvdi/Dragon's Lair II_Time Warp.iso"
+  ]
+ },
+ "pal": false,
+ "policy": {
+  "also_select": {},
+  "routes": {}
+ },
+ "macros": {},
+ "notes": [
+  {
+   "text": "Power-on: title menu Play = b1; then 'Regular Moves' (b1) vs 'Slow Moves' (b2); then a black screen whose two hidden buttons both go on into the game (VTS 1 PGC 6). Route [1, 1, 1].",
+   "why": "The disc warns that some players cannot handle moves closer than 2 s and offers Slow Moves; Regular Moves is the timing stress test, so the scenarios play it."
+  }
+ ],
+ "scenarios": {
+  "play": {
+   "description": "Start a game and make every keyed move as its window arms: every move must land on a right option's next cell, with no death clip before the next move.",
+   "opts": {
+    "Debug Overlay": "On"
+   },
+   "capture_s": 420,
+   "steps": [
+    {
+     "play": {
+      "route_script": [
+       1,
+       1,
+       1
+      ],
+      "until": "False",
+      "timeout": 400,
+      "policy": [],
+      "responses_from": "move_vm",
+      "route_delay_s": 0.1,
+      "hold_ms": 30
+     }
+    }
+   ],
+   "expect": [
+    {
+     "type": "moves_right"
+    }
+   ]
+  },
+  "play_wrong": {
+   "description": "The control arm of 'play': the same run pressing a WRONG option at every keyed move (move_key pick='wrong'). moves_right must FAIL here, or it cannot tell a death from a survival.",
+   "opts": {
+    "Debug Overlay": "On"
+   },
+   "capture_s": 240,
+   "steps": [
+    {
+     "play": {
+      "route_script": [
+       1,
+       1,
+       1
+      ],
+      "until": "False",
+      "timeout": 220,
+      "policy": [],
+      "responses_from": "move_vm",
+      "pick": "wrong",
+      "route_delay_s": 0.1,
+      "hold_ms": 30
+     }
+    }
+   ],
+   "expect": [
+    {
+     "type": "moves_right",
+     "want": "wrong"
+    }
+   ]
+  }
+ }
+}

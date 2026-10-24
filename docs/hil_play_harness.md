@@ -493,6 +493,85 @@ every button. Five things had to be learned, each from a wrong key:
 5. **Entry tries the disc's own route** (`entry_for`): `JumpTT` + `LinkPGCN` + `LinkCN`,
    else `JumpVTS_PTT t:<chapter>`.
 
+Two more discs (2026-10-24) each added rules, and none changed a key already proven on the
+rig:
+6. **The death is learned per title set, and applied disc-wide.**
+   - Time Traveler has a handler per set (pgc 5, pgc 9, …).
+   - The handlers live in the VMGM, so a set whose windows teach nothing on their own
+     inherits the other sets' commands. Dragon's Lair II VTS 7/8 have only "do nothing"
+     plus one press per window.
+   - Two filters:
+     - only an **unconditional** command is a handler: Time Traveler VTS 15 learned a
+       window's own `if (g[0] > g[1]) LinkPTT 2`;
+     - a command that right moves also pass through is not a death: Dragon's Lair 20th
+       VTS 9 learned the scene-complete call, `pgc 3`.
+7. **An immediate retry is wrong.** The option's first cell after the window is in this PGC,
+   at or before the window: the cell command replayed the scene without calling any handler
+   (Time Traveler VTS 7, `LinkPTT 1`).
+8. **Play that stops is a dead end.**
+   - `nav_offline.Player.ended` reports it.
+   - Time Traveler's death dispatcher PGC jumps to a death clip by a code in g[3]. With no
+     code it falls through to a cell that ends play.
+9. **Coming back into the window is a detour, not progress.**
+   - Dragon's Lair II's treasures play a pickup clip and `LinkPTT` back to the same window.
+   - The key had picked the treasure, and the rig took it 98 times running.
+   - A re-entry is marked `BACK`, and the key prefers a right option without it.
+   - `moves_right` now FAILs a window answered 4+ times running, and reads NODATA when
+     unrecognised landings outnumber the right ones.
+
+10. **A tutorial breaks the premise.**
+    - Time Traveler opens on an in-game PLAY/LEARN signpost. Doing nothing plays practice
+      moves whose wrong answers play a clip and carry on, and every path ends at the call
+      that starts the game (`VMGM pgc 4`).
+    - Learning took that call for VTS 1's death and keyed LEARN, and the rig looped on the
+      sign.
+    - The profile routes past it (PLAY) and lists the tutorial's PGC under the play step's
+      `skip_keys`, which the agent then never answers.
+    - Expect any disc whose wrong moves do not kill to need the same treatment.
+
+11. **Windows can share `hli_s_ptm` low bits.** Cells that restart their PTS give
+    different windows of one PGC the same arm signature: Dragon's Lair II has 21 such
+    groups, 18 of them with different answers. The agent pressed cell 22's answer at cell
+    27 and died every other pass.
+    - `resp_pick` takes the candidate whose read time fits best: a window arms
+      `lag + open_s` after the reader entered its cell (CELL events).
+    - The lag is learned from unambiguous matches during the run: about 0.1 s here.
+    - Replayed offline over the failing run, it chose correctly every time. On the rig it
+      resolved 21 collisions with no death.
+
+The agent also needed one fix: **an auto-action button that is already highlighted needs
+Select.** Moving onto an auto-action button fires it; being on it does not. Dragon's Lair
+II's sword is the centre button, which is also the forced select, so the agent had pressed
+nothing.
+
+**Rig results (`dev-cellcmdhold12`):**
+
+| Disc | Right arm | Control arm |
+|---|---|---|
+| Dragon's Lair 20th | 110/110 moves right | 18/18 read wrong |
+| Dragon's Lair II ("Regular Moves") | 206/206 right, 206 distinct windows | 5/5 read wrong |
+| Time Traveler | 0/5: **a core finding**, below | 5/5 read wrong |
+
+**Core finding: Time Traveler's cell commands run before their windows open.**
+- In VTS 2, every window opens late in a 3–5 s cell (TT/2/1/3: 3.34–4.30 s of 4.33 s).
+- The cell's death test (`if (g[0] < g[1]) LinkPTT 1`) runs **0.18 s before the window
+  arms**: 5/5 windows on `dev-cellcmdhold12`, identical on `main`+FIFO
+  (`DVD_playharness`).
+- So the test judges g[0] before any press is possible, and the right press is too late
+  (FIFO: `CELL_CMD` at arm−0.21, `BTN_ACT 1` + g[0] = 1001 at +0.20, death link at +1.0).
+- Dragon's Lair II runs it at arm+0.9 s, at the window's close, which is correct.
+- Reading: the command runs at the READER's cell end. Time Traveler's low-bitrate VTS 2
+  reads about 1.2 s ahead of the display (Dragon's Lair about 0.1 s). No window has armed
+  by then, so nothing holds it.
+- A set-top player runs it after the cell's last displayed picture. Pre-existing, not a #176
+  regression. Reported to the #176 owner.
+
+| Disc | Windows | Keyed | Notes |
+|---|---|---|---|
+| Dragon's Lair 20th | 400 | 238 | 143 unjudged (watch-only titles, scene ends), 18 behind a dispatcher |
+| Dragon's Lair II: Time Warp | 820 | 820 | its own "Regular Moves" (< 2 s apart) mode is the one played |
+| Time Traveler | 668 | 281 | 278 unjudged, mostly "press to skip" over scene intros; 98 in VTS 8 unreached |
+
 Result: 233 keyed moves. The rest:
 - 148 unjudged, mostly the watch-only titles (13, 14, 16, 22), whose single button exits,
   plus scene ends;
