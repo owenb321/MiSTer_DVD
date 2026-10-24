@@ -5424,7 +5424,10 @@ verdict's advance and `vmw_last`, and leaving the block clears the angle state a
 cell-finished path does. Gate: `iso_reader_cmdhold_tb` arm I (a 2-angle block with
 buttons up: held to the drain, then angle 1 → the common cell, never angle 2; the bench
 now wires `dvd_vm.pre_done` as emu does, which an angle block needs to resolve);
-mutations R15 (angle blocks excluded) and R16 (the verdict plays the sibling).
+mutations R15 (angle blocks excluded) and R16 (the verdict plays the sibling). ✅ HIL on
+`dev-cellcmdhold13`: Time Traveler's verdicts land after the press (5/5 correct moves pass,
+the wrong-move control fails 5/5), play continues past each block, and Castle in the Sky's
+angle-block ends play without a hitch.
 
 **Known limits.**
 

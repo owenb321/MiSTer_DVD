@@ -178,9 +178,13 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     before its window armed, `main` too). The hold now applies in angle blocks, and a
     continue verdict inside one advances past the block instead of into the sibling angle
     (pre-existing). `docs/dvd_nav.md` "A fifth"; bench arm I, R15/R16.
-  - **Next:** the harness on `dev-cellcmdhold13` (Time Traveler's windows; Mad Dog and
-    Dragon's Lair II as controls; an angle-block film such as Grave of the Fireflies for
-    seamless angle playback), then the maintainer's play-test,
+  - **HIL on `dev-cellcmdhold13` (2026-10-24): passes.** Time Traveler: the verdict now
+    lands +0.65 to +0.91 s after the window arms (hold12 and `main`: 0.18 s BEFORE it), 5/5
+    correct moves pass (the wrong-move control fails 5/5), and after a hit play continues
+    past the angle block (3 -> 5, 25 -> 27, 29 -> 31, 31 -> 33), never into the sibling
+    angle. Controls: Mad Dog's first shootout and VTS 15 (6/6), Dragon's Lair II 206/206.
+    Castle in the Sky's angle-block ends (played in angle 2): no hitch, as on hold12.
+  - **Next:** the maintainer's play-test of `dev-cellcmdhold13`,
     then the maintainer's play-test, then the PR. Not yet run on HW: a loop disc such as
     Fairytopia, which is unchanged by construction because a fixed command is never held
     (bench P2), and Mad Dog II / Crime Patrol by hand. Design notes: `docs/dvd_nav.md` "A
