@@ -87,8 +87,19 @@ def key_of(st):
                                ','.join('%x' % st['gprm'][i] for i in STATE_REGS))
 
 
-def explore(iso, max_nodes, max_depth, log=sys.stderr):
-    """Breadth-first over button presses. Every node is reached by its shortest script."""
+def _loc(k):
+    return k.split('|')[0]
+
+
+def explore(iso, max_nodes, max_depth, per_loc=None, log=sys.stderr):
+    """Over button presses, novelty first: the next node expanded is the one whose
+    LOCATION has been expanded least, then the shallowest. Plain breadth-first spends the
+    budget on menu combinatorics (an inventory screen whose every toggle flips a state
+    bit) and never gets deep; coverage of places is what a map of an adventure needs.
+    per_loc caps the states kept at one location (None = no cap). A node keeps the
+    shortest script found to it, which under novelty-first is short but not always the
+    shortest."""
+    import heapq
     t0 = time.time()
     # an empty script runs to the first input point and stops there, sitting on it
     P = N.Player(iso)
@@ -97,11 +108,15 @@ def explore(iso, max_nodes, max_depth, log=sys.stderr):
     st0 = P.state(len(btns))
     k0 = key_of(st0)
     nodes, edges = {k0: dict(st0, script=[], depth=0, buttons=btns)}, []
-    q = collections.deque([k0])
+    expanded = collections.Counter()
+    at_loc = collections.Counter({_loc(k0): 1})
+    q = [(0, 0, 0, k0)]
+    seq = 0
     runs = 0
     while q and len(nodes) < max_nodes:
-        k = q.popleft()
+        _, _, _, k = heapq.heappop(q)
         n = nodes[k]
+        expanded[_loc(k)] += 1
         if n['depth'] >= max_depth:
             continue
         for b in n['buttons']:
@@ -118,17 +133,22 @@ def explore(iso, max_nodes, max_depth, log=sys.stderr):
             nk = key_of(st)
             edges.append({'from': k, 'button': b['n'], 'to': nk})
             if nk not in nodes:
+                if per_loc and at_loc[_loc(nk)] >= per_loc:
+                    edges[-1]['pruned'] = True     # a known place in yet another state
+                    continue
+                at_loc[_loc(nk)] += 1
                 btns = _buttons(P, None)
                 # a park with no buttons (a held still: an ending, a death) is terminal
                 nodes[nk] = dict(st, script=script, depth=len(script), buttons=btns,
                                  terminal=not btns)
                 if btns:
-                    q.append(nk)
+                    seq += 1
+                    heapq.heappush(q, (expanded[_loc(nk)], len(script), seq, nk))
         if runs % 200 < len(n['buttons']):
             print('  %d nodes, %d edges, queue %d, %.0f s' % (len(nodes), len(edges), len(q),
                                                            time.time() - t0), file=log, flush=True)
     return {'iso': os.path.basename(iso), 'generated': time.strftime('%Y-%m-%d %H:%M'),
-            'state_regs': STATE_REGS,
+            'state_regs': STATE_REGS, 'per_loc': per_loc,
             'complete': not q, 'max_nodes': max_nodes, 'max_depth': max_depth,
             'nodes': nodes, 'edges': edges}
 
@@ -149,9 +169,10 @@ def _match(n, want):
 
 def summary(g):
     nodes, edges = g['nodes'], g['edges']
-    out = ['%s: %d input points, %d presses explored, %s (cap %d nodes / depth %d)' % (
-        g['iso'], len(nodes), len(edges), 'COMPLETE' if g['complete'] else 'INCOMPLETE',
-        g['max_nodes'], g['max_depth'])]
+    out = ['%s: %d input points at %d locations, %d presses explored, %s (cap %d nodes / depth %d%s)' % (
+        g['iso'], len(nodes), len({_loc(k) for k in nodes}), len(edges),
+        'COMPLETE' if g['complete'] else 'INCOMPLETE', g['max_nodes'], g['max_depth'],
+        ', <= %d states per location' % g['per_loc'] if g.get('per_loc') else '')]
     by = collections.Counter('%s VTS %d' % (DOMS.get(n['dom'], n['dom']), n['vts']) for n in nodes.values())
     out.append('input points by domain/VTS: ' + ', '.join('%s %d' % kv for kv in sorted(by.items())))
     first = {}
@@ -212,6 +233,8 @@ def main():
     p = sp.add_parser('explore'); p.add_argument('iso'); p.add_argument('-o', '--out', required=True)
     p.add_argument('--max-nodes', type=int, default=3000)
     p.add_argument('--max-depth', type=int, default=80)
+    p.add_argument('--per-loc', type=int, help='keep at most N states per location (prunes '
+                   'menu combinatorics; default no cap)')
     p.add_argument('--state-regs', help='GPRMs that are game state, e.g. 1,2,3,5,6,7,13 '
                    '(default all 16); the rest are treated as scratch')
     p = sp.add_parser('summary'); p.add_argument('graph')
@@ -222,7 +245,7 @@ def main():
     if a.cmd == 'explore':
         if a.state_regs:
             STATE_REGS[:] = [int(x) for x in a.state_regs.split(',')]
-        g = explore(a.iso, a.max_nodes, a.max_depth)
+        g = explore(a.iso, a.max_nodes, a.max_depth, a.per_loc)
         json.dump(g, open(a.out, 'w'))
         print(summary(g))
     elif a.cmd == 'summary':

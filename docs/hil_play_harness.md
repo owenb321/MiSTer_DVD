@@ -305,6 +305,40 @@ Known gaps:
 - Mad Dog's VTS 5/6/8 have 35-button title cells that are not Set-only; `draft` lists
   them under `title_menus_not_shots`.
 
+## Choice graphs: adventures (Thayer's Quest)
+
+Not every interactive disc is a shooter. In Thayer's Quest every input point is a held
+still with 2–7 CHOICE buttons:
+- a choice sets `g[0]` to a scene code and runs `LinkTailPGC`;
+- the region PGC's POST either leaves the region or calls the VMGM dispatcher, whose PRE
+  sends `g[0]` to the scene.
+
+There is nothing to aim at a window; the question is which button leads where. So the
+disc is mapped as a **choice graph** (`tools/choice_graph.py`), offline:
+- it plays the disc in the core's own VM, `tools/nav_offline.py`'s `Player`, the same
+  microcode the core runs;
+- it presses every button at every input point and records where each press lands.
+
+| Decision | Why |
+|---|---|
+| Park at any cell with live buttons (`Player.run(park_on_buttons=True)`, opt-in) | Thayer's power-on is an attract loop that alternates VMGM 9 ↔ 10. trace_nav's park rule (a still, or the same cell twice) never confirms it, so the model ran to its block cap without one input point. Off by default: the libdvdnav diff keeps trace_nav's rule. |
+| A node is location + the registers that are game state (`--state-regs`) | Inventory and progress live in GPRMs. Keying on all 16 split one scene into as many nodes as paths, through scratch registers (`g0` the consumed choice code, `g14` a compare temporary, `g4`/`g11`/`g15` dispatcher loop counters). For Thayer's the state registers are 1, 2, 3, 5, 6, 7, 13. |
+| Novelty-first search with `--per-loc N` | Plain breadth-first spent 8000 states on VMGM inventory/option screens (each toggle flips a state bit) and got 15 presses deep. Expanding the least-visited location first, at most 12 states per location, completes: 214 locations, 2142 states, every region VTS 1–9/11, deepest 43 presses. |
+| Routes are stored as button scripts, planned at run time | `choice_graph.py route --to "vts=8"` gives the script, and `--steps` the per-step plan: the input point's VTS/PGCN/`hli_s_ptm` low bits, its forced select, and aim paths over the authored links. A profile keeps only the script, readable and stable; the plan is derived from the image when a run starts. |
+| Replay against `HLI_ARM`, resynchronising | The model pressed on the attract loop's first pass. On the rig the loop had already run once, setting `g[2]` bit 0x800, so the next screen skipped a step. An arm matching any LATER step jumps the plan there. An arm matching no step is logged and never pressed. |
+
+Results (dev-cellcmdhold12, 2026-10-23):
+- `thayers_quest/into_vts2`: all 6 steps taken at the input points the model predicted,
+  VTS 2 reached (after the resync fix; the first attempt diverged at the attract loop).
+- `to_vts8` (30 presses through every region) is the full-adventure check.
+
+Model limits carry over from `nav_offline`:
+- no clock, so a choice that only TIMES OUT is not an edge;
+- no rnd;
+- the reader is a model.
+
+A route is a hypothesis until the rig follows it, and `route_followed` is the check.
+
 ## Known limits / next
 
 - `at_pts` maps PTS through picture count since `base`, so it is valid only on one
