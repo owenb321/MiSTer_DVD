@@ -176,7 +176,10 @@
      "vts": 1,
      "max_late_s": 0.05
     }
-   ]
+   ],
+   "suite": {
+    "tier": "quick"
+   }
   },
   "first_shootout_early": {
    "description": "VTS 1 cell 2: Select at $SEL (default 35.3), before the authored window opens (35.549): must miss.",
@@ -419,7 +422,11 @@
      ],
      "max_s": 0.3
     }
-   ]
+   ],
+   "suite": {
+    "tier": "quick",
+    "capture_s": 150
+   }
   },
   "duel": {
    "description": "Lose three lives, continue, autoplay the duel just after its window arms: must hit; the window must arm at its authored start (no early lead).",
@@ -618,7 +625,10 @@
     {
      "type": "no_purple"
     }
-   ]
+   ],
+   "suite": {
+    "tier": "full"
+   }
   }
  }
 }

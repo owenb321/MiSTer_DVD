@@ -650,6 +650,46 @@ with the default options: Arcade, Original, Easy, Unlimited lives. The first mov
 - A window whose right move is "hold still" (`wait`) is logged with no press. Only one was
   found.
 
+## Regression suite (`tools/hil_suite.py`)
+
+One command that answers "did this build break an interactive disc?":
+1. it flashes the control build and runs every profile scenario marked for the suite;
+2. it does the same for the build under test;
+3. it prints one table of every expectation side by side, marking **REGRESSION** (control
+   PASS, build not) and **fixed**.
+
+What it records and runs:
+- **Build identity:** each build's rbf, sha256, branch/commit/dirty/seed (from the
+  `.rbf.json` sidecar) and the `core_version` read back from the rig.
+- **Membership lives in the profiles:** `"suite": {"tier", "timeout", "capture_s",
+  "align"}`.
+- **Quick tier (~23 min per build):**
+  - Mad Dog first shootout and VTS 15;
+  - Thayer's route into VTS 2;
+  - Weakest Link answers;
+  - Dragon's Lair 20th, Dragon's Lair II and Time Traveler moves.
+- **Full tier** adds Mad Dog's blip and Castle in the Sky's angle joins (13 min, with no
+  alignment: `junction_clean` uses the FIFO).
+
+Design decisions:
+- **Runs are never wrapped in an outer timeout.** `hil_play`'s step timeouts bound them,
+  and an outer `timeout` killed the alignment twice on 2026-10-24, leaving runs with no
+  verdict.
+- **The control build must carry the nav FIFO** (`main` + FIFO = `DVD_playharness_*`).
+  Most checks read NODATA without it, and NODATA is never counted as a pass.
+- **The wrong-move/wrong-answer arms are not in the suite.** They test the instrument,
+  not the build. Re-run them when a check or a key changes.
+
+First run (2026-10-24, quick tier, 47 min): `dev-cellcmdhold13` (#176) against `main` +
+FIFO (`dev-playharness`). **14 checks: 0 FAIL, 0 regressions, 10 fixed.**
+- On `main`, every #176 symptom shows: Mad Dog's first shootout missed; VTS 15 cell 2
+  unwinnable (armed +0.90 s), a 2.000 s still and ~0.94 s freeze/silence at the join;
+  Time Traveler 0/5; Dragon's Lair 20th 1 right / 11 wrong; Dragon's Lair II dying at
+  TT/1/6/5.
+- On hold13 all of them pass: Dragon's Lair II 72/72, Dragon's Lair 20th 37/37, Time
+  Traveler 7/7.
+- Thayer's route and Weakest Link's answers pass on both.
+
 ## Known limits / next
 
 - `at_pts` maps PTS through picture count since `base`, so it is valid only on one

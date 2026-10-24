@@ -50,6 +50,9 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
       angle. On hold13, Time Traveler VTS 2 passes 5/5 and the controls hold (Mad Dog,
       Dragon's Lair II, Castle in the Sky's angle joins, now checked by
       `junction_clean`).
+    - **Regression gate:** `tools/hil_suite.py run --rbf B --control C` runs every profile
+      scenario marked `"suite"` on both builds and tables REGRESSION/fixed. First run: hold13
+      against `main`+FIFO, 14 checks, 0 FAIL, 0 regressions, 10 fixed (quick tier, 47 min).
     - Rules added: per-set and disc-wide death commands, immediate retry, play-stops,
       treasure detours, a tutorial `skip_keys`, already-highlighted Select, and colliding
       `hli_s_ptm` resolved by read time.

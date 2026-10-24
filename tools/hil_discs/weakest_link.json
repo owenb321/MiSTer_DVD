@@ -92,7 +92,12 @@
       "right": "up"
      }
     }
-   ]
+   ],
+   "suite": {
+    "tier": "quick",
+    "timeout": 240,
+    "capture_s": 260
+   }
   },
   "answer_wrong": {
    "description": "The control arm of 'answer': the same run aiming at a WRONG answer on every keyed question (quiz_key pick='wrong'). The right/wrong evidence must read wrong here, or answers_right cannot tell the two apart.",

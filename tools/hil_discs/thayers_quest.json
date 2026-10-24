@@ -116,7 +116,11 @@
      "vts": 2,
      "cell": 2
     }
-   ]
+   ],
+   "suite": {
+    "tier": "quick",
+    "capture_s": 90
+   }
   },
   "to_vts8": {
    "description": "Replay the model's route from power-on through every region into the last one (VTS 8): 30 presses, via VTS 2-7. Proves the offline choice graph holds across the whole adventure.",

@@ -47,7 +47,12 @@
     {
      "type": "moves_right"
     }
-   ]
+   ],
+   "suite": {
+    "tier": "quick",
+    "timeout": 150,
+    "capture_s": 170
+   }
   },
   "play_wrong": {
    "description": "The control arm of 'play': the same run pressing a WRONG option at every keyed move (move_key pick='wrong'). moves_right must FAIL here, or it cannot tell a death from a survival.",

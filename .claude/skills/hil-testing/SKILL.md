@@ -221,6 +221,24 @@ cat tools/streams/hil_runs/<time>/EXPECT.txt              # PASS / FAIL / NODATA
 - A new disc: `tools/hil_disc.py draft <iso>`, then its `explore` scenario, then
   `tools/hil_disc.py explored <run>`.
 
+### Regression gate for a build (hil_suite)
+
+Before saying a nav/VM/cell-command/HLI/still change is safe on interactive discs, run the
+suite: one command, one PASS/FAIL table, build against a control.
+
+```bash
+tools/hil_suite.py plan                       # what runs, ~23 min per build (quick tier)
+tools/hil_suite.py run --rbf releases/<new>.rbf --control releases/<old>.rbf
+# -> tools/streams/hil_suite/<time>/suite.md: REGRESSION / fixed marked per check
+```
+
+- Membership is a `"suite"` entry on a profile scenario (tier, timeout, capture_s,
+  align). `--tier full` adds the long ones (Mad Dog's blip, Castle's angle joins).
+- Both builds need the nav event FIFO (the control for `main` is a `main` + FIFO build,
+  e.g. `releases/DVD_playharness_*.rbf`); a FIFO-less control reads NODATA, not PASS.
+- The rig is left on the build under test (`--leave control|none` otherwise). Say so to
+  anyone else using the rig.
+
 ## Before believing a finding
 
 1. Does it **reproduce**?
