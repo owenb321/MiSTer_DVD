@@ -168,7 +168,7 @@
        2,
        2
       ],
-      "until": "nav.get('route_left')==0 and nav.get('vts')==8",
+      "until": "nav.get('route_left')==0 and nav.get('vts')==8 and nav.get('rcell',0)>=1",
       "timeout": 2300,
       "policy": [],
       "route_delay_s": 0.4,
