@@ -330,7 +330,15 @@ disc is mapped as a **choice graph** (`tools/choice_graph.py`), offline:
 Results (dev-cellcmdhold12, 2026-10-23):
 - `thayers_quest/into_vts2`: all 6 steps taken at the input points the model predicted,
   VTS 2 reached (after the resync fix; the first attempt diverged at the attract loop).
-- `to_vts8` (30 presses through every region) is the full-adventure check.
+- `thayers_quest/to_vts8`: **PASS**, all 30 steps taken where the model said.
+  - The route: power-on → VTS 2 → 3 → 5 → 6 → 7 → 8, with two VMGM excursions and 14
+    aimed choices.
+  - VTS 2 highlights arm exactly at `hli_s_ptm`.
+  - Two fixes on the way:
+    1. In the VMGM domain the core keeps reporting the calling VTS (the model says 0), so
+       VMGM steps match on menu flag / PGCN / start time.
+    2. The stop condition must wait for the reader to reach the target cell (VTS 8 cell 1
+       plays 15.5 s).
 
 Model limits carry over from `nav_offline`:
 - no clock, so a choice that only TIMES OUT is not an edge;
