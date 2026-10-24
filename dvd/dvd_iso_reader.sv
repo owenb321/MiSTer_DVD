@@ -943,6 +943,11 @@ reg [31:0] ilvu_target;                      // next-ILVU RBN for the current an
 reg        ilvu_from_agli;
 reg [7:0]  cell_count;                // number of cells parsed
 reg [7:0]  cell_i;                    // streaming cell cursor
+// The cell after this one in PLAY order: past the whole block when playing an angle
+// cell (the sibling angles are alternatives, not successors). The angle cell-finished
+// path always skipped them; a cell command's continue verdict did not, and played the
+// next angle's copy of the segment (found with issue #176's angle hold, 2026-10-24).
+wire [7:0] cell_after = angle_active ? (block_last + 8'd1) : (cell_i + 8'd1);
 reg        cell_mode;                 // 1 = stream by cell list, 0 = linear extents
 
 // Transport seek: a request is LATCHED here and executed only when no sd block
@@ -1474,10 +1479,17 @@ wire       tail_wait = ((vmw_pgc_pend && ~vbuf_empty) ||
 // in-title screen) restarts the decoder from an empty buffer, a short freeze at
 // the junction. A verdict that jumps or seeks already waited for the full drain
 // before this change (Phase B below), so it looks the same as before.
-// Not held: menus (keep_vbuf, the menu cap), and interleaved blocks (angle,
-// seamless branch), where a drain would break the seamless join.
-wire       cmd_hold_w = vm_mode && !menu_dom && cc_btns &&
-                        !angle_active && !seamless_active &&
+// Not held: menus (keep_vbuf, the menu cap), and seamless-branch blocks, where a
+// drain would break the seamless join.
+// ★ ANGLE BLOCKS ARE HELD (2026-10-24). They were excluded with the seamless
+// branches, but the hold only engages with buttons up and a press-reading command,
+// which a film's angle block does not author; FMV games do. Time Traveler plays its
+// game in angle blocks (463 cells), its cell commands score windows that run to the
+// cell's end, and without the hold the command ran at the READER's end, ~0.2 s
+// BEFORE its own window armed: every window unwinnable (HIL play harness, 5/5, on
+// main too). The angle cell's command dispatches through this same branch; the
+// verdict's advance still skips the sibling angles (bench arm I).
+wire       cmd_hold_w = vm_mode && !menu_dom && cc_btns && !seamless_active &&
                         !fx_rd && (cm_rd[7:0] <= cmd_nr_cell);
 
 // PHASE B (tail-drain for CELL-COMMAND verdicts, docs/dvd_nav.md). A natural
@@ -5769,7 +5781,7 @@ always @(posedge clk or negedge rst_n) begin
                                         // Drain first (tail_wait), then the
                                         // settle block below dispatches.
                                         vmw_cmd_pend <= 1'b1;
-                                        vmw_last     <= (cell_i + 8'd1 >= cell_count);
+                                        vmw_last     <= (cell_after >= cell_count);
                                         strm_done    <= 1'b1;
                                     end else begin
                                     // Phase-4: the cell has a CELL COMMAND -
@@ -5779,7 +5791,7 @@ always @(posedge clk or negedge rst_n) begin
                                     // (the branch above holds it first).
                                     vm_cell_cmd <= 1'b1;
                                     vmw_pgc     <= 1'b0;
-                                    vmw_last    <= (cell_i + 8'd1 >= cell_count);
+                                    vmw_last    <= (cell_after >= cell_count);
                                     vmw_tmr     <= 24'd0;
                                     state       <= S_VM_WAIT;
                                     end
@@ -6116,10 +6128,17 @@ always @(posedge clk or negedge rst_n) begin
                         vmw_pgc_pend  <= 1'b1;
                         state         <= S_STREAM;   // drain, then vm_pgc_end
                     end else begin
-                        cell_i     <= cell_i + 8'd1;
-                        cell_raddr <= cell_i + 8'd1;
+                        cell_i     <= cell_after;
+                        cell_raddr <= cell_after;
                         strm_done  <= 1'b0;
                         state      <= S_CELL_LOAD;
+                        if (angle_active) begin
+                            // leaving the angle block: as the cell-finished path does
+                            angle_active   <= 1'b0;
+                            angle_resolved <= 1'b0;
+                            angle_count    <= 4'd0;
+                            ilvu_armed     <= 1'b0;
+                        end
                     end
                 end
             end

@@ -26,6 +26,10 @@
 //     cell 0 (0xB9) cmd 1 = g[1] = 1, 4 s of playback  <- a VIDEO cell
 //     cell 1 (0xBA) cmd 2 = g[2] = 1, 6 s of playback  <- a still (one frame, held)
 //     cell 2 (0xBB) plain, last
+//   Title 5 (PGC@2700): POST Nop                     <- an ANGLE block (I)
+//     cell 0 (0xBC) angle 1 of 2, block first, cmd 1 = g[1] = 1
+//     cell 1 (0xBD) angle 2 of 2, block last,  cmd 1
+//     cell 2 (0xBE) plain, last (the common continuation)
 // Every cell of titles 1-3 is two sectors with last_vobu_start = first_sector and 1 s
 // of playback:
 // one sector, or last_vobu_start = last_sector, makes a libdvdnav HEURISTIC still,
@@ -55,6 +59,11 @@
 //   H  a STILL cell with buttons up (6 s authored, nothing displayed at the drain):
 //      after the drain the unspent 6 s is served as a timed still, then the command.
 //      The tb drives disp_tick (disp_fps 4: 4 ticks = 1 display-second) only in G/H.
+//   I  an ANGLE-block cell with buttons up (Time Traveler, 2026-10-24: 463 angle
+//      cells, its scoring windows inside them): the command waits for the drain like
+//      any other, then play continues at the cell after the block (0xBE), never the
+//      other angle (0xBD). hold1-12 excluded angle blocks from the hold, so the
+//      command ran at the READER's end, ~0.2 s before its own window armed.
 //
 // Run: bench/dvd/run_cmd_hold.sh [--red]
 
@@ -62,7 +71,7 @@
 
 module iso_reader_cmdhold_tb;
 
-    localparam IMG_BYTES = 50*2048;
+    localparam IMG_BYTES = 56*2048;
     localparam [30:0] DRAIN_WD_TB = 31'd200000;
 
     reg         clk = 0;
@@ -115,12 +124,13 @@ module iso_reader_cmdhold_tb;
     wire [7:0]  vm_dbg;
     wire        vm_from_wait_w, nat_wait_w;
     wire        ptt_upd_w;
+    wire        vm_pre_done_w;
     wire [10:0] ptt_cur_w;
 
     dvd_iso_reader #(.SEC_DIV(1000), .DRAIN_WD(DRAIN_WD_TB)) dut (
         .cc_btns(cc_btns),
         .ptt_upd(ptt_upd_w), .ptt_cur(ptt_cur_w),
-        .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
+        .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(vm_pre_done_w),   // as emu: the angle waits for PRE
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(7'd0),
         .aud_drained(1'b1), .vbuf_empty(vbuf_empty),
         .disp_tick(disp_tick), .disp_fps(6'd4),
@@ -186,6 +196,7 @@ module iso_reader_cmdhold_tb;
         .vm_replay(vm_replay_w), .vm_adv(vm_adv_w), .wait_hold(nat_wait_w),
         .vm_from_wait(vm_from_wait_w),
         .sprm_astn(sprm_astn_w), .sprm_spstn(sprm_spstn_w),
+        .pre_done(vm_pre_done_w),
         .dbg_state(vm_dbg)
     );
 
@@ -380,6 +391,7 @@ module iso_reader_cmdhold_tb;
     localparam [63:0] C_JUMPTT2  = 64'h3002000000020000;
     localparam [63:0] C_JUMPTT3  = 64'h3002000000030000;
     localparam [63:0] C_JUMPTT4  = 64'h3002000000040000;
+    localparam [63:0] C_JUMPTT5  = 64'h3002000000050000;
     localparam [63:0] C_G1_1     = 64'h7100000100010000;   // g[1] = 1
     localparam [63:0] C_G2_1     = 64'h7100000200010000;   // g[2] = 1
     localparam [63:0] C_TOPC     = 64'h2001000000000001;   // LinkTopC
@@ -404,10 +416,10 @@ module iso_reader_cmdhold_tb;
             put_rec(cur, 17, 2048, 8'h02, 128'h00, 1, cur);
             put_rec(cur, 17, 2048, 8'h02, 128'h01, 1, cur);
             put_rec(cur, 19, 6144, 8'h00, "VIDEO_TS.IFO;1", 14, cur);
-            put_rec(cur, 49, 2048, 8'h00, "VIDEO_TS.VOB;1", 14, cur);
+            put_rec(cur, 55, 2048, 8'h00, "VIDEO_TS.VOB;1", 14, cur);
             put_rec(cur, 22, 6144, 8'h00, "VTS_01_0.IFO;1", 14, cur);
             put_rec(cur, 25, 4096, 8'h00, "VTS_01_0.VOB;1", 14, cur);
-            put_rec(cur, 27, 45056, 8'h00, "VTS_01_1.VOB;1", 14, cur); // 27..48
+            put_rec(cur, 27, 57344, 8'h00, "VTS_01_1.VOB;1", 14, cur); // 27..54
 
             // VMGI_MAT @19: FP @400; TT_SRPT @+1 (20); VMGM_PGCI_UT @+2 (21)
             be32(19*2048+132, 32'd400);
@@ -416,12 +428,13 @@ module iso_reader_cmdhold_tb;
             put_pgc(19*2048+400, 8'd0, 8'd0, 16'd236, 16'd0, 16'd0);
             put_cmdtbl(19*2048+400, 16'd236, 1, 0, 0, C_JUMPTT1, C_NOP, C_NOP, C_NOP);
 
-            // TT_SRPT @20: 4 titles, all VTS_01
-            be16(20*2048+0, 16'd4);
+            // TT_SRPT @20: 5 titles, all VTS_01
+            be16(20*2048+0, 16'd5);
             img[20*2048+14] = 8'd1; img[20*2048+15] = 8'd1;
             img[20*2048+26] = 8'd1; img[20*2048+27] = 8'd2;
             img[20*2048+38] = 8'd1; img[20*2048+39] = 8'd3;
             img[20*2048+50] = 8'd1; img[20*2048+51] = 8'd4;
+            img[20*2048+62] = 8'd1; img[20*2048+63] = 8'd5;
 
             // VMGM PGCI_UT @21 (unused)
             be16(21*2048+0, 16'd1);
@@ -440,12 +453,13 @@ module iso_reader_cmdhold_tb;
             be32(22*2048+204, 32'd1);
             be32(22*2048+208, 32'd2);
 
-            // VTS_PGCIT @23: titles 1/2/3/4 -> PGC@16 / @700 / @1400 / @2100
-            be16(23*2048+0, 16'd4);
+            // VTS_PGCIT @23: titles 1..5 -> PGC@16 / @700 / @1400 / @2100 / @2700
+            be16(23*2048+0, 16'd5);
             img[23*2048+8]  = 8'h81; be32(23*2048+8+4,  32'd16);
             img[23*2048+16] = 8'h82; be32(23*2048+16+4, 32'd700);
             img[23*2048+24] = 8'h83; be32(23*2048+24+4, 32'd1400);
             img[23*2048+32] = 8'h84; be32(23*2048+32+4, 32'd2100);
+            img[23*2048+40] = 8'h85; be32(23*2048+40+4, 32'd2700);
 
             // title 1: PRE g[0]=0; POST Nop; cell cmds {score, g[2]=1}
             put_pgc(23*2048+16, 8'd3, 8'd3, 16'd400, 16'd240, 16'd256);
@@ -485,10 +499,23 @@ module iso_reader_cmdhold_tb;
             put_cell  (23*2048+2100, 16'd256, 2, 8'd0, 32'd20);               // BB: last
             put_cmdtbl(23*2048+2100, 16'd400, 0, 1, 2, C_NOP, C_G1_1, C_G2_1, C_NOP);
 
+            // title 5: a 2-angle block (cat 0x50 first / 0xD0 last, block_type angle),
+            // both angles cmd 1 = g[1]=1 (a Set: held with buttons up), then 0xBE
+            put_pgc(23*2048+2700, 8'd3, 8'd3, 16'd400, 16'd236, 16'd256);
+            img[23*2048+2700+236] = 8'd1;
+            img[23*2048+2700+237] = 8'd2;
+            img[23*2048+2700+238] = 8'd3;
+            put_cell(23*2048+2700, 16'd256, 0, 8'd1, 32'd22);  // BC: angle 1
+            put_cell(23*2048+2700, 16'd256, 1, 8'd1, 32'd24);  // BD: angle 2
+            put_cell(23*2048+2700, 16'd256, 2, 8'd0, 32'd26);  // BE: common, last
+            img[23*2048+2700+256+0]  = 8'h50;
+            img[23*2048+2700+256+24] = 8'hD0;
+            put_cmdtbl(23*2048+2700, 16'd400, 0, 1, 1, C_NOP, C_G1_1, C_NOP, C_NOP);
+
             for (j = 0; j < 2048; j = j + 1) begin
                 img[25*2048+j] = 8'hD0;
                 img[26*2048+j] = 8'hD1;
-                img[49*2048+j] = 8'hC0;
+                img[55*2048+j] = 8'hC0;
             end
             for (j = 0; j < 4096; j = j + 1) begin
                 img[27*2048+j] = 8'hB0;
@@ -502,6 +529,9 @@ module iso_reader_cmdhold_tb;
                 img[43*2048+j] = 8'hB9;
                 img[45*2048+j] = 8'hBA;
                 img[47*2048+j] = 8'hBB;
+                img[49*2048+j] = 8'hBC;
+                img[51*2048+j] = 8'hBD;
+                img[53*2048+j] = 8'hBE;
             end
         end
     endtask
@@ -551,11 +581,11 @@ module iso_reader_cmdhold_tb;
     endfunction
 
     integer s0, c0, e0, p0, r0;
-    integer a1_ok, a2_ok, b_ok, c_ok, d_ok, e_ok, g_ok, h_ok, p1_ok, p2_ok, p3_ok, p4_ok;
+    integer a1_ok, a2_ok, b_ok, c_ok, d_ok, e_ok, g_ok, i_ok, h_ok, p1_ok, p2_ok, p3_ok, p4_ok;
 
     initial begin
         a1_ok = 1; a2_ok = 1; b_ok = 1; c_ok = 1; d_ok = 1; e_ok = 1;
-        p1_ok = 1; p2_ok = 1; p3_ok = 1; p4_ok = 1; g_ok = 1; h_ok = 1;
+        p1_ok = 1; p2_ok = 1; p3_ok = 1; p4_ok = 1; g_ok = 1; i_ok = 1; h_ok = 1;
         build_iso;
         file_size = IMG_BYTES;
 
@@ -719,6 +749,27 @@ module iso_reader_cmdhold_tb;
         wait_pe(p0 + 1, 4000000);
         $display("H %s: a still cell with buttons up: drain, then its unspent seconds, then the command",
                  h_ok ? "PASS" : "FAIL");
+
+        // ---------- I: an angle-block cell with buttons up is held too ----------
+        repeat (2000) @(posedge clk);
+        cc_btns = 1; vbuf_empty = 0;
+        c0 = n_cc; s0 = seq_n;
+        press(C_JUMPTT5);
+        wait_hold(4000000);
+        if (dut.vmw_cmd_pend !== 1'b1) begin fail("I: no hold at the angle cell's end"); i_ok = 0; end
+        else if (dut.angle_active !== 1'b1) begin fail("I: the held cell is not an angle cell (fixture)"); i_ok = 0; end
+        repeat (20000) @(posedge clk);
+        if (n_cc != c0) begin fail("I: the angle cell's command ran with the VBUF full"); i_ok = 0; end
+        vbuf_empty = 1;
+        t = 0; while (n_cc == c0 && t < 5000) begin @(posedge clk); t = t + 1; end
+        if (n_cc != c0 + 1) begin fail("I: the command did not run at the drain"); i_ok = 0; end
+        t = 0; while (seq_find(s0, 8'hBE) < 0 && t < 400000) begin @(posedge clk); t = t + 1; end
+        if (seq_find(s0, 8'hBC) < 0 || seq_find(s0, 8'hBE) < 0 || seq_find(s0, 8'hBD) >= 0) begin
+            fail("I: play must go angle 1 (BC) -> the common cell (BE), never angle 2 (BD)"); i_ok = 0;
+        end
+        $display("I %s: an angle-block cell with buttons up waits for the drain",
+                 i_ok ? "PASS" : "FAIL");
+        vbuf_empty = 0;
 
         // ---------- E: a VBUF that never drains -> DRAIN_WD releases ----------
         repeat (2000) @(posedge clk);

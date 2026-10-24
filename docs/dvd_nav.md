@@ -5404,6 +5404,28 @@ no still, the command at the drain) and H (a 6 s still cell: drain, then a 6 s s
 the command); mutations R13 (`dur_hold` first) and R14 (no residual still). The `cc_aud_low`
 release built for the gunshot silence is gone (hold10): the silence was this.
 
+**A fifth: angle blocks (2026-10-24, Time Traveler, HIL play harness).** Time Traveler
+plays its game inside 2-angle blocks (VTS 2 PGC 1; 463 angle cells, category 0x57 / 0xD7:
+interleaved, an STC break and a seamless angle change, but no seamless-play flag on the
+join). Its cell commands (`if (g[0] < g[1]) LinkPTT 1`) score windows that run to the
+cell's end (e.g. 3.34–4.30 s of a 4.33 s cell). The hold excluded angle blocks
+(`!angle_active`, grouped with the seamless branches "where a drain would break the
+seamless join"), so the command ran at the READER's end, ~0.2 s BEFORE its own window
+armed: 5/5 windows unwinnable on `dev-cellcmdhold12` and on `main` alike. Dragon's Lair
+II (plain cells) was correct, its verdicts at the window's close. The hold now applies in
+angle blocks too: it engages only with buttons up and a press-reading command, which a
+film's angle block does not author. Seamless-branch blocks stay excluded.
+
+Holding exposed a second, pre-existing defect: after a cell command's CONTINUE verdict the
+reader advanced to `cell_i + 1` even inside an angle block, i.e. into the SIBLING angle's
+copy of the segment, where the angle cell-finished path always skipped to the cell after
+the block. `cell_after` (`block_last + 1` while `angle_active`) now drives both the
+verdict's advance and `vmw_last`, and leaving the block clears the angle state as the
+cell-finished path does. Gate: `iso_reader_cmdhold_tb` arm I (a 2-angle block with
+buttons up: held to the drain, then angle 1 → the common cell, never angle 2; the bench
+now wires `dvd_vm.pre_done` as emu does, which an angle block needs to resolve);
+mutations R15 (angle blocks excluded) and R16 (the verdict plays the sibling).
+
 **Known limits.**
 
 - A pause during the hold counts toward `DRAIN_WD` (60 s), the same as the PGC-end

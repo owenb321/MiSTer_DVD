@@ -173,7 +173,14 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     on the selected button and the shot hits; VTS 15's three shots hit. Scene It's 6-button
     in-title main menu (VTS 3 PGC 18): art and highlight identical to hold10 (arm at
     `late_ticks` 0, Select activates).
-  - **Next:** the maintainer's play-test of `dev-cellcmdhold12`,
+  - **`dev-cellcmdhold13` (2026-10-24): angle blocks.** The harness found Time Traveler
+    unwinnable (its game is in angle blocks, which the hold excluded; the verdict ran ~0.2 s
+    before its window armed, `main` too). The hold now applies in angle blocks, and a
+    continue verdict inside one advances past the block instead of into the sibling angle
+    (pre-existing). `docs/dvd_nav.md` "A fifth"; bench arm I, R15/R16.
+  - **Next:** the harness on `dev-cellcmdhold13` (Time Traveler's windows; Mad Dog and
+    Dragon's Lair II as controls; an angle-block film such as Grave of the Fireflies for
+    seamless angle playback), then the maintainer's play-test,
     then the maintainer's play-test, then the PR. Not yet run on HW: a loop disc such as
     Fairytopia, which is unchanged by construction because a fixed command is never held
     (bench P2), and Mad Dog II / Crime Patrol by hand. Design notes: `docs/dvd_nav.md` "A
