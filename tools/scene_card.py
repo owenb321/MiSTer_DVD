@@ -57,12 +57,15 @@ def _cut(iso, cells, path):
 def _frames(vob, every, with_subs):
     """PIL frames sampled every `every` s; the first subtitle stream burnt in if any."""
     with tempfile.TemporaryDirectory() as td:
-        probe = subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'stream=codec_name',
+        # probe the WHOLE cut: a subtitle stream whose first packet comes late in the
+        # scene is otherwise never found, and its dialogue silently goes missing
+        big = ['-probesize', '2G', '-analyzeduration', '2000M']
+        probe = subprocess.run(['ffprobe', '-v', 'error', *big, '-show_entries', 'stream=codec_name',
                                 '-of', 'csv=p=0', vob], capture_output=True, text=True).stdout
         has_sub = with_subs and 'dvd_subtitle' in probe
         flt = ('[0:v:0][0:s:0]overlay,' if has_sub else '[0:v:0]') + \
             'fps=1/%g,scale=%d:%d' % (every, W, H)
-        subprocess.run(['ffmpeg', '-v', 'error', '-i', vob, '-filter_complex', flt + '[o]',
+        subprocess.run(['ffmpeg', '-v', 'error', *big, '-i', vob, '-filter_complex', flt + '[o]',
                         '-map', '[o]', os.path.join(td, 'f%04d.png')], capture_output=True)
         return [Image.open(os.path.join(td, n)).copy() for n in sorted(os.listdir(td))], has_sub
 
