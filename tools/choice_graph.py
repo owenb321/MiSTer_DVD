@@ -220,7 +220,8 @@ def route_steps(iso, script):
                 i, n, DOMS.get(st['dom'], st['dom']), st['vts'], st['pgcn'], st['cell']))
         bl = [dict(b, x1=0, x2=0, y1=0, y2=0) for b in btns]
         paths = {str(b['n']): DT.path(bl, b['n'], n) for b in btns}
-        out.append({'menu': st['dom'] in (4, 8), 'vts': st['vts'], 'pgcn': st['pgcn'],
+        out.append({'menu': st['dom'] in (4, 8), 'dom': DOMS.get(st['dom'], st['dom']),
+                    'vts': st['vts'], 'pgcn': st['pgcn'],
                     'cell': st['cell'], 'sptm_lo': btns[0]['sptm_lo'], 'fosl': btns[0]['fosl'],
                     'button': n, 'cmd': next(b['cmd'] for b in btns if b['n'] == n),
                     'paths': {k: v for k, v in paths.items() if v is not None}})

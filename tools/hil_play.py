@@ -282,10 +282,18 @@ for i, st in enumerate(sc["steps"]):
                     # assumed (an attract loop's first pass sets state the model's earlier
                     # press skipped), so an arm that matches ANY later step jumps the plan
                     # there -- same destination, entered from where the disc really is
-                    hit_ = next((k for k in range(ri, len(route))
-                                 if ev["sptm_lo"] == route[k]["sptm_lo"]
-                                 and nav.get("vts") == route[k]["vts"]
-                                 and nav.get("pgcn") == route[k]["pgcn"]), None)
+                    # In the VMGM domain the core keeps reporting the title set it was
+                    # called from (a CallSS from VTS 3 reads vts=3) while the model says 0:
+                    # match a VMGM step on the menu flag, PGCN and start time only.
+                    def _is(k):
+                        r_ = route[k]
+                        if ev["sptm_lo"] != r_["sptm_lo"] or nav.get("pgcn") != r_["pgcn"]:
+                            return False
+                        if r_.get("dom") == "VMGM":
+                            # at power-on the FIFO's PGC events read vts=0 with menu=0
+                            return bool(nav.get("menu")) or nav.get("vts") == 0
+                        return nav.get("vts") == r_["vts"] and bool(nav.get("menu")) == bool(r_.get("menu"))
+                    hit_ = next((k for k in range(ri, len(route)) if _is(k)), None)
                     if hit_ is not None and hit_ > ri:
                         out({"route": "resync", "from_step": ri, "to_step": hit_, "t": mono()})
                         ri = hit_
