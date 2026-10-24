@@ -201,6 +201,8 @@ class Player:
         self.blocks = 0
         self.log = []
         self.path = []                  # the PGCs that played a cell (path_key), in order
+        self.trace = []                 # every cell entered: (dom, vts, pgcn, 0-based cell),
+                                        # in order (choice_graph's scene cards read it)
         # the reader's PTT state (dvd_iso_reader cur_ttn / ptt_mem): which title's
         # VTS_PTT_SRPT is resident, and whether it names the playing PGC
         self.cur_ttn, self.ptt_tab = 1, []
@@ -393,6 +395,11 @@ class Player:
             key = (self.dom, self.vts, self.pgcn, self.cell)
             if key != prev or True:          # every entry into a cell is a cell change
                 self.cells += 1
+                c_ = p['cells'][self.cell] if self.cell < len(p['cells']) else {}
+                b_ = self.d.vobs.get((self.dom, self.vts if self.dom in (DOM_VTSM, DOM_TT) else 0))
+                self.trace.append((self.dom, self.vts, self.pgcn, self.cell,
+                                   (b_ + c_['first']) if b_ is not None and 'first' in c_ else None,
+                                   (b_ + c_['last']) if b_ is not None and 'last' in c_ else None))
                 if wait > 0:
                     wait -= 1
                 if cand is not None and key == cand:

@@ -58,7 +58,7 @@ def _buttons(P, st):
             return []
         pci = b[0x2D:0x2D + 979]
         if (int.from_bytes(pci[0x60:0x62], 'big') & 3) and (pci[0x71] & 0x3F):
-            return [{k: v for k, v in bt.items() if k in ('n', 'up', 'dn', 'lf', 'rt', 'cmd', 'kind')}
+            return [{k: v for k, v in bt.items() if k in ('n', 'up', 'dn', 'lf', 'rt', 'cmd', 'kind', 'x1', 'x2', 'y1', 'y2')}
                     | {'fosl': pci[0x74] & 0x3F, 'sptm_lo': int.from_bytes(pci[0x62:0x66], 'big') & 0xFFFFF}
                     for bt in DT.buttons(pci)]
         ea = int.from_bytes(b[0x40F:0x413], 'big')
