@@ -1,0 +1,114 @@
+{
+ "name": "thayers_quest",
+ "title": "Thayer's Quest",
+ "image": {
+  "fingerprint": "2a73ce831f0cc1156e426fbcecccc9294c0750c4",
+  "name_hints": [
+   "interactive/Thayer's Quest.iso"
+  ]
+ },
+ "pal": false,
+ "policy": {
+  "also_select": {},
+  "routes": {}
+ },
+ "macros": {
+  "start": [
+   {
+    "wait": "live",
+    "timeout": 60
+   }
+  ]
+ },
+ "notes": [
+  {
+   "text": "An adventure, not a shooter: every input point is a still with 2-7 CHOICE buttons. A choice sets g[0] to a scene code and LinkTailPGC; the region PGC's POST either leaves the region (JumpVTS_PTT) or calls the VMGM dispatcher (PGC 4), whose PRE sends g[0] to the scene. No rnd.",
+   "why": "So a 'shot model' does not apply; the disc is mapped as a choice graph (tools/choice_graph.py) and played by route scripts."
+  },
+  {
+   "text": "Power-on is an attract loop: VMGM 23 (5 s logo) -> 8 (4 s) -> 9 (31 s) -> 10, whose cell commands loop back to 9 unless a button is pressed.",
+   "why": "nav_offline's trace_nav park rule never parks in a two-PGC loop; choice_graph uses Player.run(park_on_buttons=True)."
+  },
+  {
+   "text": "Choice-graph states include all 16 GPRMs: inventory and progress live there, so one scene with different items is a different node. The VMGM options/title menus alone account for many states.",
+   "why": "Keep the graph honest about game state; cap with --max-nodes."
+  }
+ ],
+ "scenarios": {
+  "explore": {
+   "description": "Start the disc and walk its default path for 5 minutes (explore); then tools/hil_disc.py explored <run dir>",
+   "opts": {
+    "Debug Overlay": "On"
+   },
+   "capture_s": 330,
+   "steps": [
+    {
+     "macro": "start"
+    },
+    {
+     "play": {
+      "until": "False",
+      "timeout": 300,
+      "policy": [],
+      "select_unknown_after_s": 2.0,
+      "delay_s": 0.15,
+      "hold_ms": 20
+     }
+    }
+   ],
+   "expect": []
+  },
+  "into_vts2": {
+   "description": "Replay the model's shortest route from power-on into the first region (VTS 2): six presses through the attract loop, the main menu (one Up to b1) and VTS 1. Proves the offline choice graph matches the rig.",
+   "opts": {
+    "Debug Overlay": "On"
+   },
+   "capture_s": 240,
+   "measure": {
+    "vts": 2,
+    "pgcn": 1,
+    "cells": [
+     1,
+     2,
+     3
+    ],
+    "overlay": true
+   },
+   "steps": [
+    {
+     "macro": "start"
+    },
+    {
+     "play": {
+      "route_script": [
+       1,
+       1,
+       1,
+       1,
+       1,
+       1
+      ],
+      "until": "nav.get('route_left')==0 and nav.get('vts')==2",
+      "timeout": 200,
+      "policy": [],
+      "route_delay_s": 0.4,
+      "hold_ms": 30
+     }
+    },
+    {
+     "sleep": 10
+    }
+   ],
+   "expect": [
+    {
+     "type": "route_followed"
+    },
+    {
+     "type": "reaches",
+     "vts": 2,
+     "cell": 2
+    }
+   ]
+  }
+ }
+}

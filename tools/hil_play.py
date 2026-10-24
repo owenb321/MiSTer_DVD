@@ -263,12 +263,54 @@ for i, st in enumerate(sc["steps"]):
         for w in sc.get("targets", []):
             tbl.setdefault((w["vts"], w["s_ptm"] & 0xFFFFF), []).append(w)
         last_aim, pending, met = None, [], False
+        ri, last_route_btn = 0, None
+        nav["route_left"] = len(pl.get("route") or [])
         del nav_new[:]
         while mono() < lim:
             r = poll()
             while nav_new:
                 ev = nav_new.pop(0)
                 if ev.get("ev") != "HLI_ARM" or not ev.get("btn_ns"):
+                    continue
+                # a planned route (tools/choice_graph.py route --steps): each step names
+                # the input point it expects (VTS, PGCN, hli_s_ptm low bits) and the button;
+                # an arm that is not the next step is logged and NOT pressed -- a route
+                # that diverged must say so, not press blind
+                route = pl.get("route") or []
+                if ri < len(route):
+                    # resynchronise: the disc may already be further along than the model
+                    # assumed (an attract loop's first pass sets state the model's earlier
+                    # press skipped), so an arm that matches ANY later step jumps the plan
+                    # there -- same destination, entered from where the disc really is
+                    hit_ = next((k for k in range(ri, len(route))
+                                 if ev["sptm_lo"] == route[k]["sptm_lo"]
+                                 and nav.get("vts") == route[k]["vts"]
+                                 and nav.get("pgcn") == route[k]["pgcn"]), None)
+                    if hit_ is not None and hit_ > ri:
+                        out({"route": "resync", "from_step": ri, "to_step": hit_, "t": mono()})
+                        ri = hit_
+                    sp_ = route[ri]
+                    if hit_ is not None:
+                        start = sp_["fosl"] or last_route_btn or 1
+                        taps = sp_["paths"].get(str(start))
+                        if taps is None:
+                            out({"route": "no path", "step": ri, "from": start, "to": sp_["button"]})
+                            taps = []
+                        for n_, k in enumerate(taps):
+                            pending.append((mono() + pl.get("route_delay_s", 0.3) + 0.06 * n_, k,
+                                            {"route_step": ri}))
+                        pending.append((mono() + pl.get("route_delay_s", 0.3) + 0.06 * len(taps) + 0.1,
+                                        "select", {"route_step": ri}))
+                        out({"route": "step", "step": ri, "button": sp_["button"], "taps": taps,
+                             "at": [sp_["vts"], sp_["pgcn"], sp_["cell"]], "cmd": sp_["cmd"],
+                             "t": mono(), "arm_t": ev["t_ev"]})
+                        last_route_btn = sp_["button"]
+                        ri += 1
+                        nav["route_left"] = len(route) - ri
+                        continue
+                    out({"route": "unexpected arm", "expected_step": ri,
+                         "want": [sp_["vts"], sp_["pgcn"], sp_["sptm_lo"]],
+                         "got": [nav.get("vts"), nav.get("pgcn"), ev["sptm_lo"]], "t": mono()})
                     continue
                 key = "%s:%s" % (nav.get("vts"), nav.get("pgcn"))
                 # "VTS:PGCN" = press Select there; "VTS:PGCN=right,right" = taps first
@@ -461,6 +503,14 @@ def run_agent(sc, out_dir):
     if any('play' in st for st in sc['steps']):
         sc['targets'] = targets_for(sc.get('_local_iso'))
     for st in sc['steps']:
+        # a choice route is stored as its button script; the per-step plan (what each
+        # input point looks like, how to aim) is derived from the image at run time
+        if 'play' in st and st['play'].get('route_script') is not None and not st['play'].get('route'):
+            import choice_graph
+            st['play']['route'] = choice_graph.route_steps(sc.get('_local_iso'),
+                                                           st['play']['route_script'])
+            print('  route: %d steps planned' % len(st['play']['route']), flush=True)
+    for st in sc['steps']:
         if 'keys' in st:
             bad = [k for k in st['keys'] if k not in names]
             if bad:
@@ -601,6 +651,8 @@ def cmd_run(a, sc=None, out_dir=None):
         time.sleep(1.5)                 # the card's first ~1 s is not live
     launch(sc)
     clock, events = run_agent(sc, out_dir)
+    with open(os.path.join(out_dir, 'scenario.json'), 'w') as f:
+        json.dump(sc, f, indent=1)      # again: run_agent derived the route plan, targets
     with open(os.path.join(out_dir, 'clock.json'), 'w') as f:
         json.dump(clock, f, indent=1)
     print('  clock: board->host offset %.4f s, rtt %.1f ms'

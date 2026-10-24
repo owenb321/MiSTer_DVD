@@ -358,9 +358,15 @@ class Player:
                     cell=self.cell + 1, buttons=buttons, gprm=g,
                     gmode=self.sh.m.ram[S.N.RAM_MAP['GMODE']])
 
-    def run(self, script):
+    def run(self, script, park_on_buttons=False):
         """-> [(action, landing state)] in trace_nav's pairing (the LAST park after
-        an action is its landing)."""
+        an action is its landing).
+
+        park_on_buttons: also park at the first cell of a PGC that carries live buttons,
+        even without a still or a loop. For a disc whose input points sit in an attract
+        loop that alternates between PGCs (Thayer's Quest: VMGM 9 <-> 10), which the
+        trace_nav park rule never confirms. Off by default, so the libdvdnav diff keeps
+        trace_nav's park rule exactly."""
         toks = script.split()
         ti = 0
         rows, pending = [], None
@@ -426,6 +432,8 @@ class Player:
             # (libdvdnav play_Cell_post; docs/dvd_nav.md "An indefinite still and its
             # cell command")
             still = still_of(p, self.cell)
+            if park_on_buttons and h and nb and not acted and wait == 0:
+                park, cand = True, None
             if still == 0xFF:
                 park, cand = True, None
             elif still and cand is not None and cand[:3] == key[:3] and not acted:

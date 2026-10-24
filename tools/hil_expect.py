@@ -21,6 +21,8 @@ The run directory's scenario.json carries "expect": a list of assertions, each o
                                       cells (of the measured VTS) were on screen
     no_freeze       {cells, max_s}    no frozen picture >= max_s over the same span
     no_purple       {}                no frame washed purple (the one-picture SPU blip)
+    route_followed  {}                a planned choice route (play.route_script) was taken
+                                      step by step where the offline model predicted
 
 Each assertion is PASS, FAIL or NODATA. NODATA means the instrument was not there
 (a core without the nav FIFO, no capture, the scene never reached), and is never
@@ -241,6 +243,32 @@ def a_no_purple(r, x):
     if len(hits):
         return FAIL, '%d purple frame(s) of %d, first at capture %.2f s' % (len(hits), n, hits[0] / 60.0)
     return PASS, 'none in %d frames' % n
+
+
+def a_route_followed(r, x):
+    """Every step of a planned choice route (play.route) was recognised on the rig, in
+    order, at the input point the model predicted; the first divergence is the finding."""
+    plan = next((st['play'].get('route') for st in r.sc.get('steps', [])
+                 if 'play' in st and st['play'].get('route')), None)
+    if not plan:
+        return NODATA, 'the scenario has no planned route'
+    if not r.fifo:
+        return NODATA, 'no nav FIFO on this core (the route player needs it)'
+    done = [o for o in r.lines if o.get('route') == 'step']
+    off = [o for o in r.lines if o.get('route') == 'unexpected arm']
+    resync = [o for o in r.lines if o.get('route') == 'resync']
+    if done and done[-1]['step'] == len(plan) - 1:
+        return PASS, 'reached the last of %d steps (%d taken%s)' % (
+            len(plan), len(done), ', resynced at step %s' % [o['to_step'] for o in resync]
+            if resync else '')
+        return PASS, 'all %d steps taken where the model said%s' % (
+            len(plan), '' if not off else ' (%d other arms ignored)' % len(off))
+    first = next((o for o in off if o.get('expected_step') == len(done)), None)
+    nxt = (done[-1]['step'] + 1) if done else 0
+    first = next((o for o in off if o.get('expected_step') == nxt), first)
+    return FAIL, 'stopped after step %d of %d; step %d expected %s at VTS %s PGC %s, %s' % (
+        nxt - 1, len(plan), nxt, plan[nxt]['cmd'], plan[nxt]['vts'], plan[nxt]['pgcn'],
+        'the rig armed %s instead' % first['got'] if first else 'no further input point armed')
 
 
 CHECKS = {k[2:]: v for k, v in globals().items() if k.startswith('a_')}
