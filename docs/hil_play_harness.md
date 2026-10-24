@@ -347,6 +347,41 @@ Model limits carry over from `nav_offline`:
 
 A route is a hypothesis until the rig follows it, and `route_followed` is the check.
 
+## Game types and primitives: the library sweep
+
+`tools/disc_classify.py <dir>` counts, per disc and from the disc alone, the primitives a
+play harness needs. Run over the 24 interactive images (2026-10-23), the number of discs
+needing each:
+
+| Primitive | Discs | Notes |
+|---|---|---|
+| Random draws (`rnd`) | 18 | Policy + invariants, not routes. |
+| Buttons live over video | 17 | Answers or choices while a clip or timer runs; timing to be shown per disc. |
+| Choice stills | 16 | The Thayer model. |
+| Clock (counter-mode register) | 7 | Quizzes and game shows; rig-only expectations. |
+| Item hotspots | 6 | Sherlock Holmes 561, TP_SW 50, Thayer's 19. |
+| Loops | 5 | Fairytopia 631, Weakest Link 390. |
+| Set-only shots | 4 | Mad Dog 1/2, Speed Racer, HP Hogwarts: the Mad Dog machinery is the niche. |
+| Multi-window | 2 | Speed Racer, HP. |
+| Hidden input | 2 | Fairytopia 637, Speed Racer 4. |
+
+Conclusions:
+- Choice + random + buttons-over-video covers about 20 of the 24 discs, so build those
+  next:
+  1. responses + invariants for random discs, with answer keys derived from the
+     right/wrong feedback screens;
+  2. window-aware choices (a Mad Dog window with link buttons);
+  3. the `screens`/`options` annotation format, labelled from scene cards.
+- The clock comes after those.
+
+Limits:
+- Only title-domain input points are counted: Scourge of Worlds, whose game sits in VTSM
+  menus, reads "menus only".
+- "Buttons over video" cannot tell a timed answer from a menu shown over playback.
+- Game-show "choices" (Family Feud ~1400) are mostly small answer-board stills.
+
+Per-disc output: `tools/streams/hil_runs/interactive_classes.jsonl` (gitignored).
+
 ## Known limits / next
 
 - `at_pts` maps PTS through picture count since `base`, so it is valid only on one
