@@ -94,25 +94,6 @@ def card(iso, script, out_dir, every=2.5, try_buttons=False, max_scene_frames=24
         Q.run(' '.join(map(str, script[:-1])), park_on_buttons=True)
         prev = Q.trace
     scene = here[len(prev):] if here[:len(prev)] == prev else here[-8:]
-    choice_cell = scene[-1:] if scene else here[-1:]
-    with tempfile.TemporaryDirectory() as td:
-        sv, cv = os.path.join(td, 'scene.vob'), os.path.join(td, 'choice.vob')
-        _cut(iso, scene[:-1] or scene, sv)
-        _cut(iso, choice_cell, cv)
-        frames, has_sub = _frames(sv, every, True) if os.path.getsize(sv) else ([], False)
-        choice = _last_frame(cv)
-    if len(frames) > max_scene_frames:           # keep the end: the lines that pose the choice
-        frames = frames[-max_scene_frames:]
-    # the choice screen, buttons numbered (rects are in 720x480 picture coordinates)
-    cw, ch = 720, 480
-    ci = (choice or Image.new('RGB', (cw, ch))).convert('RGB').resize((cw, ch))
-    d = ImageDraw.Draw(ci)
-    fnt = _font(22)
-    for b in btns:
-        if b.get('x2', 0) > b.get('x1', 0):
-            d.rectangle([b['x1'], b['y1'], b['x2'], b['y2']], outline=(255, 0, 255), width=3)
-            d.text((b['x1'] + 4, b['y1'] + 2), str(b['n']), fill=(255, 255, 0), font=fnt,
-                   stroke_width=3, stroke_fill=(0, 0, 0))
     landing = {}
     if try_buttons:
         for b in btns:
@@ -123,6 +104,36 @@ def card(iso, script, out_dir, every=2.5, try_buttons=False, max_scene_frames=24
                 s2 = rows[-1][1]
                 landing[b['n']] = '%s VTS %d PGC %d cell %d (%d buttons)' % (
                     CG.DOMS.get(s2['dom'], s2['dom']), s2['vts'], s2['pgcn'], s2['cell'], s2['buttons'])
+    return _render(iso, scene, btns, st, script, out_dir, every, landing,
+                   'card_%s.png' % ('_'.join(map(str, script)) or 'start'),
+                   'script: %s' % (' '.join(map(str, script)) or '(power-on)'))
+
+
+def _render(iso, scene, btns, st, script, out_dir, every, landing, name, label, max_scene_frames=24):
+    os.makedirs(out_dir, exist_ok=True)
+    choice_cell = scene[-1:]
+    with tempfile.TemporaryDirectory() as td:
+        sv, cv = os.path.join(td, 'scene.vob'), os.path.join(td, 'choice.vob')
+        _cut(iso, scene[:-1] or scene, sv)
+        _cut(iso, choice_cell, cv)
+        frames, has_sub = _frames(sv, every, True) if os.path.getsize(sv) else ([], False)
+        choice = _last_frame(cv)
+    if len(frames) > max_scene_frames:           # keep the end: the lines that pose the choice
+        frames = frames[-max_scene_frames:]
+    # the choice screen, buttons numbered (rects are in 720x480 picture coordinates)
+    cw, ch = 720, 480
+    # draw the buttons on the frame at its OWN size: button rects are in the picture's
+    # coordinates (720x576 on PAL), so drawing them after a resize to 480 lines puts every
+    # rectangle ~20 % too low
+    ci = (choice or Image.new('RGB', (cw, ch))).convert('RGB')
+    d = ImageDraw.Draw(ci)
+    fnt = _font(22)
+    for b in btns:
+        if b.get('x2', 0) > b.get('x1', 0):
+            d.rectangle([b['x1'], b['y1'], b['x2'], b['y2']], outline=(255, 0, 255), width=3)
+            d.text((b['x1'] + 4, b['y1'] + 2), str(b['n']), fill=(255, 255, 0), font=fnt,
+                   stroke_width=3, stroke_fill=(0, 0, 0))
+    ci = ci.resize((cw, ch))
     # compose: scene grid on top, choice + legend below
     cols = 4
     rows_ = (len(frames) + cols - 1) // cols
@@ -136,15 +147,15 @@ def card(iso, script, out_dir, every=2.5, try_buttons=False, max_scene_frames=24
     img.paste(ci, (0, top))
     d = ImageDraw.Draw(img)
     f2 = _font(16)
-    head = '%s VTS %d PGC %d cell %d  --  script: %s' % (
-        CG.DOMS.get(st['dom'], st['dom']), st['vts'], st['pgcn'], st['cell'], ' '.join(map(str, script)) or '(power-on)')
+    head = '%s VTS %d PGC %d cell %d  --  %s' % (
+        CG.DOMS.get(st['dom'], st['dom']), st['vts'], st['pgcn'], st['cell'], label)
     d.text((cw + 12, top + 8), head, fill=(255, 255, 255), font=f2)
     d.text((cw + 12, top + 32), 'scene: %d cells, %d frames, subtitles %s' % (
         len(scene), len(frames), 'burnt in' if has_sub else 'NONE on this disc/scene'),
         fill=(200, 200, 200), font=f2)
     for i, line in enumerate(legend):
         d.text((8, top + ch + 12 + lh * i), line, fill=(255, 255, 160), font=f2)
-    png = os.path.join(out_dir, 'card_%s.png' % ('_'.join(map(str, script)) or 'start'))
+    png = os.path.join(out_dir, name)
     img.save(png)
     meta = {'script': list(script), 'at': {k: st[k] for k in ('dom', 'vts', 'pgcn', 'cell')},
             'gprm': st['gprm'], 'scene_cells': [list(c[:4]) for c in scene],
@@ -154,15 +165,43 @@ def card(iso, script, out_dir, every=2.5, try_buttons=False, max_scene_frames=24
     return png, meta
 
 
+def card_at(iso, at, out_dir, every=2.5):
+    """A card for a TITLE-domain screen named by its location ("TT/vts/pgcn/cell"),
+    rendered from the disc without playing to it -- for discs whose draws (rnd) make a
+    script from power-on unrepeatable. The scene is the cells after the previous input
+    point of the same PGC; no landing (the VM is not run)."""
+    import disc_timing as DT
+    dom, vts, pgcn, cell = at.split('/')
+    vts, pgcn, cell = int(vts), int(pgcn), int(cell)
+    if dom != 'TT':
+        raise SystemExit('--at renders title-domain screens (TT/vts/pgcn/cell)')
+    d = DT.dump(iso, vts, pgcn)
+    cells = d['cells']
+    first = cell - 1
+    while first > 0 and not (cells[first - 1]['hli'] and cells[first - 1]['hli'][0]['btn_ns']):
+        first -= 1
+    scene = [(3, vts, pgcn, c['cell'] - 1, c['lba_first'], c['lba_last']) for c in cells[first:cell]]
+    h = cells[cell - 1]['hli'][0] if cells[cell - 1]['hli'] else None
+    btns = [dict(b, fosl=h['fosl'], sptm_lo=h['s_ptm'] & 0xFFFFF) for b in (h['buttons'] if h else [])]
+    return _render(iso, scene, btns, {'dom': 2, 'vts': vts, 'pgcn': pgcn, 'cell': cell,
+                                      'gprm': [0] * 16}, [], out_dir, every, {},
+                   'card_at_%d_%d_%d.png' % (vts, pgcn, cell), 'at %s' % at)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     ap.add_argument('iso')
     ap.add_argument('--script', default='', help='button numbers from power-on, space-separated')
+    ap.add_argument('--at', help='render a title-domain screen by location instead, e.g. TT/5/7/2 '
+                    '(no playing: for discs whose draws make a script unrepeatable)')
     ap.add_argument('-o', '--out', required=True)
     ap.add_argument('--every', type=float, default=2.5, help='scene sampling period (s)')
     ap.add_argument('--try', dest='try_', action='store_true', help='show where each button leads')
     a = ap.parse_args()
-    png, meta = card(a.iso, [int(x) for x in a.script.split()], a.out, a.every, a.try_)
+    if a.at:
+        png, meta = card_at(a.iso, a.at, a.out, a.every)
+    else:
+        png, meta = card(a.iso, [int(x) for x in a.script.split()], a.out, a.every, a.try_)
     print(png)
     print(json.dumps({k: meta[k] for k in ('at', 'scene_cells', 'subtitles', 'landing')}))
 

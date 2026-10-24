@@ -21,6 +21,8 @@ The run directory's scenario.json carries "expect": a list of assertions, each o
                                       cells (of the measured VTS) were on screen
     no_freeze       {cells, max_s}    no frozen picture >= max_s over the same span
     no_purple       {}                no frame washed purple (the one-picture SPU blip)
+    answers_right   {}                every answer given from a responses table (quiz_key)
+                                      was followed by the right answer's branch
     route_followed  {}                a planned choice route (play.route_script) was taken
                                       step by step where the offline model predicted
 
@@ -243,6 +245,70 @@ def a_no_purple(r, x):
     if len(hits):
         return FAIL, '%d purple frame(s) of %d, first at capture %.2f s' % (len(hits), n, hits[0] / 60.0)
     return PASS, 'none in %d frames' % n
+
+
+def a_answers_right(r, x):
+    """Every answer the agent gave (responses) was followed by the disc taking the RIGHT
+    answer's branch: the next PGC / cell event after the press matches the target its
+    command names (LinkPGCN n -> PGC n; LinkPGN/LinkCN n -> that program/cell). An answer
+    whose command names no checkable target is counted, not judged."""
+    if not r.fifo:
+        return NODATA, 'no nav FIFO on this core'
+    answers = [o for o in r.lines if 'respond' in o and 'button' in o]
+    if not answers:
+        return NODATA, 'no question screen came up'
+    table = {}
+    for st in r.sc.get('steps', []):
+        for k in (st.get('play') or {}).get('responses') or []:
+            table[k['at']] = k
+    ok, bad, unk = 0, [], 0
+    for a in answers:
+        key = table.get(a['respond'], {})
+        if key.get('right_path'):
+            # the path the disc took after the press, leaving the question's PGC: the
+            # (vts, pgcn, cell) of each CELL event, PGCN carried from PGC events
+            _, qv, qp, _ = a['respond'].split('/')
+            seq, pg = [], None
+            for e in r.nav:
+                if e['t_ev'] <= a['t']:
+                    continue
+                if e['ev'] == 'PGC':
+                    pg = e.get('pgcn')
+                elif e['ev'] == 'CELL' and pg is not None:
+                    step = [e.get('vts'), pg, e.get('cell', -1) + 1]
+                    if (step[0], step[1]) != (int(qv), int(qp)):
+                        seq.append(step)
+                if len(seq) >= len(key['right_path']):
+                    break
+            rp, wp = [list(x) for x in key['right_path']], [list(x) for x in key['wrong_path'] or []]
+            if seq[:len(rp)] == rp:
+                ok += 1
+            elif seq and seq[:len(wp)] == wp:
+                bad.append('%s: took the WRONG branch %s' % (a['respond'], seq[:2]))
+            else:
+                unk += 1
+            continue
+        m = re.search(r'Link(PGCN|PGN|CN) (\d+)', a.get('right', ''))
+        if not m:
+            unk += 1
+            continue
+        kind, n = m.group(1), int(m.group(2))
+        nxt = next((e for e in r.nav if e['t_ev'] > a['t'] and e['ev'] in ('PGC', 'CELL')), None)
+        if nxt is None:
+            unk += 1
+        elif (kind == 'PGCN' and nxt['ev'] == 'PGC' and nxt.get('pgcn') == n) or (
+                kind == 'CN' and nxt['ev'] == 'CELL' and nxt.get('cell', -1) + 1 == n) or (
+                kind == 'PGN' and nxt['ev'] == 'CELL'):     # program -> cell needs the map
+            ok += 1
+        else:
+            bad.append('%s: expected %s %d, disc went to %s' % (a['respond'], kind, n,
+                       {k: nxt.get(k) for k in ('ev', 'vts', 'pgcn', 'cell')}))
+    if bad:
+        return FAIL, '%d right, %d wrong branch: %s' % (ok, len(bad), '; '.join(bad[:3]))
+    if not ok:
+        return NODATA, '%d answers, none with a checkable target' % unk
+    return PASS, '%d answers took the right branch%s; %d distinct questions' % (
+        ok, (', %d unjudged' % unk) if unk else '', len({a['respond'] for a in answers}))
 
 
 def a_route_followed(r, x):

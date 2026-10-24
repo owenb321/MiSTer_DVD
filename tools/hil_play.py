@@ -272,6 +272,24 @@ for i, st in enumerate(sc["steps"]):
                 ev = nav_new.pop(0)
                 if ev.get("ev") != "HLI_ARM" or not ev.get("btn_ns"):
                     continue
+                # responses (tools/quiz_key.py): a screen -> answer table for discs whose
+                # draws make the order unknowable. Matched on every arm, in any order,
+                # never consumed; each answer is logged so hil_expect can check the disc
+                # took the RIGHT branch afterwards.
+                resp = next((r_ for r_ in pl.get("responses") or []
+                             if ev["sptm_lo"] == r_["sptm_lo"] and nav.get("vts") == r_["vts"]
+                             and nav.get("pgcn") == r_["pgcn"]), None)
+                if resp is not None:
+                    start = resp["fosl"] or 1
+                    taps = resp["paths"].get(str(start)) or []
+                    for n_, k in enumerate(taps):
+                        pending.append((mono() + pl.get("route_delay_s", 0.3) + 0.06 * n_, k,
+                                        {"respond": resp["at"]}))
+                    pending.append((mono() + pl.get("route_delay_s", 0.3) + 0.06 * len(taps) + 0.1,
+                                    "select", {"respond": resp["at"]}))
+                    out({"respond": resp["at"], "button": resp["answer"], "taps": taps,
+                         "right": resp["right"], "t": mono(), "arm_t": ev["t_ev"]})
+                    continue
                 # a planned route (tools/choice_graph.py route --steps): each step names
                 # the input point it expects (VTS, PGCN, hli_s_ptm low bits) and the button;
                 # an arm that is not the next step is logged and NOT pressed -- a route
@@ -513,6 +531,10 @@ def run_agent(sc, out_dir):
     for st in sc['steps']:
         # a choice route is stored as its button script; the per-step plan (what each
         # input point looks like, how to aim) is derived from the image at run time
+        if 'play' in st and st['play'].get('responses_from') == 'quiz_key' and not st['play'].get('responses'):
+            import quiz_key
+            st['play']['responses'] = quiz_key.responses(sc.get('_local_iso'))
+            print('  responses: %d answer keys from the disc' % len(st['play']['responses']), flush=True)
         if 'play' in st and st['play'].get('route_script') is not None and not st['play'].get('route'):
             import choice_graph
             st['play']['route'] = choice_graph.route_steps(sc.get('_local_iso'),

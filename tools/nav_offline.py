@@ -461,6 +461,11 @@ class Player:
                     if h and 1 <= n <= nb:
                         self.sh.inp_lv['btn_sel'] = n
                         v = self.verdict(self.vm(f'pulse btn={h[2][n - 1].hex()}'))
+                elif t.startswith('x') and len(t) == 17:
+                    # 'x<16 hex>': execute that 8-byte VM command here as a button would
+                    # (no button selected) -- e.g. JumpTT + LinkPGCN to reach a screen a
+                    # random disc cannot be replayed to (tools/quiz_key.py)
+                    v = self.verdict(self.vm(f'pulse btn={t[1:]}'))
                 elif t == 'mR':
                     v = self.verdict(self.vm('pulse menu'))
                 elif t == 'mT':
