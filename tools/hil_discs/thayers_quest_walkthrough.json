@@ -154,11 +154,162 @@
    "scene": "Marsh wastes with the Cold Fire burning; hotspot 7 over the flames.",
    "why": "Take the Cold Fire.",
    "outcome": "ITEM: Cold Fire into the pouch. [Druce's voice] 'Take care, my apprentice! Even the magic of the pouch has a limit.' 'The Relics! The Relics are important!' The hotspot is gone."
+  },
+  {
+   "script": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    2,
+    2,
+    4,
+    7
+   ],
+   "press": 1,
+   "scene": "Marsh wastes after taking the Cold Fire: 1 Timberland, 2 Muddy Path, 3 Misty Path, 4 Foggy Path.",
+   "why": "Head for the forest (the Relic's Castle of Crystal) by the way known: back through Timberland.",
+   "outcome": "Timberland again (same choice, VTS 2 cell 31)."
+  },
+  {
+   "script": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    2,
+    2,
+    4,
+    7,
+    1
+   ],
+   "press": 1,
+   "scene": "Timberland: 1 Forest Path, 2 Hunting Ground, 3 Village of Glendoe, 4 Marsh Wastes.",
+   "why": "The forest.",
+   "outcome": "[Thayer] 'You are the Dryads?' [Dryad] 'Yes! and we know of your quest. Quoid was our friend, and we offer you the help of our Wood Elf Staff.' -> 1 Hunting Ground, 2 Timberland, 3 Enchanted Pool, and hotspot 6 over the staff."
+  },
+  {
+   "script": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    2,
+    2,
+    4,
+    7,
+    1,
+    1
+   ],
+   "press": 6,
+   "scene": "The Dryads offer the Wood Elf Staff (hotspot 6).",
+   "why": "A gift from Quoid's friends.",
+   "outcome": "ITEM: Wood Elf Staff. [Dryad] 'Again, you hold the Wood Elf Staff, which was made by the Elder Kings' magic.'"
+  },
+  {
+   "script": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    2,
+    2,
+    4,
+    7,
+    1,
+    1,
+    6
+   ],
+   "press": 3,
+   "scene": "1 Hunting Ground, 2 Timberland, 3 Enchanted Pool.",
+   "why": "New ground; sounds like the way to a crystal castle.",
+   "outcome": "Water sprites sing: 'Lothar bound a Crystal, but dark enchantment holds it best, so you must use your magic to release this spell of rest.' -> 1 Forest Path, 2 Waterfront, 3 Waterfall. (Clue: the Spell of Release frees the Crystal.)"
+  },
+  {
+   "script": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    2,
+    2,
+    4,
+    7,
+    1,
+    1,
+    6,
+    3
+   ],
+   "press": 3,
+   "scene": "1 Forest Path, 2 Waterfront, 3 Waterfall.",
+   "why": "The singers are at a waterfall; keep the single-use spell until the crystal is in sight.",
+   "outcome": "A healing spring: 'You stand healed of what ails. Travel far! Overlook no source of help!' -> 1 Enchanted Pool, 2 Waterfront."
+  },
+  {
+   "script": [
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    1,
+    2,
+    2,
+    4,
+    7,
+    1,
+    1,
+    6,
+    3,
+    3
+   ],
+   "press": 2,
+   "scene": "1 Enchanted Pool, 2 Waterfront.",
+   "why": "The only new exit.",
+   "outcome": "DEATH: something rises from the water and Thayer drowns. Avoid the Waterfront (perhaps an item or spell is needed there)."
   }
  ],
  "learned": [
   "'You have Died' = VMGM PGC 11 cell 7; Continue returns to the last decision.",
   "Some choices are unlabelled hotspots over objects in the scene (the Cold Fire): picking them up takes an item (CallSS VMGM pgc 7).",
   "Subtitles carry the clues; a scene card must probe the whole cut or late-starting dialogue is lost."
+ ],
+ "open_questions": [
+  "Where is the Castle of Crystal? Unexplored from here: Hunting Ground (from the Dryads, leaves the region), and the marsh's Muddy/Misty/Foggy paths.",
+  "What the pouch button (CallSS VMGM pgc 2) does: presumably use an item or spell; the Spell of Release is for the enchanted Crystal."
  ]
 }
