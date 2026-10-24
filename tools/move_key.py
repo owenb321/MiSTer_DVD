@@ -177,12 +177,24 @@ def _retry(p, at):
     return tuple(p[0][:2]) == (int(v), int(pg)) and p[0][2] <= int(c0)
 
 
-def _verdict(paths, death_set, at=None):
+def _verdict(paths, death_set, at=None, game=False):
     order = lambda k: (k != 'idle', int(k) if k != 'idle' else 0)
     wrong = sorted((k for k, p in paths.items()
                     if any(tuple(e) in death_set or tuple(e) == STOP for e in p) or _retry(p, at)),
                    key=order)
     right = sorted((k for k in paths if k not in wrong), key=order)
+    if not wrong and game and paths.get('idle'):
+        # no death recognised, in a title set where the disc's deaths ARE known: a
+        # reaction window exists to be acted in, so doing nothing is the evidence. A
+        # button that goes where doing nothing goes is a decoy; one that goes elsewhere
+        # is the move (Time Traveler VTS 2 calls a different handler per scene: cell 5's
+        # 'pgc 10' death was never learned, the key read 'unjudged', and the rig died
+        # there after every right landing). Marked inferred ('move~').
+        first = paths['idle'][0]
+        dec = [k for k, p in paths.items() if p[:1] == [first]]
+        go = [k for k in paths if k not in dec]
+        if go and any(k != 'idle' for k in go):
+            return 'move~', int(next(k for k in go if k != 'idle')), sorted(go, key=order), sorted(dec, key=order)
     if not wrong:
         return 'unjudged', None, right, wrong
     if not right:
@@ -282,7 +294,8 @@ def rejudge(res, deaths):
         if r['verdict'] in ('unreached',) or r['verdict'].startswith('error') or not r.get('paths'):
             continue
         paths = {k: [tuple(e) for e in p] for k, p in r['paths'].items()}
-        r['verdict'], r['answer'], r['right'], r['wrong'] = _verdict(paths, deaths, r['at'])
+        r['verdict'], r['answer'], r['right'], r['wrong'] = _verdict(
+            paths, deaths, r['at'], int(r['at'].split('/')[1]) in {e[0] for e in deaths})
     return res
 
 
@@ -320,9 +333,10 @@ def _chain_job(arg):
                 p = dict(p, chain_error=str(e))
         if p.get('paths') and p['verdict'] != 'unreached':
             paths = {k: [tuple(e) for e in q] for k, q in p['paths'].items()}
-            p['verdict'], p['answer'], p['right'], p['wrong'] = _verdict(paths, deaths, p['at'])
+            p['verdict'], p['answer'], p['right'], p['wrong'] = _verdict(
+                paths, deaths, p['at'], int(p['at'].split('/')[1]) in {e[0] for e in deaths})
             p['death_cells'] = sorted(e[2] for e in deaths if e[:2] == (int(p['at'].split('/')[1]), int(p['at'].split('/')[2])))
-        if p['verdict'] in ('move', 'wait'):
+        if p['verdict'] in ('move', 'move~', 'wait'):
             _, v, pg, _ = p['at'].split('/')
             opts = _options(p['cells'], _buttons(iso, p)['buttons'])
             tok = opts.get(str(p['answer']), [])
@@ -390,16 +404,30 @@ def responses(iso, keys_file, pick='right'):
     (hold still: logged, nothing pressed). pick='wrong' aims at the lowest WRONG press
     instead: the control arm, which moves_right must FAIL."""
     import disc_timing as DT
-    out = []
+    out, d_all = [], {}
     for k in map(json.loads, open(keys_file)):
-        if k.get('verdict') not in ('move', 'wait'):
+        if k.get('verdict') not in ('move', 'move~', 'wait'):
             continue
         _, v, pg, cell = k['at'].split('/')
         d = DT.dump(iso, int(v), int(pg), {int(cell)})
         hs = [h for h in d['cells'][int(cell) - 1]['hli'] if h['btn_ns'] and (h['s_ptm'] & 0xFFFFF) == k['sptm_lo']]
         h = hs[0] if hs else d['cells'][int(cell) - 1]['hli'][0]
+        # the other cells of an angle block holding the window: a move must never land in
+        # one (the reader once continued into the sibling angle's copy of the segment)
+        cs = d_all.setdefault((v, pg), DT.dump(iso, int(v), int(pg), {0})['cells'])
+        ci = int(cell) - 1
+        sib = []
+        if (int(cs[ci]['cat'][:2], 16) >> 4) & 3 == 1:
+            a = ci
+            while a > 0 and (int(cs[a]['cat'][:2], 16) >> 6) & 3 != 1:
+                a -= 1
+            b = ci
+            while b + 1 < len(cs) and (int(cs[b]['cat'][:2], 16) >> 6) & 3 != 3:
+                b += 1
+            sib = [x + 1 for x in range(a, b + 1) if x + 1 not in k['cells']]
         # `paths` becomes the agent's steering; the VM's option paths stay for the check
-        ent = dict(k, vm_paths=k['paths'], vts=int(v), pgcn=int(pg), fosl=h['fosl'], timed=True, pick=pick)
+        ent = dict(k, vm_paths=k['paths'], vts=int(v), pgcn=int(pg), fosl=h['fosl'], timed=True, pick=pick,
+                   angle_siblings=sib)
         if pick == 'wrong':
             # the lowest wrong PRESS; where doing nothing is the only wrong option (most
             # Dragon's Lair windows: one right direction), the control holds still

@@ -108,6 +108,8 @@ class Disc(R.IsoNav):
         for i, c in enumerate(p['cells']):
             e = self.rd(abs_byte + p['cell_off'] + i * 24, 24)
             c['first'], c['last_vobu'], c['last'] = struct.unpack('>III', e[8:12] + e[16:24])
+            # cell block mode (1 first, 2 middle, 3 last) and type (1 = angle)
+            c['bmode'], c['btype'] = (e[0] >> 6) & 3, (e[0] >> 4) & 3
         return p
 
     def ptt(self, vts, ttn, part):
@@ -361,6 +363,30 @@ class Player:
                     cell=self.cell + 1, buttons=buttons, gprm=g,
                     gmode=self.sh.m.ram[S.N.RAM_MAP['GMODE']])
 
+    def _block(self, p, ci):
+        """(first, last) cell indexes of the angle block holding cell ci, or None."""
+        cs = p['cells']
+        if ci >= len(cs) or cs[ci].get('btype') != 1:
+            return None
+        a = ci
+        while a > 0 and cs[a].get('bmode') != 1 and cs[a - 1].get('btype') == 1:
+            a -= 1
+        b = ci
+        while b + 1 < len(cs) and cs[b].get('bmode') != 3 and cs[b + 1].get('btype') == 1:
+            b += 1
+        return a, b
+
+    def _block_last(self, p, ci):
+        blk = self._block(p, ci)
+        return blk[1] if blk else ci
+
+    def _angle_cell(self, p, ci):
+        blk = self._block(p, ci)
+        if not blk:
+            return ci
+        ang = self.sh.sprm[3] if 1 <= self.sh.sprm[3] <= 9 else 1
+        return min(blk[0] + ang - 1, blk[1])
+
     def run(self, script, park_on_buttons=False):
         """-> [(action, landing state)] in trace_nav's pairing (the LAST park after
         an action is its landing).
@@ -393,6 +419,9 @@ class Player:
                 continue
             if self.cell >= p['nr_cells']:
                 self.cell = 0
+            # an ANGLE block plays one of its cells, the selected angle's (SPRM3), as
+            # libdvdnav does: entering the block anywhere else moves to that cell
+            self.cell = self._angle_cell(p, self.cell)
             key = (self.dom, self.vts, self.pgcn, self.cell)
             if key != prev or True:          # every entry into a cell is a cell change
                 self.cells += 1
@@ -501,7 +530,9 @@ class Player:
                 continue
             if v[0] == 'replay':
                 continue
-            self.cell += 1
+            # a plain advance out of an angle cell continues PAST the block, not into the
+            # next angle's copy of the same segment (Time Traveler VTS 2: 2-angle blocks)
+            self.cell = self._block_last(p, self.cell) + 1
             if self.cell < p['nr_cells']:
                 continue
             # the PGC ends (its still was the last cell's: still_of)

@@ -552,6 +552,41 @@ nothing.
 | Dragon's Lair II ("Regular Moves") | 206/206 right, 206 distinct windows | 5/5 read wrong |
 | Time Traveler | 0/5: **a core finding**, below | 5/5 read wrong |
 
+**Follow-up (2026-10-24): fixed in `dev-cellcmdhold13` (#176 branch).**
+- The #176 owner found the cause: Time Traveler's VTS 2 windows sit in **angle blocks**,
+  which the hold excluded.
+- Fixing that exposed a second bug: a CONTINUE verdict inside an angle block advanced into
+  the sibling angle's copy of the segment.
+- On hold13 the cell command runs +0.65 to +0.91 s after the arm, and a hit lands on the
+  cell after the block (3 → 5, 25 → 27, 29 → 31, 31 → 33).
+- Time Traveler's VTS 2 now passes (5/5 moves right) and plays on into the next level.
+- Controls stay green: Mad Dog first shootout and VTS 15; Dragon's Lair II 206/206; Castle
+  in the Sky's angle-block joins (below).
+
+The harness had three faults of its own on the way:
+1. `nav_offline` played every cell of an angle block (the same CONTINUE bug), so keys
+   expected the sibling cell.
+   - It now plays the SPRM3 angle's cell and continues past the block.
+   - The libdvdnav diff gives the same verdicts on Time Traveler and Castle.
+   - `moves_right` FAILs a landing in the window's sibling angle cell (`angle_siblings`).
+2. `moves_right` read a VMGM handler's CELL event (menu = 1, cell 0, the calling VTS) as
+   title cell 1. Menu-domain cells are now ignored.
+3. Time Traveler calls a different death handler per scene. A title set whose deaths are
+   known but whose window's is not gets an **inferred** key (`move~`): the press that does
+   not go where doing nothing goes.
+
+**Angle-block films: `junction_clean`.**
+- For each FIFO entry into the listed cells, freeze and silence are measured in
+  [−1, +6] s of capture, located through `clock.json`. Picture matching is not used: on a
+  long film it scattered, and a span-based check read PASS over 0.0 s spans. Span checks
+  now read NODATA below 1 s.
+- A capture freeze or silence counts only if it is longer than the disc's own across the
+  same join, plus 0.4 s.
+- Castle in the Sky (`castle_in_the_sky.json`, angle 2, joins 2 → 3 and 5 → 6) passes on
+  hold12 and on hold13. Its 2.35 s and 0.82 s freezes are the film's title card and a still
+  shot (2.50 s and 0.65 s in the source).
+- With the tolerance negated, the same run FAILs.
+
 **Core finding: Time Traveler's cell commands run before their windows open.**
 - In VTS 2, every window opens late in a 3–5 s cell (TT/2/1/3: 3.34–4.30 s of 4.33 s).
 - The cell's death test (`if (g[0] < g[1]) LinkPTT 1`) runs **0.18 s before the window

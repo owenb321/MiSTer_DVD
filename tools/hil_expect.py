@@ -20,6 +20,8 @@ The run directory's scenario.json carries "expect": a list of assertions, each o
     no_silence      {cells, max_s}    no capture silence (-60 dB) >= max_s while those
                                       cells (of the measured VTS) were on screen
     no_freeze       {cells, max_s}    no frozen picture >= max_s over the same span
+    junction_clean  {vts, cells, window, max_s}  no freeze/silence >= max_s around each FIFO
+                                      entry into those cells (angle-block ends, joins)
     no_purple       {}                no frame washed purple (the one-picture SPU blip)
     answers_right   {verdict, want}   every answer given from a responses table (quiz_key)
                                       was followed by the right answer's branch; with
@@ -208,6 +210,10 @@ def _detect(r, x, kind):
         return NODATA, 'cells %s never on screen' % x['cells']
     lo, hi = sp
     mx = x.get('max_s', 0.3)
+    if hi - lo < max(1.0, mx):
+        # a span the alignment barely saw cannot vouch for anything (castle_h12c: 0.0 s
+        # and 0.2 s spans read PASS) -- an instrument blind to its subject reports health
+        return NODATA, 'cells %s on screen for only %.1f s in the alignment' % (x['cells'], hi - lo)
     if kind == 'silence':
         args = ['-vn', '-af', 'silencedetect=n=-60dB:d=%.2f' % mx]
         key = 'silence_duration'
@@ -220,6 +226,89 @@ def _detect(r, x, kind):
     if runs:
         return FAIL, '%s run(s) %s s over cells %s (%.1f s span)' % (kind, [round(v, 3) for v in runs], x['cells'], hi - lo)
     return PASS, 'none >= %.2f s over cells %s (%.1f s span)' % (mx, x['cells'], hi - lo)
+
+
+def a_junction_clean(r, x):
+    """No frozen picture or silence >= max_s around each entry into the listed cells of
+    VTS x['vts'] (an angle-block end, a seamless join). The entries come from the nav
+    FIFO's CELL events (the reader's), mapped to the capture through clock.json, and
+    each is checked over [entry + window[0], entry + window[1]] s -- the picture runs
+    behind the reader, so the window reaches past it. Picture matching is NOT used: on a
+    long film it scatters, and its spans read 0 s."""
+    if not r.fifo:
+        return NODATA, 'no nav FIFO on this core'
+    if not r.cap:
+        return NODATA, 'no capture'
+    ck = os.path.join(r.d, 'clock.json')
+    if not os.path.exists(ck):
+        return NODATA, 'no clock.json'
+    off = json.load(open(ck))['board_mono_to_host_wall']
+    start = float(subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=start_time',
+                                  '-of', 'csv=p=0', r.cap], capture_output=True, text=True).stdout)
+    dur = float(subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                                '-of', 'csv=p=0', r.cap], capture_output=True, text=True).stdout)
+    w0, w1 = x.get('window', [-1.0, 6.0])
+    mx = x.get('max_s', 0.5)
+    ents, bad, seen = [], [], set()
+    for e in r.nav:
+        if e['ev'] == 'CELL' and e.get('vts') == x['vts'] and e.get('cell', -1) + 1 in x['cells']:
+            c = e['cell'] + 1
+            if c in seen:
+                continue
+            seen.add(c)
+            t = e['t_ev'] + off - start
+            if 0 <= t + w0 and t + w1 <= dur:
+                ents.append((c, t))
+    if not ents:
+        return NODATA, 'no entry into cells %s inside the capture' % x['cells']
+    iso = r.sc.get('_local_iso')
+    tol = x.get('tolerance_s', 0.4)
+
+    def runs_of(src, ss, tt, kind, scale=''):
+        if kind == 'freeze':
+            args, key = ['-an', '-vf', scale + 'crop=520:300:100:90,freezedetect=n=0.002:d=%.2f' % mx], 'freeze_duration'
+        else:
+            args, key = ['-vn', '-af', 'silencedetect=n=-60dB:d=%.2f' % mx], 'silence_duration'
+        p = subprocess.run(['ffmpeg', '-hide_banner', '-ss', '%.3f' % max(ss, 0), '-i', src, '-t', '%.3f' % tt]
+                           + args + ['-f', 'null', '-'], capture_output=True, text=True)
+        out = []
+        for l in p.stderr.splitlines():          # back-to-back runs add up
+            if key + ':' in l:
+                out.append(float(l.split(key + ':')[1].split()[0]))
+        return sum(out) if out else 0.0
+
+    def ref_cut(c):
+        # the disc's own pictures/sound across the join: the previous cell and this one
+        import disc_timing as DT
+        d = DT.dump(iso, x['vts'], x.get('pgcn', 1), {0})
+        prev = c - 1
+        path = os.path.join(r.d, 'ref_join_%d.vob' % c)
+        if not os.path.exists(path):
+            with open(iso, 'rb') as f, open(path, 'wb') as o:
+                for cc in (prev, c):
+                    z = d['cells'][cc - 1]
+                    f.seek(z['lba_first'] * 2048)
+                    o.write(f.read((z['lba_last'] - z['lba_first'] + 1) * 2048))
+        return path, d['cells'][prev - 1]['dur']
+
+    for c, t in ents:
+        for kind in ('freeze', 'silence'):
+            got = runs_of(r.cap, t + w0, w1 - w0, kind)
+            if not got:
+                continue
+            ref = 0.0
+            if iso and os.path.exists(iso):
+                # the film may hold a still or a quiet moment there itself: only a capture
+                # freeze/silence LONGER than the disc's own across the same join is a hitch
+                # (Castle in the Sky: a title card after the opening angle block)
+                path, jt = ref_cut(c)
+                ref = runs_of(path, jt + w0, w1 - w0, kind, 'scale=720:480,')
+            if got > ref + tol:
+                bad.append('cell %d: %s %.2f s (the disc itself %.2f s)' % (c, kind, got, ref))
+    if bad:
+        return FAIL, '; '.join(bad)
+    return PASS, 'no freeze or silence >= %.2f s around %d entries %s (window %s s)' % (
+        mx, len(ents), [c for c, _ in ents], [w0, w1])
 
 
 def a_no_silence(r, x):
@@ -386,11 +475,17 @@ def a_moves_right(r, x):
         # and every cell of this PGC that runs the disc's death command (move_key)
         clips |= {(v, c) for c in k.get('death_cells') or []}
         t1 = min(moves[i + 1]['t'] if i + 1 < len(moves) else float('inf'), a['t'] + 8)
+        # title-domain cells only: while a VMGM handler runs (CallSS), the FIFO's CELL
+        # event carries menu=1, cell 0 and the CALLING VTS -- read as title cell 1, it
+        # matched Time Traveler's death cell 1 after every right move
         seq = [(e.get('vts'), e.get('cell', -1) + 1) for e in r.nav
-               if e['ev'] == 'CELL' and a['t'] < e['t_ev'] < t1
+               if e['ev'] == 'CELL' and a['t'] < e['t_ev'] < t1 and not e.get('menu')
                and not (e.get('vts') == v and e.get('cell', -1) + 1 in k['cells'])]
         hit = next((e for e in seq if e in clips), None)
-        if hit:
+        if seq and seq[0] in {(v, c) for c in k.get('angle_siblings') or []}:
+            bad.append('%s (pressed %s): played VTS %d cell %d, the window\'s OTHER ANGLE copy' % (
+                a['respond'], a['button'], *seq[0]))
+        elif hit:
             bad.append('%s (pressed %s, key %s): played VTS %d cell %d, a death clip' % (
                 a['respond'], a['button'], k['answer'], *hit))
         elif seq and seq[0] in rfirst:

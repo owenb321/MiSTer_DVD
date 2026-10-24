@@ -45,6 +45,11 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
       VTS 2 cell command 0.18 s BEFORE the window arms: the reader's cell end, ~1.2 s
       ahead of display on that low-bitrate set. Pre-existing on `main`; reported to the
       #176 session.
+    - Fixed by the #176 owner in `dev-cellcmdhold13`: the windows sit in angle blocks,
+      which the hold excluded; and a CONTINUE verdict there advanced into the sibling
+      angle. On hold13, Time Traveler VTS 2 passes 5/5 and the controls hold (Mad Dog,
+      Dragon's Lair II, Castle in the Sky's angle joins, now checked by
+      `junction_clean`).
     - Rules added: per-set and disc-wide death commands, immediate retry, play-stops,
       treasure detours, a tutorial `skip_keys`, already-highlighted Select, and colliding
       `hli_s_ptm` resolved by read time.
