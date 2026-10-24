@@ -425,6 +425,8 @@ same run aiming at a wrong button) found the discriminator:
 `answers_right` takes `{"verdict": {"g": 7, "right": "up"}}`: a right answer is followed
 by a g[7] write that raises it. `"want": "wrong"` scores the control arm. Each arm PASSes
 its own expectation and FAILs the other's, so the register can tell the two apart.
+Confirmed on the rig with the full re-judged cache (`wl_answer3`): 18 of 18 answers raised
+g[7], over 19 distinct questions. The 19th was still pending when the run ended.
 
 Generalising to another quiz disc:
 1. key the disc with `--vm`, adding a setup for any clock register;
