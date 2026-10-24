@@ -21,8 +21,10 @@ The run directory's scenario.json carries "expect": a list of assertions, each o
                                       cells (of the measured VTS) were on screen
     no_freeze       {cells, max_s}    no frozen picture >= max_s over the same span
     no_purple       {}                no frame washed purple (the one-picture SPU blip)
-    answers_right   {}                every answer given from a responses table (quiz_key)
-                                      was followed by the right answer's branch
+    answers_right   {verdict, want}   every answer given from a responses table (quiz_key)
+                                      was followed by the right answer's branch; with
+                                      verdict {g, right: up}, by a write raising GPRM g
+                                      (the disc's score); want "wrong" = the control arm
     route_followed  {}                a planned choice route (play.route_script) was taken
                                       step by step where the offline model predicted
 
@@ -257,6 +259,8 @@ def a_answers_right(r, x):
     answers = [o for o in r.lines if 'respond' in o and 'button' in o]
     if not answers:
         return NODATA, 'no question screen came up'
+    if x.get('verdict'):
+        return _answers_by_register(r, x, answers)
     table = {}
     for st in r.sc.get('steps', []):
         for k in (st.get('play') or {}).get('responses') or []:
@@ -280,15 +284,17 @@ def a_answers_right(r, x):
                         seq.append(step)
                 if len(seq) >= len(key['right_path']):
                     break
-            rp, wp = [list(x) for x in key['right_path']], [list(x) for x in key['wrong_path'] or []]
+            rp = [list(x) for x in key['right_path']]
+            wps = key.get('wrong_paths') or ([key['wrong_path']] if key.get('wrong_path') else [])
+            wps = [[list(x) for x in w] for w in wps]
             if seq[:len(rp)] == rp:
                 ok += 1
-            elif seq and seq[:len(wp)] == wp:
-                bad.append('%s: took the WRONG branch %s' % (a['respond'], seq[:2]))
+            elif any(seq[:len(w)] == w for w in wps):
+                bad.append('%s: took the WRONG branch %s' % (a['respond'], seq[:len(rp)]))
             else:
                 unk += 1
             continue
-        m = re.search(r'Link(PGCN|PGN|CN) (\d+)', a.get('right', ''))
+        m = re.search(r'Link(PGCN|PGN|CN) (\d+)', a.get('right') or '')
         if not m:
             unk += 1
             continue
@@ -309,6 +315,38 @@ def a_answers_right(r, x):
         return NODATA, '%d answers, none with a checkable target' % unk
     return PASS, '%d answers took the right branch%s; %d distinct questions' % (
         ok, (', %d unjudged' % unk) if unk else '', len({a['respond'] for a in answers}))
+
+
+def _answers_by_register(r, x, answers):
+    """answers_right judged by the disc's own score register (expect {"verdict": {"g": N,
+    "right": "up"}}): after each answer, the first VM write to GPRM g[N] must RAISE it
+    for a right answer; anything else (Weakest Link: the chain resets to 0) is wrong.
+    A path compare cannot do this on a disc whose feedback PGCs depend on the game's
+    state (players, round): the offline key, played from a cold start, names PGCs the
+    rig never visits. x["want"] = "wrong" is the control arm (quiz_key pick='wrong'):
+    there every answer must read wrong, or the register cannot tell the two apart."""
+    g = int(x['verdict']['g'])
+    want = x.get('want', 'right')
+    writes = [e for e in r.nav if e['ev'] == 'GPRM' and e.get('g') == g]
+    ok, bad, unk = 0, [], 0
+    for i, a in enumerate(answers):
+        t1 = answers[i + 1]['t'] if i + 1 < len(answers) else float('inf')
+        before = next((e['val'] for e in reversed(writes) if e['t_ev'] <= a['t']), 0)
+        after = next((e['val'] for e in writes if a['t'] < e['t_ev'] < t1), None)
+        if after is None:
+            unk += 1
+            continue
+        got = 'right' if after > before else 'wrong'
+        if got == want:
+            ok += 1
+        else:
+            bad.append('%s b%d: g[%d] %d -> %d reads %s' % (a['respond'], a['button'], g, before, after, got))
+    if bad:
+        return FAIL, '%d read %s, %d did not: %s' % (ok, want, len(bad), '; '.join(bad[:3]))
+    if not ok:
+        return NODATA, '%d answers, none followed by a g[%d] write' % (len(answers), g)
+    return PASS, '%d answers read %s by g[%d]%s; %d distinct questions' % (
+        ok, want, g, (', %d with no write' % unk) if unk else '', len({a['respond'] for a in answers}))
 
 
 def a_route_followed(r, x):

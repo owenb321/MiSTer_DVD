@@ -106,12 +106,18 @@ def _lpgcn(n):
 def title_entries(iso, setup=()):
     """{vts: ttn}: the title whose JumpTT lands in each VTS (probed in the VM)."""
     import nav_offline as N
-    out = {}
+    out, misses = {}, 0
     for k in range(1, 100):
         P = N.Player(iso)
         rows = P.run(' '.join(list(setup) + [_jtt(k)]), park_on_buttons=True)
         if not rows:
-            break
+            # one title that does not park (a credits title, a menu title) must not hide
+            # every title after it: Weakest Link's banks run past VTS 20
+            misses += 1
+            if misses >= 6:
+                break
+            continue
+        misses = 0
         st = rows[-1][1]
         if st['dom'] == 2 and st['vts'] not in out:
             out[st['vts']] = k
@@ -138,18 +144,54 @@ def vm_key(iso, setup, ttn, vts, pgcn, cell, buttons):
     for b in buttons:
         path, _ = _path_after(iso, base + [str(b['n'])])
         paths[b['n']] = path
+    return _judge_paths(vts, pgcn, cell, paths) + (paths,)
+
+
+def _judge_paths(vts, pgcn, cell, paths):
+    """-> (verdict, answer, right_path, wrong_paths) from each button's path after the
+    press. Buttons that come back to this same screen (bank, replay) are set aside."""
+    paths = {int(n): [tuple(e) for e in p] for n, p in paths.items()}
     back = {n for n, p in paths.items() if p and p[0][:2] == (vts, pgcn) and p[0][2] <= cell}
     # compare from where the path LEAVES this question's PGC: each answer usually has its
     # own short feedback cell first (Weakest Link: cells 3/7/6/4), and only then do the
     # right and the wrong answers part ways
-    rest = {n: tuple(e for e in p if e[:2] != (vts, pgcn))[:3] for n, p in paths.items() if n not in back}
-    c = collections.Counter(rest.values())
-    if len(rest) >= 3 and len(c) == 2:
-        (maj, nmaj), (odd, nodd) = c.most_common()
-        if nodd == 1:
-            ans = next(n for n, p in rest.items() if p == odd)
-            return 'vm-odd-one-out', ans, list(odd), list(maj), paths
-    return ('vm-all-same' if len(c) == 1 else 'vm-mixed'), None, None, None, paths
+    rest = {n: tuple(e for e in p if e[:2] != (vts, pgcn)) for n, p in paths.items() if n not in back}
+    if len(rest) >= 3:
+        # the first STEP at which exactly one button goes somewhere and all the others
+        # agree: wrong answers can take different first steps and rejoin later
+        # (Weakest Link VTS 24: b1/b2 via PGC 24, b4 via PGC 25, all then PGC 75; the
+        # right b3 via PGC 23 then PGC 76). The others must agree on a real step: paths
+        # that have all ENDED (None) agree on nothing -- that read the player-count menu
+        # (TT/21/30/1: Single Player / Tutorial / a hidden button) as a question
+        for i in range(max(len(p) for p in rest.values())):
+            at = {n: (p[i] if i < len(p) else None) for n, p in rest.items()}
+            c = collections.Counter(at.values())
+            if len(c) == 2:
+                (maj, nmaj), (odd, nodd) = c.most_common()
+                if nodd == 1 and nmaj >= 2 and odd is not None and maj is not None:
+                    ans = next(n for n, e in at.items() if e == odd)
+                    wrong = sorted({tuple(rest[n][:i + 1]) for n in rest if n != ans})
+                    return 'vm-odd-one-out', ans, list(rest[ans][:i + 1]), [list(w) for w in wrong]
+    c = collections.Counter(tuple(p) for p in rest.values())
+    return ('vm-all-same' if len(c) == 1 else 'vm-mixed'), None, None, None
+
+
+def rejudge(keys_file, out_file):
+    """Re-judge a VM key file from the paths it stores (no VM run): for a change to the
+    judging rule, which would otherwise mean a multi-hour rescan."""
+    out = []
+    for l in open(keys_file):
+        k = json.loads(l)
+        if k.get('paths'):
+            _, v, pg, cell = k['at'].split('/')
+            how, ans, rp, wp = _judge_paths(int(v), int(pg), int(cell), k['paths'])
+            k.update(how=how, answer=ans, right_path=rp, wrong_paths=wp)
+            k.pop('wrong_path', None)
+        out.append(k)
+    with open(out_file, 'w') as f:
+        for k in out:
+            f.write(json.dumps(k) + '\n')
+    return out
 
 
 def _vm_job(arg):
@@ -162,7 +204,7 @@ def _vm_job(arg):
         verdict, ans, rp, wp, paths = vm_key(iso, setup, ttn, int(v), int(pg), int(cell), h['buttons'])
     except Exception as e:
         return dict(k, how='vm-error: %s' % e, answer=None)
-    return dict(k, how=verdict, answer=ans, right_path=rp, wrong_path=wp,
+    return dict(k, how=verdict, answer=ans, right_path=rp, wrong_paths=wp,
                 paths={str(n): p for n, p in paths.items()})
 
 
@@ -194,10 +236,28 @@ def vm_scan(iso, setup=(), vts_only=None, limit=None, jobs=6):
         return list(ex.map(_vm_job, todo))
 
 
-def responses(iso, keys_file=None):
+def _wrong_button(k, buttons):
+    """A wrong answer to aim at (the control arm): the lowest button that is not the key
+    and, on a VM key, does not come back to this same screen (bank, replay)."""
+    _, v, pg, cell = k['at'].split('/')
+    vm = k.get('paths') or {}
+    for b in buttons:
+        n = b['n']
+        if n == k['answer']:
+            continue
+        p = vm.get(str(n))
+        if p is not None and (not p or (tuple(p[0][:2]) == (int(v), int(pg)) and p[0][2] <= int(cell))):
+            continue
+        return n
+    return None
+
+
+def responses(iso, keys_file=None, pick='right'):
     """The agent's answer table: every derived key, with what it needs to recognise the
     screen on the rig (VTS, PGCN, hli_s_ptm low bits) and aim (paths over the links).
-    keys_file: VM-judged keys (vm_scan output, JSON lines) -- else the command method."""
+    keys_file: VM-judged keys (vm_scan output, JSON lines) -- else the command method.
+    pick='wrong' aims every screen at a WRONG answer instead: the control arm, which must
+    make the rig's right/wrong evidence read wrong (docs/hil_play_harness.md "Answering")."""
     import disc_timing as DT
     out = []
     keys = ([json.loads(l) for l in open(keys_file)] if keys_file else scan(iso)['keys'])
@@ -207,8 +267,11 @@ def responses(iso, keys_file=None):
         _, v, pg, cell = k['at'].split('/')
         d = DT.dump(iso, int(v), int(pg), {int(cell)})
         h = d['cells'][int(cell) - 1]['hli'][0]
-        out.append(dict(k, vts=int(v), pgcn=int(pg), fosl=h['fosl'],
-                        paths={str(b['n']): DT.path(h['buttons'], b['n'], k['answer'])
+        aim = k['answer'] if pick == 'right' else _wrong_button(k, h['buttons'])
+        if aim is None:
+            continue
+        out.append(dict(k, vts=int(v), pgcn=int(pg), fosl=h['fosl'], pick=pick, press=aim,
+                        paths={str(b['n']): DT.path(h['buttons'], b['n'], aim)
                                for b in h['buttons']}))
     return out
 
@@ -224,14 +287,20 @@ def main():
                     'time: x7100000875300000 = g[8] = 30000)')
     ap.add_argument('--vts', type=int, nargs='*')
     ap.add_argument('--limit', type=int)
+    ap.add_argument('--rejudge', metavar='KEYS', help='re-judge a --vm --json key file from its stored '
+                    'paths (no VM run); writes --json, else in place')
     a = ap.parse_args()
+    if a.rejudge:
+        res = rejudge(a.rejudge, a.json or a.rejudge)
+        print('%s: %d screens, %s' % (a.rejudge, len(res), dict(collections.Counter(r['how'] for r in res))))
+        return
     if a.vm:
         for iso in a.isos:
             res = vm_scan(iso, a.setup, set(a.vts or []) or None, a.limit)
             c = collections.Counter(r['how'] for r in res)
             print('%s: %d screens, %s' % (os.path.basename(iso), len(res), dict(c)))
             for r in [r for r in res if r.get('answer')][:a.show]:
-                print('    %s b%d  right %s  wrong %s' % (r['at'], r['answer'], r['right_path'][:2], r['wrong_path'][:2]))
+                print('    %s b%d  right %s  wrong %s' % (r['at'], r['answer'], r['right_path'], r['wrong_paths']))
             if a.json:
                 with open(a.json, 'w') as f:
                     for r in res:

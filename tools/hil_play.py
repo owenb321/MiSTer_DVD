@@ -287,8 +287,9 @@ for i, st in enumerate(sc["steps"]):
                                         {"respond": resp["at"]}))
                     pending.append((mono() + pl.get("route_delay_s", 0.3) + 0.06 * len(taps) + 0.1,
                                     "select", {"respond": resp["at"]}))
-                    out({"respond": resp["at"], "button": resp["answer"], "taps": taps,
-                         "right": resp["right"], "t": mono(), "arm_t": ev["t_ev"]})
+                    out({"respond": resp["at"], "button": resp.get("press", resp["answer"]),
+                         "answer": resp["answer"], "pick": resp.get("pick", "right"), "taps": taps,
+                         "right": resp.get("right"), "t": mono(), "arm_t": ev["t_ev"]})
                     continue
                 # a planned route (tools/choice_graph.py route --steps): each step names
                 # the input point it expects (VTS, PGCN, hli_s_ptm low bits) and the button;
@@ -531,6 +532,17 @@ def run_agent(sc, out_dir):
     for st in sc['steps']:
         # a choice route is stored as its button script; the per-step plan (what each
         # input point looks like, how to aim) is derived from the image at run time
+        if 'play' in st and st['play'].get('responses_from') == 'quiz_vm' and not st['play'].get('responses'):
+            # VM-judged keys take minutes per disc: cached by image fingerprint
+            import hil_disc
+            import quiz_key
+            kf = os.path.join(HERE, 'streams', 'hil_keys', '%s.jsonl' % hil_disc.fingerprint(sc.get('_local_iso')))
+            if not os.path.exists(kf):
+                sys.exit('no VM answer keys cached for this image: build them with\n'
+                         '  tools/quiz_key.py <iso> --vm --setup <profile quiz.setup> --json %s' % kf)
+            st['play']['responses'] = quiz_key.responses(sc.get('_local_iso'), kf,
+                                                        st['play'].get('pick', 'right'))
+            print('  responses: %d VM-judged answer keys' % len(st['play']['responses']), flush=True)
         if 'play' in st and st['play'].get('responses_from') == 'quiz_key' and not st['play'].get('responses'):
             import quiz_key
             st['play']['responses'] = quiz_key.responses(sc.get('_local_iso'))

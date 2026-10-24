@@ -382,6 +382,60 @@ Limits:
 
 Per-disc output: `tools/streams/hil_runs/interactive_classes.jsonl` (gitignored).
 
+## Answering: quiz discs (The Weakest Link)
+
+A quiz draws its questions at random, so a route cannot be replayed. The harness answers
+from a **key table** instead: every question screen, mapped to its right button. The agent
+matches each arm (VTS, PGCN, `hli_s_ptm` low bits) against that table, steers, and selects.
+
+**Deriving the key (`tools/quiz_key.py`).** Comparing the button commands does not work on
+Weakest Link. Every answer runs the same `g[13]=0, LinkTailPGC`, and the POST reads SPRM8
+(HL_BTNN) to decide right from wrong; the command compare picked PASS. `--vm` instead
+presses each button in the core's own VM (`nav_offline.Player`). A screen is reached by
+x-tokens: setup, then `JumpTT k`, then `LinkPGCN n`. The method then:
+- compares each button's path after it leaves the question PGC, setting aside buttons that
+  come back to the same screen (bank, replay);
+- takes the right answer to be the **first step where exactly one button goes somewhere
+  and all the others agree on a real step**. Wrong answers may differ at first and rejoin
+  later: in VTS 24, b1/b2 go via PGC 24 and b4 via PGC 25, then all go to PGC 75.
+
+Two rules in that method cost a mistake each:
+- "Agree" excludes paths that have all ended. Without that, the player-count menu
+  (TT/21/30/1) was keyed as a question.
+- The disc's clock `g[8]` is counter mode, and it never counts offline. So the setup sets
+  it first (`x7100000875300000`, g[8] = 30000), or else every answer reads as a timeout.
+
+Keys are cached by image fingerprint in `tools/streams/hil_keys/<fp>.jsonl` (gitignored).
+A full scan takes hours. `--rejudge KEYS` re-applies a changed rule to the stored paths in
+seconds. Weakest Link: 1,126 keys (50 per bank in VTS 3–19 and 24–28, 13 in VTS 20 and
+29).
+
+**The verdict on the rig is a register, not a path.** The offline paths start from a cold
+`JumpTT`, but the rig is mid-game, with players, a round and questions left. After a right
+answer the rig went VTS 14 PGC 4 → 5 → VTS 2 PGC 1380, a PGC the key never names. So a
+path compare read "no data" for all 18 answers. A **control arm** (`pick: "wrong"`: the
+same run aiming at a wrong button) found the discriminator:
+
+| | right arm (18 answers) | wrong arm (20 answers) |
+|---|---|---|
+| g[7], the money chain | rises by 2 (0, 2, 4, …) | reset to 0 every time |
+| g[14] | +2 | unchanged |
+| feedback | cell 3, then PGC 4 → 5 | cell 5 or 7, then PGC 5 |
+
+`answers_right` takes `{"verdict": {"g": 7, "right": "up"}}`: a right answer is followed
+by a g[7] write that raises it. `"want": "wrong"` scores the control arm. Each arm PASSes
+its own expectation and FAILs the other's, so the register can tell the two apart.
+
+Generalising to another quiz disc:
+1. key the disc with `--vm`, adding a setup for any clock register;
+2. run `answer` and `answer_wrong`;
+3. diff the GPRM writes after the presses (the nav FIFO logs every one) to find the score
+   register;
+4. put that register in the profile's `verdict`.
+
+Never accept a verdict that the wrong arm cannot fail. Scene It is out of scope: it is a
+board game on the honour system, and the disc never judges an answer.
+
 ## Known limits / next
 
 - `at_pts` maps PTS through picture count since `base`, so it is valid only on one
