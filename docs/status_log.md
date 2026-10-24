@@ -184,6 +184,14 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     past the angle block (3 -> 5, 25 -> 27, 29 -> 31, 31 -> 33), never into the sibling
     angle. Controls: Mad Dog's first shootout and VTS 15 (6/6), Dragon's Lair II 206/206.
     Castle in the Sky's angle-block ends (played in angle 2): no hitch, as on hold12.
+  - **HIL regression suite (2026-10-24), `dev-cellcmdhold13` vs `main` + the nav FIFO,
+    14 checks: 0 FAIL, 0 regressions, 10 fixed.** Fixed: Mad Dog's first-shootout screen
+    sequence (`main` takes the miss branch) and all six VTS 15 checks (`main`: cell 2 arms
+    0.90 s late, a 2.000 s still, a 0.95 s freeze/silence); Dragon's Lair 20th 37/37
+    (`main` 1 right / 11 wrong); Dragon's Lair II 72/72 (`main` dies at TT 1 PTT 6/5);
+    Time Traveler 7/7 (`main` 0/5). Unchanged PASS on both: Thayer's Quest's route into
+    VTS 2, Weakest Link's answers, Mad Dog's first-shootout arm timing. The suite is
+    `tools/hil_suite.py` on `feature/hil-play-harness` (quick tier ~23 min per build).
   - **Next:** the maintainer's play-test of `dev-cellcmdhold13`,
     then the maintainer's play-test, then the PR. Not yet run on HW: a loop disc such as
     Fairytopia, which is unchanged by construction because a fixed command is never held
