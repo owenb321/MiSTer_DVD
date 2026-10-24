@@ -438,6 +438,104 @@ Generalising to another quiz disc:
 Never accept a verdict that the wrong arm cannot fail. Scene It is out of scope: it is a
 board game on the honour system, and the disc never judges an answer.
 
+## Buttons over video: reaction games (Dragon's Lair)
+
+Some discs have link or set buttons live while a clip plays. `disc_classify` lumped all of
+those together as "timed". `tools/timed_inputs.py` tells them apart by what doing
+**nothing** leads to (the cell command, else the next cell, else the POST), compared with
+what each button does:
+
+| Kind | Meaning |
+|---|---|
+| `loop-wait` | Doing nothing comes back to this cell: a menu over a looping clip (most of Tomb Raider's "press to go on"). |
+| `skip` | Every button goes where doing nothing goes. |
+| `menu-call` | Every press only calls a menu (pause, inventory). |
+| `reaction` | Doing nothing goes on to somewhere a press does not: a moment to act in. |
+
+How windows are counted:
+- A window that runs on through the next cells with the same buttons is one input point.
+- **Set** buttons count as input: the cell command judges them later, as with Mad Dog's
+  shot and Dragon's Lair's sword. Dropping them had hidden most of Dragon's Lair.
+
+**The target is Dragon's Lair 20th Anniversary (Digital Leisure, `dvdi/`).** It has five
+auto-action buttons per move: b1 is the centre (a no-op, and the forced select), b2 up, b3
+right, b4 down and b5 left.
+- A move is **one arrow tap**, so there is no Select (`no_select`).
+- Windows last about 1 s.
+- The title PRE sets g[1] = 10000.
+- Each move's right button stores a value **unique to that window** in g[0], alternately
+  above and below g[1]. The next cell's command tests it: `if (g[0] < g[1])` or
+  `if (g[0] > g[1])` → `LinkPTT <death clip>`.
+- So doing nothing is wrong at every window: the previous window's value is still there.
+
+**Keying (`tools/move_key.py`).** For each reaction window the VM plays doing nothing and
+every button. Five things had to be learned, each from a wrong key:
+1. **Doing nothing is followed past every later window** (`w` = window + 12 cells).
+   Windows chain: one action can be three windows, each with its own right button. A plain
+   "no press" only reached the next window, not its outcome.
+2. **The death is a command, not a place.** Pass 1 judges each window on its own. Its death
+   is the place most options pass through. From those, the disc's death **command** is
+   learned (`CallSS VMGM (pgc 2)`), and every cell running it (160) is a death cell.
+   - "Reaches title 2 cell 72" was a cold-start artefact. From a cold start the death
+     handler restarts that scene; mid-game it resumes, and the game moves on to another
+     room. This is the same trap as Weakest Link's cold-start paths.
+3. **Windows are judged in context.** Pass 2 walks each PGC in cell order. Each window is
+   entered through the right press of the window that leads into it.
+   - Judged cold (g[0] = 0), cell 61 read "no press needed".
+   - The rig died there after a right press at cell 60.
+4. **Presses carry no waits.** Whether a press stays in its window is the disc's business:
+   a sword's cell command can link out at the end of the window's first cell. A wait
+   counted for the whole window skipped the **next** scene's first window, whose death then
+   read as this press's.
+   - Instead, `nav_offline.Player.no_park` keeps the window's later cells from stopping
+     play.
+   - `no_park` is empty by default, so the libdvdnav diff is unchanged.
+5. **Entry tries the disc's own route** (`entry_for`): `JumpTT` + `LinkPGCN` + `LinkCN`,
+   else `JumpVTS_PTT t:<chapter>`.
+
+Result: 233 keyed moves. The rest:
+- 148 unjudged, mostly the watch-only titles (13, 14, 16, 22), whose single button exits,
+  plus scene ends;
+- 1 where every option dies;
+- 18 unreached (VTS 6): see the limits below.
+
+Keys are cached as `tools/streams/hil_keys/<fp>.moves.jsonl`. `--rejudge` re-applies the
+rules to the stored paths.
+
+**Rig check (`moves_right`).** A move is **wrong** if the rig plays a death cell of its PGC
+(or a wrong option's first cell that no right option visits) before the next move. It is
+**right** if the rig plays a right option's first cell and no death. The check is local by
+design, for the same reason as above: what the handler does next depends on lives and scene
+order.
+
+The control arm (`play_wrong`, `pick: "wrong"`) presses the lowest wrong button, or holds
+still where doing nothing is the only wrong option, and must read wrong at every move.
+
+| Run | Moves | Result |
+|---|---|---|
+| `play` (right) | 110 in 400 s, first at 16 s | 110 landed right, 109 distinct windows: PASS |
+| `play_wrong` (control) | 18 in 220 s (8 by holding still) | 18 read wrong: PASS |
+
+An earlier key (before fixes 3 and 4) passed 66 rig moves but held two false "no press
+needed" windows; the rig died at the first of them, which is how fix 3 was found.
+
+**Start-up.** The title menu arms about 3 s after launch, before the agent is up. The agent
+used to empty the nav log on start, which threw that arm away, and the route then waited
+about 100 s for the menu to come round again. Now the host empties the logs just before the
+launch (`_nav_fresh`). The play step keeps the last queued arm whose screen is still up (no
+PGC change since). The route `[1, 9, 1]` (Play, Play, skip the 58 s intro) starts the game
+with the default options: Arcade, Original, Easy, Unlimited lives. The first move came at
+161 s before these fixes and comes at 16 s after them.
+
+**Limits:**
+- VTS 6 is reached only through a dispatcher PGC (title 12, PGC 2) that `JumpVTS_PTT`s into
+  PGC 1 according to a scene code in g[0]. Cold, no code matches and play stops, so its 18
+  windows are unkeyed. Reaching them needs a probe of the dispatcher's codes.
+- The check attributes a death to the last move before it. A death at an **unkeyed** window
+  just after a keyed move reads as that move's.
+- A window whose right move is "hold still" (`wait`) is logged with no press. Only one was
+  found.
+
 ## Known limits / next
 
 - `at_pts` maps PTS through picture count since `base`, so it is valid only on one

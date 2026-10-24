@@ -22,6 +22,31 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **HIL PLAY HARNESS: ANSWERING AND TIMED MOVES (2026-10-24, `feature/hil-play-harness`,
+  HW-proven on the capture rig; not merged).** The harness now plays two more game types
+  from keys derived in the core's own VM, each confirmed by a control arm that must fail.
+  - **Quiz (The Weakest Link):** `tools/quiz_key.py --vm` keys 1,126 questions. The rig's
+    verdict is the disc's score register, g[7], the money chain: a right answer raises it
+    by 2 and a wrong one resets it to 0. 18/18 right; the wrong-answer arm reads wrong 20/20.
+  - **Reaction (Dragon's Lair 20th, `dvdi/`):** `tools/timed_inputs.py` sorts
+    buttons-over-video into loop-wait/skip/menu-call/reaction. `tools/move_key.py` keys 233
+    moves:
+    - doing nothing is followed past later windows;
+    - the death is a learned command;
+    - windows are judged in context through the previous right press;
+    - `nav_offline.Player.no_park` replaces waits.
+
+    The rig check is `moves_right`, by death cells: 110/110 right in 400 s; the control arm
+    reads wrong 18/18.
+  - **Lesson, twice:** a path from a cold `JumpTT` names places a mid-game rig never visits.
+    Judge on the rig by something local: a score register, or a death clip in the same PGC.
+  - **Gaps:**
+    - Dragon's Lair VTS 6 (18 windows) sits behind a g[0]-coded dispatcher;
+    - Weakest Link's later rounds (VTS 24–29) are keyed but not yet reached on the rig.
+  - **Detail:** `docs/hil_play_harness.md` "Answering" and "Buttons over video".
+  - **Next:**
+    - the other `dvdi/` reaction games (Space Ace, Dragon's Lair II, the ALG shooters);
+    - merge.
 - 🔧 **HIL PLAY HARNESS, HOST SIDE (2026-10-23, `feature/hil-play-harness`, HW-proven on the
   capture rig; not merged).**
   - **Tools:**

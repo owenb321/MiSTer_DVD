@@ -25,6 +25,9 @@ The run directory's scenario.json carries "expect": a list of assertions, each o
                                       was followed by the right answer's branch; with
                                       verdict {g, right: up}, by a write raising GPRM g
                                       (the disc's score); want "wrong" = the control arm
+    moves_right     {want}            every timed move from a move table (move_key) played a
+                                      right option's next cell and no death clip; want
+                                      "wrong" = the control arm (every move reads wrong)
     route_followed  {}                a planned choice route (play.route_script) was taken
                                       step by step where the offline model predicted
 
@@ -54,6 +57,9 @@ class Run:
         # FIFO appeared to have one and a duel inherited another build's arm. Anything
         # stamped before the agent started is not this run's.
         start = next((o['start'] for o in self.lines if 'start' in o), None)
+        # the host emptied the log just before launching the disc: all of it is this run's
+        if any(o.get('nav_fresh') for o in self.lines if 'start' in o):
+            start = None
         self.stale = 0
         self.nav = []
         for o in self.lines:
@@ -347,6 +353,64 @@ def _answers_by_register(r, x, answers):
         return NODATA, '%d answers, none followed by a g[%d] write' % (len(answers), g)
     return PASS, '%d answers read %s by g[%d]%s; %d distinct questions' % (
         ok, want, g, (', %d with no write' % unk) if unk else '', len({a['respond'] for a in answers}))
+
+
+def a_moves_right(r, x):
+    """Every timed move the agent made from a move table (tools/move_key.py) had the
+    RIGHT outcome. A DEATH CLIP is a cell of the window's PGC that runs the disc's death
+    command (the key's death_cells), or the first cell of a wrong option's VM path that no
+    right option visits (Dragon's Lair: cell 76 for a wrong direction, cell 8 for doing
+    nothing in a chained window whose first cell, 4, the right move also plays). A move is
+    WRONG if the rig played one of those clips before the next move, RIGHT if it played a
+    right option's first cell and no clip. Local by design: what the death handler does
+    next depends on lives and scene order, and a path from a cold start names places a
+    mid-game rig never visits (the Weakest Link lesson)."""
+    if not r.fifo:
+        return NODATA, 'no nav FIFO on this core'
+    table = {}
+    for st in r.sc.get('steps', []):
+        for k in (st.get('play') or {}).get('responses') or []:
+            if k.get('timed'):
+                table[k['at']] = k
+    moves = [o for o in r.lines if 'respond' in o and 'button' in o and o['respond'] in table]
+    if not moves:
+        return NODATA, 'no timed move came up'
+    ok, bad, unk = 0, [], 0
+    for i, a in enumerate(moves):
+        k = table[a['respond']]
+        v = int(k['at'].split('/')[1])
+        vp = {o: [tuple(e[::2]) for e in p] for o, p in (k.get('vm_paths') or {}).items()}
+        rcells = {e for o in k['right'] for e in vp.get(o, [])}
+        rfirst = {vp[o][0] for o in k['right'] if vp.get(o)}
+        clips = {next((e for e in vp.get(o, []) if e not in rcells), None) for o in k['wrong']} - {None}
+        # and every cell of this PGC that runs the disc's death command (move_key)
+        clips |= {(v, c) for c in k.get('death_cells') or []}
+        t1 = min(moves[i + 1]['t'] if i + 1 < len(moves) else float('inf'), a['t'] + 8)
+        seq = [(e.get('vts'), e.get('cell', -1) + 1) for e in r.nav
+               if e['ev'] == 'CELL' and a['t'] < e['t_ev'] < t1
+               and not (e.get('vts') == v and e.get('cell', -1) + 1 in k['cells'])]
+        hit = next((e for e in seq if e in clips), None)
+        if hit:
+            bad.append('%s (pressed %s, key %s): played VTS %d cell %d, a death clip' % (
+                a['respond'], a['button'], k['answer'], *hit))
+        elif seq and seq[0] in rfirst:
+            ok += 1
+        else:
+            unk += 1
+    want = x.get('want', 'right')
+    if want == 'wrong':
+        # the control arm: every move must read wrong
+        if ok:
+            return FAIL, '%d moves read right in the wrong-move arm' % ok
+        if not bad:
+            return NODATA, '%d moves, none recognised' % len(moves)
+        return PASS, '%d moves read wrong%s' % (len(bad), (', %d unrecognised' % unk) if unk else '')
+    if bad:
+        return FAIL, '%d right, %d wrong: %s' % (ok, len(bad), '; '.join(bad[:3]))
+    if not ok:
+        return NODATA, '%d moves, no landing recognised' % len(moves)
+    return PASS, '%d moves landed right%s; %d distinct' % (
+        ok, (', %d unrecognised' % unk) if unk else '', len({a['respond'] for a in moves}))
 
 
 def a_route_followed(r, x):

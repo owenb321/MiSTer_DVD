@@ -201,6 +201,7 @@ class Player:
         self.blocks = 0
         self.log = []
         self.path = []                  # the PGCs that played a cell (path_key), in order
+        self.no_park = set()
         self.trace = []                 # every cell entered: (dom, vts, pgcn, 0-based cell),
                                         # in order (choice_graph's scene cards read it)
         # the reader's PTT state (dvd_iso_reader cur_ttn / ptt_mem): which title's
@@ -439,7 +440,11 @@ class Player:
             # (libdvdnav play_Cell_post; docs/dvd_nav.md "An indefinite still and its
             # cell command")
             still = still_of(p, self.cell)
-            if park_on_buttons and h and nb and not acted and wait == 0:
+            # no_park: (vts, pgcn, 1-based cell) where a live window must NOT stop play --
+            # the rest of a timed window a press was already made in (tools/move_key.py).
+            # Empty by default, so the libdvdnav diff is unchanged.
+            if (park_on_buttons and h and nb and not acted and wait == 0
+                    and (self.vts, self.pgcn, self.cell + 1) not in self.no_park):
                 park, cand = True, None
             if still == 0xFF:
                 park, cand = True, None

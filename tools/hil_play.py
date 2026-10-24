@@ -104,7 +104,12 @@ def truncate_logs():
             pass
 
 
-truncate_logs()
+# the host empties these just before it launches the disc (launch), so what is in them now
+# is this run's: the title menu can arm before the agent is up (Dragon's Lair 20th: 3 s),
+# and emptying them here threw that arm away -- the route then waited ~100 s for the menu
+# to come round again. Without the host's word, start clean as before.
+if not sc.get("_nav_fresh"):
+    truncate_logs()
 KEYS = sc.get("_keys", {})
 with open(FAST, "w") as f:
     f.write(str(sc.get("telem_ms", 20)))
@@ -184,7 +189,7 @@ def fit():
 time.sleep(2.6)                         # dvd_ctl re-reads the fast knob every 2 s
 for _ in range(20):
     poll(); time.sleep(0.01)
-out({"start": mono()})
+out({"start": mono(), "nav_fresh": bool(sc.get("_nav_fresh"))})
 ok = True
 for i, st in enumerate(sc["steps"]):
     t0 = mono()
@@ -265,7 +270,18 @@ for i, st in enumerate(sc["steps"]):
         last_aim, pending, met = None, [], False
         ri, last_route_btn = 0, None
         nav["route_left"] = len(pl.get("route") or [])
+        # an arm queued before this step whose screen is still up (no PGC change since:
+        # a title menu that armed while the agent was starting) is still live: keep it
+        back = list(nav_new)
         del nav_new[:]
+        live = None
+        for ev in back:
+            if ev.get("ev") == "HLI_ARM":
+                live = ev
+            elif ev.get("ev") == "PGC":
+                live = None
+        if live is not None:
+            nav_new.append(live)
         while mono() < lim:
             r = poll()
             while nav_new:
@@ -285,8 +301,12 @@ for i, st in enumerate(sc["steps"]):
                     for n_, k in enumerate(taps):
                         pending.append((mono() + pl.get("route_delay_s", 0.3) + 0.06 * n_, k,
                                         {"respond": resp["at"]}))
-                    pending.append((mono() + pl.get("route_delay_s", 0.3) + 0.06 * len(taps) + 0.1,
-                                    "select", {"respond": resp["at"]}))
+                    # a timed move (tools/move_key.py): an auto-action target fires on the
+                    # arrow alone, and a Select after it would land on whatever the jump
+                    # brought up; a "wait" key presses nothing
+                    if not resp.get("no_select"):
+                        pending.append((mono() + pl.get("route_delay_s", 0.3) + 0.06 * len(taps) + 0.1,
+                                        "select", {"respond": resp["at"]}))
                     out({"respond": resp["at"], "button": resp.get("press", resp["answer"]),
                          "answer": resp["answer"], "pick": resp.get("pick", "right"), "taps": taps,
                          "right": resp.get("right"), "t": mono(), "arm_t": ev["t_ev"]})
@@ -512,7 +532,10 @@ def launch(sc):
     cmd = [sys.executable, os.path.join(HERE, 'mister.py'), 'launch', sc['iso']]
     for k, v in sc.get('opts', {}).items():
         cmd += ['--opt', '%s=%s' % (k, v)]
-    _, n = M.ssh('wc -l < /tmp/dvd_report.log 2>/dev/null || echo 0\n', check=False)
+    _, n = M.ssh('wc -l < /tmp/dvd_report.log 2>/dev/null || echo 0\n'
+                 ': > /tmp/dvd_navtrace.jsonl 2>/dev/null; : > /tmp/dvd_telem_fast.jsonl 2>/dev/null\n',
+                 check=False)
+    sc['_nav_fresh'] = True
     p = subprocess.run(cmd, capture_output=True, text=True)
     if p.returncode:
         sys.exit('launch failed:\n' + p.stdout + p.stderr)
@@ -543,6 +566,17 @@ def run_agent(sc, out_dir):
             st['play']['responses'] = quiz_key.responses(sc.get('_local_iso'), kf,
                                                         st['play'].get('pick', 'right'))
             print('  responses: %d VM-judged answer keys' % len(st['play']['responses']), flush=True)
+        if 'play' in st and st['play'].get('responses_from') == 'move_vm' and not st['play'].get('responses'):
+            # timed moves (reaction games), judged in the VM: cached by image fingerprint
+            import hil_disc
+            import move_key
+            kf = os.path.join(HERE, 'streams', 'hil_keys', '%s.moves.jsonl' % hil_disc.fingerprint(sc.get('_local_iso')))
+            if not os.path.exists(kf):
+                sys.exit('no move keys cached for this image: build them with\n'
+                         '  tools/move_key.py <iso> --json %s' % kf)
+            st['play']['responses'] = move_key.responses(sc.get('_local_iso'), kf,
+                                                         st['play'].get('pick', 'right'))
+            print('  responses: %d VM-judged timed moves' % len(st['play']['responses']), flush=True)
         if 'play' in st and st['play'].get('responses_from') == 'quiz_key' and not st['play'].get('responses'):
             import quiz_key
             st['play']['responses'] = quiz_key.responses(sc.get('_local_iso'))

@@ -163,6 +163,15 @@ def walk_cell(f, vobs, c, every_nav):
     return navs, hli, first_ptm, end_ptm, err
 
 
+def _program_map(f, pa, p):
+    """Entry cell (1-based) of each program: nr_of_programs at byte 2, the map at 230."""
+    npg, pmo = p[2], be16(p, 230)
+    if not npg or not pmo:
+        return []
+    f.seek(pa + pmo)
+    return list(f.read(npg))
+
+
 def dump(iso, vts, pgcn, want=(), every_nav=False):
     with open(iso, 'rb') as f:
         ifo = ne.find_vts_ifo(f, vts)
@@ -171,7 +180,7 @@ def dump(iso, vts, pgcn, want=(), every_nav=False):
         out = {'iso': os.path.basename(iso), 'vts': vts, 'pgcn': pgcn, 'pgcs_in_vts': npgc,
                'pgc_dur': pbtm_secs(p[4:8]), 'ptm_hz': 90000,
                'pre': [_dec(c) for c in pre], 'post': [_dec(c) for c in post],
-               'cells': []}
+               'pm': _program_map(f, pa, p), 'cells': []}
         prev_end = None
         for ci, c in enumerate(cells):
             nr = c[3]

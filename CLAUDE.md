@@ -392,7 +392,7 @@ otherwise; `--red` runs its mutation arms).
 | Library sweep vs libdvdnav found SPRM6/7 frozen + no-FP-PGC boot: both fixed (+ 0xFF still holds before a non-loop cell command) | ✅ HW, MERGED PR #169 | `nav_engine.md` §5a | `run_sprm67.sh --red` |
 | Every 0xFF still holds before its cell command (the pre-VM "loop first" exception had a false MiB/Matrix premise; 40 images change) | ✅ HW A/B vs `main` (Muppets, Marley & Me, Tomb Raider; MiB unchanged) + by ear, MERGED PR #174 | `dvd_nav.md` "An indefinite still and its cell command" | `run_still_off.sh --red`, `run_sprm67.sh --red` |
 | Title key on a disc with no Title menu is a no-op (audit 10b): mount-time VMGM probe, `emu.sv` key gate | ✅ HW A/B vs `main` (SPIDER-MAN_2, PANIC_ROOM; T2 positive control), MERGED PR #173 | `dvd_vm.md` "Title key on a disc with no Title menu" | `run_title_probe.sh --red`, `check_title_key_wiring.py` |
-| Real-time play harness: board agent + FIFO autoplayer, capture aligned to disc PTS, nav event FIFO (`dvd/nav_trace.sv`, UIO 0x7C), disc profiles with PASS/FAIL expectations | 🔧 HW-proven on Mad Dog (#176 hold7–12 verified with it); ⏳ not merged | `hil_play_harness.md` | `run_nav_trace.sh --red`, `check_nav_trace_wiring.py`; `tools/hil_play.py --disc` |
+| Real-time play harness: board agent + FIFO autoplayer, capture aligned to disc PTS, nav event FIFO (`dvd/nav_trace.sv`, UIO 0x7C), disc profiles with PASS/FAIL expectations; VM-judged quiz answers and timed moves | 🔧 HW-proven: Mad Dog (#176 hold7–12), Weakest Link 18/18, Dragon's Lair moves (each with a control arm); ⏳ not merged | `hil_play_harness.md` | `run_nav_trace.sh --red`, `check_nav_trace_wiring.py`; `tools/hil_play.py --disc` |
 
 ### Transport, HUD and input
 
