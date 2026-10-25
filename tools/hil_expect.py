@@ -112,20 +112,24 @@ def a_reaches_any(r, x):
 
 
 def a_screen_sequence(r, x):
+    """Each listed cell is followed on screen by the next one (any number of cells; it
+    took exactly two, and a three-cell list read as a checker error)."""
     if not r.measured(x['vts']):
         return NODATA, 'no capture timeline of VTS %d' % x['vts']
-    a, b = x['cells']
-    prev, after = None, []
-    for f in r.tl['frames']:
-        c = f.get('cell')
-        if c is None:
-            continue
-        if prev == a and c != a:
-            after.append(c)
-        prev = c
-    if b in after:
-        return PASS, 'cell %d -> %d on screen' % (a, b)
-    return FAIL, ('cell %d was followed by %s' % (a, after) if after else 'cell %d never left the screen (or never shown)' % a)
+    cells = x['cells']
+    for a, b in zip(cells, cells[1:]):
+        prev, after = None, []
+        for f in r.tl['frames']:
+            c = f.get('cell')
+            if c is None:
+                continue
+            if prev == a and c != a:
+                after.append(c)
+            prev = c
+        if b not in after:
+            return FAIL, ('cell %d was followed by %s' % (a, after) if after
+                          else 'cell %d never left the screen (or never shown)' % a)
+    return PASS, ' -> '.join(str(c) for c in cells) + ' on screen'
 
 
 def a_arms_on_time(r, x):
@@ -182,24 +186,29 @@ def a_no_reader_still(r, x):
 
 
 def _span(r, cells):
-    """Capture-file offsets (s) from the first frame of the first listed cell on screen
-    to the last frame of the last, taking the first contiguous run through them."""
+    """Capture-file offsets (s) of the LONGEST contiguous run of frames showing the listed
+    cells (unmatched frames inside it allowed, a gap of more than 1 s of other cells ends
+    it). It took the run from the first matching frame, so one stray early mismatch gave
+    a 0.6 s span on a run that showed the cell for 17 s (Thayer's glendoe_clip)."""
     fr = r.tl['frames']
-    ts = [f['t'] for f in fr if f.get('cell') in cells]
-    if not ts:
+    if not any(f.get('cell') in cells for f in fr):
         return None
     start = float(subprocess.run(['ffprobe', '-v', 'error', '-show_entries', 'format=start_time',
                                   '-of', 'csv=p=0', r.cap], capture_output=True, text=True).stdout)
-    lo = ts[0]
-    hi = lo
-    for f in fr:                          # extend while we stay among the cells (or unmatched)
-        if f['t'] < lo:
-            continue
-        if f.get('cell') in cells:
-            hi = f['t']
-        elif f.get('cell') is not None and f['t'] - hi > 1.0:
-            break
-    return lo - start, hi - start
+    best, lo, hi, n, bn = None, None, None, 0, 0
+    for f in fr:
+        c = f.get('cell')
+        if c in cells:
+            if lo is None:
+                lo, n = f['t'], 0
+            hi, n = f['t'], n + 1
+        elif c is not None and lo is not None and f['t'] - hi > 1.0:
+            if n > bn:
+                best, bn = (lo, hi), n
+            lo = None
+    if lo is not None and n > bn:
+        best = (lo, hi)
+    return best[0] - start, best[1] - start
 
 
 def _detect(r, x, kind):

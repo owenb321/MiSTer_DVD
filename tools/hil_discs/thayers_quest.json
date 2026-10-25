@@ -40,6 +40,10 @@
   {
    "text": "to_vts8 PASS on dev-cellcmdhold12 (2026-10-23): all 30 steps of the offline route taken on the rig.",
    "why": "Evidence that the offline choice graph matches the real core across the whole adventure."
+  },
+  {
+   "text": "Cell 8 (the Guild Hall/Outskirts still) is the last picture of cell 7's clip held: the alignment cannot tell them apart, so glendoe_clip checks 6 -> 7 on screen and reaches cell 8 through the FIFO.",
+   "why": "A 7 -> 8 screen_sequence would fail on identical pictures, not on playback."
   }
  ],
  "scenarios": {
@@ -200,6 +204,82 @@
      "type": "arms_on_time",
      "vts": 2,
      "max_late_s": 0.1
+    }
+   ]
+  },
+  "glendoe_clip": {
+   "description": "The first travelling-spell decision (crystal ball, VTS 2 PGC 1 cell 6, still 255; b1 = Village of Glendoe): after the press, cell 7 (17.87 s clip, PTS restart, no buttons) must play on screen before cell 8's choice. Maintainer report 2026-10-25: the clip does not show.",
+   "opts": {
+    "Debug Overlay": "On"
+   },
+   "capture_s": 200,
+   "measure": {
+    "vts": 2,
+    "pgcn": 1,
+    "cells": [
+     6,
+     7,
+     8
+    ],
+    "overlay": true
+   },
+   "steps": [
+    {
+     "macro": "start"
+    },
+    {
+     "play": {
+      "route_script": [
+       1,
+       1,
+       1,
+       1,
+       1,
+       1,
+       1,
+       1
+      ],
+      "until": "nav.get('route_left')==0 and nav.get('vts')==2 and nav.get('rcell',0)>=7",
+      "timeout": 180,
+      "policy": [],
+      "route_delay_s": 0.4,
+      "hold_ms": 30
+     }
+    },
+    {
+     "sleep": 10
+    }
+   ],
+   "expect": [
+    {
+     "type": "route_followed"
+    },
+    {
+     "type": "reaches",
+     "vts": 2,
+     "cell": 8
+    },
+    {
+     "type": "screen_sequence",
+     "vts": 2,
+     "cells": [
+      6,
+      7
+     ]
+    },
+    {
+     "type": "no_silence",
+     "cells": [
+      7
+     ],
+     "max_s": 0.5
+    },
+    {
+     "type": "no_freeze",
+     "cells": [
+      7
+     ],
+     "max_s": 0.5
     }
    ]
   }
