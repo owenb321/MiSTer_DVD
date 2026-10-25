@@ -115,16 +115,10 @@ CONF_STR history further down the file (a retired `Direct Video` row among other
 loose grep invents options that do not exist. That mistake was made by hand while writing
 the manual and nearly shipped three fictional OSD settings.
 
-**Unreleased features no longer need marking** (changed 2026-09-09, by user decision).
-The `!!! info "Unreleased"` admonition existed because the site was deployed from `main`, so
-the published manual described a development build nobody could download — a reader had no
-way to tell which half applied to them, and remembering the admonition was the writer's
-burden. Deploying only on a release publish removes the divergence at the source: what is
-published is the tagged commit's manual for the core released beside it. Write manual pages
-in the present tense as the feature lands. Existing admonitions are harmless and the release
-process still sweeps them; `extra.released_version` in `mkdocs.yml` stays — it names the
-version on the announcement bar and `package.yml` refuses to package a release whose tag
-disagrees with it.
+**Unreleased features no longer need marking** (2026-09-09, by user decision): the manual
+deploys only on a release publish, from the tagged commit, so write pages in the present tense
+as a feature lands. Keep `extra.released_version` in `mkdocs.yml` (`package.yml` checks it).
+The reasoning is in `site/README.md`.
 
 **Authoring rules** (full set in `site/README.md`): keep `.md` extensions on cross-links so
 pages resolve in MkDocs *and* natively on GitHub; links to repo files must be absolute
@@ -302,13 +296,9 @@ worse maintenance burden than targeted in-place edits. So:
   `dvd/resample_addrgen.v`, swapped in the `.qsf`) remain valid and are fine to keep using.
 - Mergeability with upstream `mrchrisster/MiSTer_MPEG2` is no longer a hard constraint.
 
-> **Historical note (SDRAM-module port, restore + removal):** `sys/sys_top.v` and `sys/sys.tcl`
-> were once edited to *restore* the SDRAM routing so the fork could drive the 128 MB add-on board
-> via `dvd/sdram.sv`. That path is now RETIRED — the core's memory runs entirely on the HPS
-> f2sdram (DDRAM) burst bridge (`dvd/mem_shim_burst.sv`). As of 2026-07-01
-> (branch `feature/remove-diagnostic-cruft`) the SDRAM controller, its self-test, and all
-> `SDRAM_*` ports/pin assignments were removed from `dvd/emu.sv`, `sys/sys_top.v`, `sys/sys.tcl`,
-> and `DVD.qsf`, taking `sys/` back toward stock. See `docs/history.md`.
+> **SDRAM port: retired.** Memory runs entirely on the HPS f2sdram (DDRAM) burst bridge
+> (`dvd/mem_shim_burst.sv`); the SDRAM controller and every `SDRAM_*` port and pin were removed
+> on 2026-07-01, taking `sys/` back toward stock. The history is in `docs/history.md` §1 and §6.
 
 ---
 
@@ -392,7 +382,7 @@ otherwise; `--red` runs its mutation arms).
 | Library sweep vs libdvdnav found SPRM6/7 frozen + no-FP-PGC boot: both fixed (+ 0xFF still holds before a non-loop cell command) | ✅ HW, MERGED PR #169 | `nav_engine.md` §5a | `run_sprm67.sh --red` |
 | Every 0xFF still holds before its cell command (the pre-VM "loop first" exception had a false MiB/Matrix premise; 40 images change) | ✅ HW A/B vs `main` (Muppets, Marley & Me, Tomb Raider; MiB unchanged) + by ear, MERGED PR #174 | `dvd_nav.md` "An indefinite still and its cell command" | `run_still_off.sh --red`, `run_sprm67.sh --red` |
 | Title key on a disc with no Title menu is a no-op (audit 10b): mount-time VMGM probe, `emu.sv` key gate | ✅ HW A/B vs `main` (SPIDER-MAN_2, PANIC_ROOM; T2 positive control), MERGED PR #173 | `dvd_vm.md` "Title key on a disc with no Title menu" | `run_title_probe.sh --red`, `check_title_key_wiring.py` |
-| Real-time play harness: board agent + FIFO autoplayer, capture aligned to disc PTS, nav event FIFO (`dvd/nav_trace.sv`, UIO 0x7C), disc profiles with PASS/FAIL expectations; VM-judged quiz answers and timed moves | 🔧 HW-proven: Mad Dog (#176 hold7–12), Weakest Link 18/18, Dragon's Lair moves (each with a control arm); ⏳ not merged | `hil_play_harness.md` | `run_nav_trace.sh --red`, `check_nav_trace_wiring.py`; `tools/hil_play.py --disc` |
+| HIL play harness + regression gate: nav event FIFO (`dvd/nav_trace.sv`), disc profiles, VM-judged answers/moves, `hil_suite` build-vs-control table | 🔧 HW-proven (#176 hold7–13; 5 games, each with a control arm); ⏳ not merged | `hil_play_harness.md` | `run_nav_trace.sh --red`, `check_nav_trace_wiring.py`, `tools/hil_suite.py` |
 
 ### Transport, HUD and input
 
@@ -566,34 +556,17 @@ Each of these cost at least one hardware round. The story is in `docs/status_log
 
 ## VS Code Settings
 
-```json
-{
-    "verilog.linting.linter": "iverilog",
-    "verilog.linting.iverilog.arguments": "-g2012",
-    "files.associations": {
-        "*.v": "verilog",
-        "*.sv": "systemverilog",
-        "*.svh": "systemverilog"
-    }
-}
-```
-
-Recommended extensions: `mshr-h.verilog`, `teros-technology.teroshdl`, `ms-vscode.cpptools`, `eamodio.gitlens`
+`.vscode/settings.json` (iverilog `-g2012` linting, file associations). Recommended extensions:
+`mshr-h.verilog`, `teros-technology.teroshdl`, `ms-vscode.cpptools`, `eamodio.gitlens`.
 
 ---
 
 ## Simulation Quick Reference
 
 ```bash
-# Simulate ps_demux module
-iverilog -g2012 -o bench/dvd/ps_demux_sim \
-    dvd/ps_demux.sv bench/dvd/ps_demux_tb.sv
+# One module (most gates are a bench/dvd/run_*.sh that does this, plus --red mutation arms)
+iverilog -g2012 -o bench/dvd/ps_demux_sim dvd/ps_demux.sv bench/dvd/ps_demux_tb.sv
 vvp bench/dvd/ps_demux_sim
-
-# Simulate audio_ring module
-iverilog -g2012 -o bench/dvd/audio_ring_sim \
-    dvd/audio_ring.sv bench/dvd/audio_ring_tb.sv
-vvp bench/dvd/audio_ring_sim
 
 # Refactoring dvd/dvd_iso_reader.sv? Prove it bit-identical: baseline from a worktree of
 # main, then compare (traces every kept port of all 41 reader benches; docs/logic_reclaim.md §8)
@@ -634,101 +607,38 @@ exceeds ~4 MB. Copy the resulting `releases/*.rbf` to the SD card to load it.
 
 ### Versioning and publishing releases
 
-Two identifiers, deliberately at different granularities:
+The rules, in brief. The reasoning, the measurements behind the limits, and the retired rules
+(and why they must not come back) are in **[`docs/versioning.md`](docs/versioning.md)**: read it
+before changing anything here or in `build_release.sh`'s version gate.
 
-- **`` `CORE_VERSION `` in `dvd/emu.sv`** — shown in the OSD as
-  `` `CORE_VERSION` `BUILD_DATE` `` (e.g. `v0.4.0 260910`). **★ THE INVARIANT (revised
-  2026-09-04, by user decision):**
-
-  > A bare semver lives in **exactly one commit per release** — the release commit. Any
-  > build whose OSD shows `v0.4.0` came from that commit and no other.
-
-  | Where | `` `CORE_VERSION `` | OSD line |
-  |---|---|---|
-  | feature branch | `dev-<slug>` | `DVD dev-seekrealign 260903` |
-  | `main` between releases | whatever the last merge left — no reset | `DVD dev-seekrealign 260903` |
-  | `main` after a release | the release semver — no reset | `DVD v0.4.0 260903` |
-  | the release commit, only | `v0.4.0` | `DVD v0.4.0 260903` |
-
-  **★ SET `dev-<slug>` AS THE FIRST COMMIT OF EVERY FEATURE BRANCH, named after the
-  feature. This is mandatory, not conventional.** Nothing resets `` `CORE_VERSION `` any
-  more — not after a merge, and not after a release (both resets retired 2026-09-08, by
-  user decision) — so `main` carries whatever the last feature or release left, and setting
-  the slug on the branch is the ONLY thing that keeps a build labelled correctly.
-  It is also what UNBLOCKS the build: after a release `main` carries a bare semver, and
-  `build_release.sh` **refuses** a bare semver on a dev build, so the first build on a
-  branch that skipped this step fails immediately with a message naming the fix. That is
-  the intended failure — fast and self-explanatory, rather than a build that quietly
-  advertises a released version.
-  `build_release.sh` **gates this mechanically** before the compile (so a wrong value costs
-  a second, not 40 minutes): a bare semver on a dev build and a `dev-` string on a
-  publishable `--release` build are both refused. It additionally WARNS when the slug does
-  not resemble the branch name — the "left over from another branch" mistake.
-  **⛔ This REPLACES the retired 2026-08-26 rule ("bump `` `CORE_VERSION `` to the
-  speculated next semver at the start of every feature branch").** That rule made every
-  pre-release test build advertise a version that did not exist yet: a build sent out for
-  testing showed `v0.4.0`, testers and the sessions reading their reports called it 0.4.0,
-  and the real 0.4.0 shipped far ahead of it. **Its stated payoff was illusory** — "the
-  latest `.rbf` already matches the tag, avoiding a rebuild and re-sweep at release time"
-  is only true if a release is cut from one branch's exact tree, and it never is: a release
-  is cut from `main` after N branches merge, so the release build is a fresh netlist and a
-  fresh seed decision regardless. Do not reinstate it.
-  **Two hard limits on the string**, both measured against stock Main and both enforced by
-  `build_release.sh`:
-  - **≤ 18 characters.** `menu.cpp`'s About screen (`MENU_ABOUT2`) truncates the whole
-    `"DVD <ver> <date>"` line at 30, and `"DVD "` + `" "` + `"260903"` already uses 12.
-  - **No `,` `;` `"`.** `CONF_STR` delimits entries on `;`, and `user_io.cpp`'s `p[0]=='V'`
-    arm calls `substrcpy(...,1)`, which splits on commas — either character **silently
-    truncates** the version rather than failing.
-
-  (The saved-settings `"v,N;"` config version is a SEPARATE, coarser counter — bump that
-  one only on an incompatible `O[..]` relayout, see `docs/idle_screen.md`.)
-  **★ HOW FAR to bump (instituted 2026-08-31, by user decision — the rule existed only
-  as precedent until someone had to ask):**
-  - **patch** (`0.2.0` → `0.2.1`) — bug fixes, doc-only changes, internal rework with no
-    change in what the user can do.
-  - **minor** (`0.2.1` → `0.3.0`) — ANY new user-visible capability: a new format or
-    output path, a new OSD option, or content that used to be silent/broken now working.
-    If the release notes would lead with it, it is a minor bump.
-  - **major** — reserved; nothing has warranted it yet (`1.0` would be a
-    "this is finished" statement, not a size-of-change one).
-  The failure this prevents is a release whose version says "fixes" while its own notes
-  lead with a headline feature — the version line is what a user quotes in a bug report,
-  so it should not understate what they are running. Precedent: `0.1d` → `0.2.0` for
-  physical-disc playback; `0.2.1` → `0.3.0` for HDMI bitstream + multichannel AC-3.
-  ⚠ Judge the bump against the WHOLE unreleased delta on `main`, not just the branch in
-  hand — several patch-looking merges can add up to a minor release.
-- **`BUILD_DATE`** — `yymmdd`, regenerated per compile by `sys/build_id.tcl`. ⚠ Do NOT
-  extend it with a time or a git SHA to separate same-day builds. Same-day dev builds are
-  told apart by their `build_release.sh --name` filename (which carries `<date>_<time>`),
-  and a second build sent to testers on one day appends a digit to the slug
-  (`dev-seekrealign2`).
-  ⚠ `BUILD_DATE` is generated **inside the Quartus container, in UTC**, while the `.rbf`
-  filename comes from `date` wherever the pack ran. They agree when both run under
-  `USE_DOCKER=1`; a native pack of a container-built `.sof` can straddle UTC midnight and
-  disagree by a day. That is why the release workflow warns rather than fails on it.
-
-**⚠ BOTH `` `CORE_VERSION `` AND `BUILD_DATE` ARE INSIDE `CONF_STR` = INSIDE THE NETLIST.**
-Either one changing re-rolls `DVD.qsf`'s pinned fitter `SEED` — measured, not theoretical:
-the ledger records `"0.1a"`→`"0.1b"` alone dropping SEED 8 below the hot-corner gate. So
-`` `CORE_VERSION `` may change **once per branch** (free — the branch changes the netlist
-anyway) and **never per commit**. Never derive either from a git SHA, a branch name read at
-build time, or a timestamp: every compile would become a new netlist, and the seed ledger's
-hand-written measurements would stop describing the thing that was built.
-
-**Publishing** — see `.claude/skills/release/SKILL.md`. It is the single source of truth
-for the tag format, the asset list and the draft→smoke-test→publish flow; this file
-deliberately does not restate it, because the copy that used to live here went stale (it
-still described the retired `v<version>-<yyyymmdd>` tag scheme long after v0.2.0 moved to
-plain semver). In outline: build the core locally, `tools/publish_draft.sh v<semver>`
-creates the draft and dispatches `.github/workflows/package.yml`, which validates the core
-and attaches the Main + install zip; flash and smoke-test the draft; then publish.
+- **`` `CORE_VERSION `` (`dvd/emu.sv`) is shown in the OSD as `` `CORE_VERSION` `BUILD_DATE` ``.**
+  A bare semver lives in **exactly one commit per release**: the release commit.
+- **★ Set `dev-<slug>` as the FIRST commit of every feature branch, named after the feature.
+  Mandatory.** Nothing resets `` `CORE_VERSION `` after a merge or a release (both resets
+  retired 2026-09-08, by user decision), so `main` carries whatever the last merge or release
+  left. `build_release.sh` refuses a bare semver on a dev build and a `dev-` string on a
+  `--release` build, and warns when the slug does not resemble the branch name.
+  ⛔ Never reinstate the retired "bump to the speculated next semver" rule.
+- **The string:** ≤ 18 characters (the About screen truncates at 30), and no `,` `;` `"`
+  (`CONF_STR` parsing silently truncates at them).
+- **How far to bump** (by user decision, 2026-08-31): **patch** = fixes, docs, internal
+  rework; **minor** = any new user-visible capability (a format, an output path, an OSD
+  option, content that used to be broken now working); **major** reserved. Judge against the
+  WHOLE unreleased delta on `main`.
+- **The saved-settings `"v,N;"` config version is a separate counter:** bump it only on an
+  incompatible `O[..]` relayout (`docs/idle_screen.md`).
+- **`BUILD_DATE`** (`yymmdd`, per compile, generated in UTC inside the Quartus container):
+  never extend it with a time or a SHA. A second same-day build sent to testers appends a
+  digit to the slug (`dev-seekrealign2`).
+- **⚠ Both are inside `CONF_STR`, so inside the netlist:** changing either re-rolls the pinned
+  fitter `SEED`. `` `CORE_VERSION `` changes once per branch, never per commit, and neither is
+  ever derived from a git SHA, a branch name or a timestamp.
+- **Publishing:** `.claude/skills/release/SKILL.md` is the single source of truth (tag
+  format, assets, draft → smoke test → publish).
 
 ### Sending a build to testers
 
-Pre-release builds go out to testers directly (Discord); they are deliberately **not**
-GitHub releases, so the releases page shows only real releases. Traceability comes from the
-version string instead — two commands, no flags:
+Pre-release builds go to testers directly (Discord), not as GitHub releases:
 
 ```bash
 USE_DOCKER=1 ./build_release.sh --compile     # --name defaults to the dev-<slug>
@@ -736,28 +646,11 @@ USE_DOCKER=1 ./main/build_main.sh             # only if the Main also changed
 ./tools/package_release.sh                    # -> MiSTer_DVD_dev-<slug>_<date>.zip
 ```
 
-The OSD line, the `.rbf` name and the zip name all carry the same slug and date, so a report
-saying *"I'm on dev-seekrealign 260903"* names exactly one build:
-
-| | |
-|---|---|
-| OSD | `DVD dev-seekrealign 260903` |
-| `.rbf` (inside the zip, name unchanged for MiSTer's core browser) | `DVD_20260903.rbf` |
-| zip | `MiSTer_DVD_dev-seekrealign_20260903.zip` |
-| `dvd_report` bundle manifest | `core_version: "dev-seekrealign 260903"` |
-
-Sending a **second** build from the same branch on the same day: append a digit to the slug
-(`dev-seekrealign2`), or the two are indistinguishable in the OSD.
-★ **`main/build_main.sh` writes the same kind of record for the Main:
-`MiSTer_DVDcss.json` beside the binary**, carrying the commit, the BRANCH, a
-**dirty flag with the offending file list**, the stock ref and the binary's
-sha256. ⚠ The dirty flag is the load-bearing field, not the commit: a Main is
-routinely built from a dirty tree and deployed before the commit that captures
-it, so a bare HEAD would name a commit whose content is not what shipped. ★ The
-sha256's first 8 hex are the `MiSTer_DVDcss_hil_<...>` name `tools/mister.py`
-deploys under, so the sidecar ties a file on the SD card back to a commit —
-⚠ that deploy name is a CONTENT hash, not a VCS one. The `.rbf.json` beside
-each pack records the exact commit, seed and timing if a build ever needs identifying later.
+The OSD line, the `.rbf` name, the zip and the `dvd_report` manifest all carry the same slug
+and date. `main/build_main.sh` writes `MiSTer_DVDcss.json` beside the binary: commit, branch,
+a **dirty flag with the file list** (the load-bearing field), and the sha256, whose first 8
+hex are the `MiSTer_DVDcss_hil_<...>` name `tools/mister.py` deploys under. Each `.rbf` has
+an `.rbf.json` with its commit, seed and timing. Full table and details: `docs/versioning.md`.
 
 > **Always build after completing a requested feature.** When an RTL/feature change is
 > finished (committed, PR opened), run `./build_release.sh --compile` to produce a fresh
