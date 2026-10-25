@@ -31,7 +31,7 @@ scenario's "vars" (overridable with hil_play --set NAME=v).
 Where the rig keeps the library comes from tools/.mister_rigs.json (gitignored):
 
     {"default": "main",
-     "rigs": {"main": {"host": "root@<addr>", "share_root": "/media/fat/cifs/DVD",
+     "rigs": {"main": {"host": "root@<addr>", "share_root": "/media/fat/cifs/<share>",
                        "library_root": "/path/to/the/same/library/on/this/host",
                        "capture": true}}}
 

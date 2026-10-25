@@ -98,8 +98,9 @@ confusing timeout.
 
 ## Rigs
 
-- The capture card is on **.236**, the maintainer's rig. Use it only when the maintainer
-  says so. .201 has no capture path.
+- The capture card is on one rig only, the maintainer's (marked `"capture": true` in
+  `tools/.mister_rigs.json`, gitignored). Use it only when the maintainer says so; the
+  other rig has no capture path.
 - After a reboot, the rig's CIFS share must be remounted with its own
   `Scripts/cifs_mount.sh`.
 - The share layout differs between rigs (`cifs/DVD/...` vs `cifs/games/DVD/...`).
