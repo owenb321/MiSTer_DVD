@@ -1,0 +1,287 @@
+{
+ "name": "thayers_quest",
+ "title": "Thayer's Quest",
+ "image": {
+  "fingerprint": "2a73ce831f0cc1156e426fbcecccc9294c0750c4",
+  "name_hints": [
+   "interactive/Thayer's Quest.iso"
+  ]
+ },
+ "pal": false,
+ "policy": {
+  "also_select": {},
+  "routes": {}
+ },
+ "macros": {
+  "start": [
+   {
+    "wait": "live",
+    "timeout": 60
+   }
+  ]
+ },
+ "notes": [
+  {
+   "text": "An adventure, not a shooter: every input point is a still with 2-7 CHOICE buttons. A choice sets g[0] to a scene code and LinkTailPGC; the region PGC's POST either leaves the region (JumpVTS_PTT) or calls the VMGM dispatcher (PGC 4), whose PRE sends g[0] to the scene. No rnd.",
+   "why": "So a 'shot model' does not apply; the disc is mapped as a choice graph (tools/choice_graph.py) and played by route scripts."
+  },
+  {
+   "text": "Power-on is an attract loop: VMGM 23 (5 s logo) -> 8 (4 s) -> 9 (31 s) -> 10, whose cell commands loop back to 9 unless a button is pressed.",
+   "why": "nav_offline's trace_nav park rule never parks in a two-PGC loop; choice_graph uses Player.run(park_on_buttons=True)."
+  },
+  {
+   "text": "Choice-graph states include all 16 GPRMs: inventory and progress live there, so one scene with different items is a different node. The VMGM options/title menus alone account for many states.",
+   "why": "Keep the graph honest about game state; cap with --max-nodes."
+  },
+  {
+   "text": "Choice graph (2026-10-23): 214 input locations; with --state-regs 1,2,3,5,6,7,13 and --per-loc 12 the novelty-first search completes (2142 states, deepest 43 presses). Every region VTS 1-9, 11 is reachable; the route into VTS 8 is 30 presses.",
+   "why": "Plain breadth-first over all 16 registers never converged: the VMGM inventory/option screens alone made 5000+ states."
+  },
+  {
+   "text": "to_vts8 PASS on dev-cellcmdhold12 (2026-10-23): all 30 steps of the offline route taken on the rig.",
+   "why": "Evidence that the offline choice graph matches the real core across the whole adventure."
+  },
+  {
+   "text": "Cell 8 (the Guild Hall/Outskirts still) is the last picture of cell 7's clip held: the alignment cannot tell them apart, so glendoe_clip checks 6 -> 7 on screen and reaches cell 8 through the FIFO.",
+   "why": "A 7 -> 8 screen_sequence would fail on identical pictures, not on playback."
+  }
+ ],
+ "scenarios": {
+  "explore": {
+   "description": "Start the disc and walk its default path for 5 minutes (explore); then tools/hil_disc.py explored <run dir>",
+   "opts": {
+    "Debug Overlay": "On"
+   },
+   "capture_s": 330,
+   "steps": [
+    {
+     "macro": "start"
+    },
+    {
+     "play": {
+      "until": "False",
+      "timeout": 300,
+      "policy": [],
+      "select_unknown_after_s": 2.0,
+      "delay_s": 0.15,
+      "hold_ms": 20
+     }
+    }
+   ],
+   "expect": []
+  },
+  "into_vts2": {
+   "description": "Replay the model's shortest route from power-on into the first region (VTS 2): six presses through the attract loop, the main menu (one Up to b1) and VTS 1. Proves the offline choice graph matches the rig.",
+   "opts": {
+    "Debug Overlay": "On"
+   },
+   "capture_s": 240,
+   "measure": {
+    "vts": 2,
+    "pgcn": 1,
+    "cells": [
+     1,
+     2,
+     3
+    ],
+    "overlay": true
+   },
+   "steps": [
+    {
+     "macro": "start"
+    },
+    {
+     "play": {
+      "route_script": [
+       1,
+       1,
+       1,
+       1,
+       1,
+       1
+      ],
+      "until": "nav.get('route_left')==0 and nav.get('vts')==2",
+      "timeout": 200,
+      "policy": [],
+      "route_delay_s": 0.4,
+      "hold_ms": 30
+     }
+    },
+    {
+     "sleep": 10
+    }
+   ],
+   "expect": [
+    {
+     "type": "route_followed"
+    },
+    {
+     "type": "reaches",
+     "vts": 2,
+     "cell": 2
+    }
+   ],
+   "suite": {
+    "tier": "quick",
+    "capture_s": 90
+   }
+  },
+  "to_vts8": {
+   "description": "Replay the model's route from power-on through every region into the last one (VTS 8): 30 presses, via VTS 2-7. Proves the offline choice graph holds across the whole adventure.",
+   "opts": {
+    "Debug Overlay": "On"
+   },
+   "capture_s": 2400,
+   "measure": {
+    "vts": 8,
+    "pgcn": 1,
+    "cells": [
+     1,
+     2,
+     3
+    ],
+    "overlay": true
+   },
+   "steps": [
+    {
+     "macro": "start"
+    },
+    {
+     "play": {
+      "route_script": [
+       1,
+       1,
+       1,
+       1,
+       1,
+       1,
+       1,
+       3,
+       2,
+       4,
+       7,
+       3,
+       1,
+       2,
+       1,
+       4,
+       4,
+       1,
+       1,
+       6,
+       1,
+       2,
+       1,
+       2,
+       1,
+       1,
+       1,
+       2,
+       2,
+       2
+      ],
+      "until": "nav.get('route_left')==0 and nav.get('vts')==8 and nav.get('rcell',0)>=1",
+      "timeout": 2300,
+      "policy": [],
+      "route_delay_s": 0.4,
+      "hold_ms": 30
+     }
+    },
+    {
+     "sleep": 10
+    }
+   ],
+   "expect": [
+    {
+     "type": "route_followed"
+    },
+    {
+     "type": "reaches",
+     "vts": 8,
+     "cell": 2
+    },
+    {
+     "type": "arms_on_time",
+     "vts": 2,
+     "max_late_s": 0.1
+    }
+   ]
+  },
+  "glendoe_clip": {
+   "description": "The first travelling-spell decision (crystal ball, VTS 2 PGC 1 cell 6, still 255; b1 = Village of Glendoe): after the press, cell 7 (17.87 s clip, PTS restart, no buttons) must play on screen before cell 8's choice. Maintainer report 2026-10-25: the clip does not show.",
+   "opts": {
+    "Debug Overlay": "On"
+   },
+   "capture_s": 200,
+   "measure": {
+    "vts": 2,
+    "pgcn": 1,
+    "cells": [
+     6,
+     7,
+     8
+    ],
+    "overlay": true
+   },
+   "steps": [
+    {
+     "macro": "start"
+    },
+    {
+     "play": {
+      "route_script": [
+       1,
+       1,
+       1,
+       1,
+       1,
+       1,
+       1,
+       1
+      ],
+      "until": "nav.get('route_left')==0 and nav.get('vts')==2 and nav.get('rcell',0)>=7",
+      "timeout": 180,
+      "policy": [],
+      "route_delay_s": 0.4,
+      "hold_ms": 30
+     }
+    },
+    {
+     "sleep": 10
+    }
+   ],
+   "expect": [
+    {
+     "type": "route_followed"
+    },
+    {
+     "type": "reaches",
+     "vts": 2,
+     "cell": 8
+    },
+    {
+     "type": "screen_sequence",
+     "vts": 2,
+     "cells": [
+      6,
+      7
+     ]
+    },
+    {
+     "type": "no_silence",
+     "cells": [
+      7
+     ],
+     "max_s": 0.5
+    },
+    {
+     "type": "no_freeze",
+     "cells": [
+      7
+     ],
+     "max_s": 0.5
+    }
+   ]
+  }
+ }
+}

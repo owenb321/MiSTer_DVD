@@ -1,0 +1,84 @@
+{
+ "name": "castle_in_the_sky",
+ "title": "Castle in the Sky (film with angle blocks)",
+ "image": {
+  "fingerprint": "3cba1045f43369d4208f1fa37a830a374d23debe",
+  "name_hints": [
+   "CASTLE_IN_THE_SKY_20260803_020602.iso"
+  ]
+ },
+ "pal": false,
+ "policy": {
+  "also_select": {},
+  "routes": {}
+ },
+ "macros": {},
+ "notes": [
+  {
+   "text": "The feature (VTS 2 PGC 1) has three 2-angle blocks: cells 1-2 (12 s each), 4-5 (99 s each) and 33-34. The PGC's PRE sets AGLN from g[14], so Play runs angle 2: cells 2, 3, 5, 6. Block-end junctions: 2 -> 3 at ~12 s and 5 -> 6 at ~331 s.",
+   "why": "A sanity check for the reader's angle-block playback when the cell-command hold applies in angle blocks (#176, dev-cellcmdhold13): no hitch at block ends."
+  },
+  {
+   "text": "The rig's first menu is VTS 1 PGC 1, not the VMGM screen the model parks on, so a route never matched: the scenario Selects the default button on each menu instead (a film's default is Play).",
+   "why": "route_script waited at step 0 for the whole run (castle_h12)."
+  },
+  {
+   "text": "Power-on to the menu takes ~220 s (warnings and trailers), the feature starts ~50 s later; the 5 -> 6 junction comes ~330 s after that. capture_s 760.",
+   "why": "castle_h12b ended before the second junction."
+  }
+ ],
+ "scenarios": {
+  "angle_junctions": {
+   "description": "Play the feature from the menu through both early angle-block ends (2 -> 3, 5 -> 6): no frozen picture or silence of 1 s or more across either junction.",
+   "opts": {
+    "Debug Overlay": "Off"
+   },
+   "capture_s": 760,
+   "measure": {
+    "vts": 2,
+    "pgcn": 1,
+    "cells": [
+     2,
+     3,
+     5,
+     6
+    ],
+    "overlay": false
+   },
+   "steps": [
+    {
+     "play": {
+      "until": "nav.get('vts')==2 and nav.get('rcell',0)>=6",
+      "timeout": 720,
+      "policy": [],
+      "route_delay_s": 0.4,
+      "hold_ms": 30,
+      "select_unknown_after_s": 3.0
+     }
+    },
+    {
+     "sleep": 15
+    }
+   ],
+   "expect": [
+    {
+     "type": "junction_clean",
+     "vts": 2,
+     "cells": [
+      3,
+      6
+     ],
+     "window": [
+      -1.0,
+      6.0
+     ],
+     "max_s": 0.5
+    }
+   ],
+   "suite": {
+    "tier": "full",
+    "align": false
+   }
+  }
+ }
+}

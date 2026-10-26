@@ -1,0 +1,101 @@
+{
+ "name": "time_traveler",
+ "title": "Time Traveler (Digital Leisure, DVD)",
+ "image": {
+  "fingerprint": "513a14ace4ec747d9cf5c94d4340bf810c59868b",
+  "name_hints": [
+   "dvdi/TimeTraveler.iso"
+  ]
+ },
+ "pal": false,
+ "policy": {
+  "also_select": {},
+  "routes": {}
+ },
+ "macros": {},
+ "notes": [
+  {
+   "text": "Power-on: an intro (VTS 3 PGC 3) whose one button opens the main menu; Play = b1; then 2D Game (b1) / 3D Game (b2); 2D lands on an in-game PLAY/LEARN signpost (VTS 1 PGC 1 cell 1): b3 = PLAY (cell 39 -> CallSS VMGM pgc 4 -> the game in VTS 2), b6 = LEARN (instructions, back to the sign), doing nothing plays a tutorial of practice moves that also ends at cell 39. Route [1, 1, 1, 3].",
+   "why": "2D is the plain picture; the 3D game is the same game for anaglyph glasses."
+  },
+  {
+   "text": "VTS 1 PGC 1 is the tutorial: wrong practice moves play a short clip and carry on, so per-set death learning took the game-start call (pgc 4) for VTS 1's death and keyed LEARN at the sign; the agent looped on it 5 times. The scenarios route past it and skip_keys its windows.",
+   "why": "A tutorial where nothing kills breaks move_key's premise that wrong options share a death."
+  }
+ ],
+ "scenarios": {
+  "play": {
+   "description": "Start a game and make every keyed move as its window arms: every move must land on a right option's next cell, with no death clip before the next move.",
+   "opts": {
+    "Debug Overlay": "On"
+   },
+   "capture_s": 420,
+   "steps": [
+    {
+     "play": {
+      "route_script": [
+       1,
+       1,
+       1,
+       3
+      ],
+      "until": "False",
+      "timeout": 400,
+      "policy": [],
+      "responses_from": "move_vm",
+      "route_delay_s": 0.1,
+      "hold_ms": 30,
+      "skip_keys": [
+       "TT/1/1/"
+      ]
+     }
+    }
+   ],
+   "expect": [
+    {
+     "type": "moves_right"
+    }
+   ],
+   "suite": {
+    "tier": "quick",
+    "timeout": 150,
+    "capture_s": 170
+   }
+  },
+  "play_wrong": {
+   "description": "The control arm of 'play': the same run pressing a WRONG option at every keyed move (move_key pick='wrong'). moves_right must FAIL here, or it cannot tell a death from a survival.",
+   "opts": {
+    "Debug Overlay": "On"
+   },
+   "capture_s": 240,
+   "steps": [
+    {
+     "play": {
+      "route_script": [
+       1,
+       1,
+       1,
+       3
+      ],
+      "until": "False",
+      "timeout": 220,
+      "policy": [],
+      "responses_from": "move_vm",
+      "pick": "wrong",
+      "route_delay_s": 0.1,
+      "hold_ms": 30,
+      "skip_keys": [
+       "TT/1/1/"
+      ]
+     }
+    }
+   ],
+   "expect": [
+    {
+     "type": "moves_right",
+     "want": "wrong"
+    }
+   ]
+  }
+ }
+}

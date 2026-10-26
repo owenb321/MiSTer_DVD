@@ -1,0 +1,101 @@
+{
+ "name": "dragons_lair_20th",
+ "title": "Dragon's Lair 20th Anniversary Edition (Digital Leisure, DVD)",
+ "image": {
+  "fingerprint": "6601c18510264587bc5cf90d00f053dae37d8e9e",
+  "name_hints": [
+   "dvdi/DragonsLair20th.iso"
+  ]
+ },
+ "pal": false,
+ "policy": {
+  "also_select": {},
+  "routes": {}
+ },
+ "macros": {},
+ "notes": [
+  {
+   "text": "A move is a window of ~1 s over a playing clip with five auto-action buttons: b1 centre (Nop, the forced select), b2 up, b3 right, b4 down, b5 left. One arrow tap fires the move: no Select (move_key.responses sets no_select).",
+   "why": "A Select after a link move lands on whatever the jump brought up."
+  },
+  {
+   "text": "The title PRE sets g[1] = 10000. A sword/action button only SETs g[0] above it and the cell command judges it ('if (g[0] < g[1]) LinkPTT <death>'), like Mad Dog's shots; a wrong direction links straight to a death clip in the same PGC; doing nothing falls into the death test or into the NEXT window (one action can be three consecutive windows, each with its own right button: title 3 cells 43-45, 46-48, 49-51).",
+   "why": "move_key: doing nothing is followed past every later window; the death is the place most options pass through."
+  },
+  {
+   "text": "From a cold start the death handler (CallSS VMGM pgc 2) restarts title 2's scene (cell 72), whatever title died: the rig, mid-game, goes elsewhere. moves_right therefore judges by the FIRST cell after the window (the death clip, e.g. cell 54, vs the story's next cell, e.g. 55), which is local to the PGC.",
+   "why": "The Weakest Link lesson: paths from a cold start name places a mid-game rig never visits."
+  },
+  {
+   "text": "Power-on: title menu (VMGM PGC 1) Play = b1; options screen (VTS 19) defaults Arcade / Original / Easy / Unlimited lives, Play = b9; the game intro (VTS 1 cell 1, ~58 s) has one button that skips it (b1). Route [1, 9, 1].",
+   "why": "Unlimited lives keeps a wrong move from ending the run; the skip saves a minute per run."
+  }
+ ],
+ "scenarios": {
+  "play": {
+   "description": "Start a game (Play, Play: unlimited lives) and make every keyed move as its window arms: every move must land on the right option's next cell.",
+   "opts": {
+    "Debug Overlay": "On"
+   },
+   "capture_s": 420,
+   "steps": [
+    {
+     "play": {
+      "route_script": [
+       1,
+       9,
+       1
+      ],
+      "until": "False",
+      "timeout": 400,
+      "policy": [],
+      "responses_from": "move_vm",
+      "route_delay_s": 0.1,
+      "hold_ms": 30
+     }
+    }
+   ],
+   "expect": [
+    {
+     "type": "moves_right"
+    }
+   ],
+   "suite": {
+    "tier": "quick",
+    "timeout": 150,
+    "capture_s": 170
+   }
+  },
+  "play_wrong": {
+   "description": "The control arm of 'play': the same run pressing a WRONG option at every keyed move (move_key pick='wrong'). moves_right must FAIL here, or it cannot tell a death from a survival.",
+   "opts": {
+    "Debug Overlay": "On"
+   },
+   "capture_s": 240,
+   "steps": [
+    {
+     "play": {
+      "route_script": [
+       1,
+       9,
+       1
+      ],
+      "until": "False",
+      "timeout": 220,
+      "policy": [],
+      "responses_from": "move_vm",
+      "pick": "wrong",
+      "route_delay_s": 0.1,
+      "hold_ms": 30
+     }
+    }
+   ],
+   "expect": [
+    {
+     "type": "moves_right",
+     "want": "wrong"
+    }
+   ]
+  }
+ }
+}

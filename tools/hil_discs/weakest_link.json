@@ -1,0 +1,143 @@
+{
+ "name": "weakest_link",
+ "title": "The Weakest Link (DVD quiz)",
+ "image": {
+  "fingerprint": "55d1dc691fe0281b6cf1d9d65e3b0f80c496e235",
+  "name_hints": [
+   "interactive/WEAKEST_LINK_DES.iso"
+  ]
+ },
+ "pal": true,
+ "policy": {
+  "also_select": {},
+  "routes": {}
+ },
+ "macros": {
+  "start": [
+   {
+    "wait": "live and not menu",
+    "timeout": 60
+   }
+  ]
+ },
+ "notes": [
+  {
+   "text": "Questions are title-domain screens with 5 buttons over a held picture (A/B/C answers, D = PASS, centre = BANK); the answer labels and question text are in the video. Every answer button runs the same 'g[13]=0, LinkTailPGC'; the POST reads HL_BTNN (SPRM8) and branches, so the key is only visible by pressing each answer in the VM (tools/quiz_key.py --vm).",
+   "why": "Comparing button commands picks PASS as the 'odd one out'; that was wrong."
+  },
+  {
+   "text": "g[8] is a clock (counter mode): 'if (g[8] <= 0x3e8) LinkPGCN 2' is time running out. Offline it never counts, so key derivation sets it first: --setup x7100000875300000 (g[8] = 30000).",
+   "why": "Without it every answer reads as a timeout and all paths are the same."
+  },
+  {
+   "text": "On the rig the verdict is g[7], the money chain: a right answer raises it by 2 (0, 2, 4, ...), a wrong one resets it to 0; a right answer also adds 2 to g[14] and plays feedback cell 3 then PGC 4 -> 5, a wrong one cells 5/7 then straight to PGC 5. The offline paths (VTS 2 PGC 1378 cell 3 vs cell 2) are a cold-start artefact: the rig, mid-game, never visits them.",
+   "why": "answers_right compares PGC paths -> 18/18 'no data' (2026-10-23, wl_answer2); the wrong-answer control arm (wl_wrong1) showed g[7] separates the two both ways."
+  },
+  {
+   "text": "Question banks: VTS 3-19 and 24-28 hold 50 questions each, VTS 20 and 29 hold 13 (1,126 keyed screens). VTS 21-23 are menus: TT/21/30/1 is SELECT THE NUMBER OF PLAYERS, not a question.",
+   "why": "quiz_key keyed the player-count menu until the split-step rule required the wrong answers to agree on a real step."
+  }
+ ],
+ "scenarios": {
+  "explore": {
+   "description": "Start the disc and let the autoplayer play what it recognises for 5 minutes; then: tools/hil_disc.py explored <run dir>",
+   "opts": {
+    "Debug Overlay": "On"
+   },
+   "capture_s": 330,
+   "steps": [
+    {
+     "macro": "start"
+    },
+    {
+     "play": {
+      "until": "False",
+      "timeout": 300,
+      "policy": [],
+      "select_unknown_after_s": 2.0,
+      "delay_s": 0.15,
+      "hold_ms": 20
+     }
+    }
+   ],
+   "expect": []
+  },
+  "answer": {
+   "description": "Walk the menus with default Selects and, at every question the VM keys cover, give the right answer for 5 minutes: every answer must take the right-answer path.",
+   "opts": {
+    "Debug Overlay": "On"
+   },
+   "capture_s": 360,
+   "steps": [
+    {
+     "macro": "start"
+    },
+    {
+     "play": {
+      "until": "False",
+      "timeout": 300,
+      "policy": [],
+      "responses_from": "quiz_vm",
+      "select_unknown_after_s": 2.0,
+      "route_delay_s": 0.4,
+      "hold_ms": 30
+     }
+    }
+   ],
+   "expect": [
+    {
+     "type": "answers_right",
+     "verdict": {
+      "g": 7,
+      "right": "up"
+     }
+    }
+   ],
+   "suite": {
+    "tier": "quick",
+    "timeout": 240,
+    "capture_s": 260
+   }
+  },
+  "answer_wrong": {
+   "description": "The control arm of 'answer': the same run aiming at a WRONG answer on every keyed question (quiz_key pick='wrong'). The right/wrong evidence must read wrong here, or answers_right cannot tell the two apart.",
+   "opts": {
+    "Debug Overlay": "On"
+   },
+   "capture_s": 360,
+   "steps": [
+    {
+     "macro": "start"
+    },
+    {
+     "play": {
+      "until": "False",
+      "timeout": 300,
+      "policy": [],
+      "responses_from": "quiz_vm",
+      "select_unknown_after_s": 2.0,
+      "route_delay_s": 0.4,
+      "hold_ms": 30,
+      "pick": "wrong"
+     }
+    }
+   ],
+   "expect": [
+    {
+     "type": "answers_right",
+     "verdict": {
+      "g": 7,
+      "right": "up"
+     },
+     "want": "wrong"
+    }
+   ]
+  }
+ },
+ "quiz": {
+  "setup": [
+   "x7100000875300000"
+  ],
+  "note": "g[8] (the clock) = 30000 so offline answers are not timeouts"
+ }
+}

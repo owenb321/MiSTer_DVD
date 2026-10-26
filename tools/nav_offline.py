@@ -108,6 +108,8 @@ class Disc(R.IsoNav):
         for i, c in enumerate(p['cells']):
             e = self.rd(abs_byte + p['cell_off'] + i * 24, 24)
             c['first'], c['last_vobu'], c['last'] = struct.unpack('>III', e[8:12] + e[16:24])
+            # cell block mode (1 first, 2 middle, 3 last) and type (1 = angle)
+            c['bmode'], c['btype'] = (e[0] >> 6) & 3, (e[0] >> 4) & 3
         return p
 
     def ptt(self, vts, ttn, part):
@@ -201,6 +203,9 @@ class Player:
         self.blocks = 0
         self.log = []
         self.path = []                  # the PGCs that played a cell (path_key), in order
+        self.no_park = set()
+        self.trace = []                 # every cell entered: (dom, vts, pgcn, 0-based cell),
+                                        # in order (choice_graph's scene cards read it)
         # the reader's PTT state (dvd_iso_reader cur_ttn / ptt_mem): which title's
         # VTS_PTT_SRPT is resident, and whether it names the playing PGC
         self.cur_ttn, self.ptt_tab = 1, []
@@ -358,9 +363,39 @@ class Player:
                     cell=self.cell + 1, buttons=buttons, gprm=g,
                     gmode=self.sh.m.ram[S.N.RAM_MAP['GMODE']])
 
-    def run(self, script):
+    def _block(self, p, ci):
+        """(first, last) cell indexes of the angle block holding cell ci, or None."""
+        cs = p['cells']
+        if ci >= len(cs) or cs[ci].get('btype') != 1:
+            return None
+        a = ci
+        while a > 0 and cs[a].get('bmode') != 1 and cs[a - 1].get('btype') == 1:
+            a -= 1
+        b = ci
+        while b + 1 < len(cs) and cs[b].get('bmode') != 3 and cs[b + 1].get('btype') == 1:
+            b += 1
+        return a, b
+
+    def _block_last(self, p, ci):
+        blk = self._block(p, ci)
+        return blk[1] if blk else ci
+
+    def _angle_cell(self, p, ci):
+        blk = self._block(p, ci)
+        if not blk:
+            return ci
+        ang = self.sh.sprm[3] if 1 <= self.sh.sprm[3] <= 9 else 1
+        return min(blk[0] + ang - 1, blk[1])
+
+    def run(self, script, park_on_buttons=False):
         """-> [(action, landing state)] in trace_nav's pairing (the LAST park after
-        an action is its landing)."""
+        an action is its landing).
+
+        park_on_buttons: also park at the first cell of a PGC that carries live buttons,
+        even without a still or a loop. For a disc whose input points sit in an attract
+        loop that alternates between PGCs (Thayer's Quest: VMGM 9 <-> 10), which the
+        trace_nav park rule never confirms. Off by default, so the libdvdnav diff keeps
+        trace_nav's park rule exactly."""
         toks = script.split()
         ti = 0
         rows, pending = [], None
@@ -384,9 +419,17 @@ class Player:
                 continue
             if self.cell >= p['nr_cells']:
                 self.cell = 0
+            # an ANGLE block plays one of its cells, the selected angle's (SPRM3), as
+            # libdvdnav does: entering the block anywhere else moves to that cell
+            self.cell = self._angle_cell(p, self.cell)
             key = (self.dom, self.vts, self.pgcn, self.cell)
             if key != prev or True:          # every entry into a cell is a cell change
                 self.cells += 1
+                c_ = p['cells'][self.cell] if self.cell < len(p['cells']) else {}
+                b_ = self.d.vobs.get((self.dom, self.vts if self.dom in (DOM_VTSM, DOM_TT) else 0))
+                self.trace.append((self.dom, self.vts, self.pgcn, self.cell,
+                                   (b_ + c_['first']) if b_ is not None and 'first' in c_ else None,
+                                   (b_ + c_['last']) if b_ is not None and 'last' in c_ else None))
                 if wait > 0:
                     wait -= 1
                 if cand is not None and key == cand:
@@ -426,6 +469,12 @@ class Player:
             # (libdvdnav play_Cell_post; docs/dvd_nav.md "An indefinite still and its
             # cell command")
             still = still_of(p, self.cell)
+            # no_park: (vts, pgcn, 1-based cell) where a live window must NOT stop play --
+            # the rest of a timed window a press was already made in (tools/move_key.py).
+            # Empty by default, so the libdvdnav diff is unchanged.
+            if (park_on_buttons and h and nb and not acted and wait == 0
+                    and (self.vts, self.pgcn, self.cell + 1) not in self.no_park):
+                park, cand = True, None
             if still == 0xFF:
                 park, cand = True, None
             elif still and cand is not None and cand[:3] == key[:3] and not acted:
@@ -446,6 +495,11 @@ class Player:
                     if h and 1 <= n <= nb:
                         self.sh.inp_lv['btn_sel'] = n
                         v = self.verdict(self.vm(f'pulse btn={h[2][n - 1].hex()}'))
+                elif t.startswith('x') and len(t) == 17:
+                    # 'x<16 hex>': execute that 8-byte VM command here as a button would
+                    # (no button selected) -- e.g. JumpTT + LinkPGCN to reach a screen a
+                    # random disc cannot be replayed to (tools/quiz_key.py)
+                    v = self.verdict(self.vm(f'pulse btn={t[1:]}'))
                 elif t == 'mR':
                     v = self.verdict(self.vm('pulse menu'))
                 elif t == 'mT':
@@ -476,7 +530,9 @@ class Player:
                 continue
             if v[0] == 'replay':
                 continue
-            self.cell += 1
+            # a plain advance out of an angle cell continues PAST the block, not into the
+            # next angle's copy of the same segment (Time Traveler VTS 2: 2-angle blocks)
+            self.cell = self._block_last(p, self.cell) + 1
             if self.cell < p['nr_cells']:
                 continue
             # the PGC ends (its still was the last cell's: still_of)
@@ -493,6 +549,9 @@ class Player:
             st = self.follow(v)
         if pending is not None:
             rows.append((pending, self.state(0)))
+        # how play ended: 'play' = parked with the script used up (or a cap), 'stop' = the
+        # disc stopped playing (tools/move_key.py: a dead end is not progress)
+        self.ended = st
         return rows
 
 

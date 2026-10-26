@@ -22,6 +22,70 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ✅ **HIL PLAY HARNESS: ANSWERING AND TIMED MOVES (2026-10-24; HW-proven on the capture
+  rig; ✅ MERGED PR #180).** The harness now plays two more game types
+  from keys derived in the core's own VM, each confirmed by a control arm that must fail.
+  - **Quiz (The Weakest Link):** `tools/quiz_key.py --vm` keys 1,126 questions. The rig's
+    verdict is the disc's score register, g[7], the money chain: a right answer raises it
+    by 2 and a wrong one resets it to 0. 18/18 right; the wrong-answer arm reads wrong 20/20.
+  - **Reaction (Dragon's Lair 20th, `dvdi/`):** `tools/timed_inputs.py` sorts
+    buttons-over-video into loop-wait/skip/menu-call/reaction. `tools/move_key.py` keys 233
+    moves:
+    - doing nothing is followed past later windows;
+    - the death is a learned command;
+    - windows are judged in context through the previous right press;
+    - `nav_offline.Player.no_park` replaces waits.
+
+    The rig check is `moves_right`, by death cells: 110/110 right in 400 s; the control arm
+    reads wrong 18/18.
+  - **Two more reaction discs (2026-10-24):**
+    - Dragon's Lair II: 820/820 windows keyed; 206/206 rig moves right in its "Regular
+      Moves" (< 2 s) mode.
+    - Time Traveler: 281/668 keyed. Its rig moves all die because the core runs each
+      VTS 2 cell command 0.18 s BEFORE the window arms: the reader's cell end, ~1.2 s
+      ahead of display on that low-bitrate set. Pre-existing on `main`; reported to the
+      #176 session.
+    - Fixed by the #176 owner in `dev-cellcmdhold13`: the windows sit in angle blocks,
+      which the hold excluded; and a CONTINUE verdict there advanced into the sibling
+      angle. On hold13, Time Traveler VTS 2 passes 5/5 and the controls hold (Mad Dog,
+      Dragon's Lair II, Castle in the Sky's angle joins, now checked by
+      `junction_clean`).
+    - **Regression gate:** `tools/hil_suite.py run --rbf B --control C` runs every profile
+      scenario marked `"suite"` on both builds and tables REGRESSION/fixed. First run: hold13
+      against `main`+FIFO, 14 checks, 0 FAIL, 0 regressions, 10 fixed (quick tier, 47 min).
+    - Rules added: per-set and disc-wide death commands, immediate retry, play-stops,
+      treasure detours, a tutorial `skip_keys`, already-highlighted Select, and colliding
+      `hli_s_ptm` resolved by read time.
+  - **Lesson, twice:** a path from a cold `JumpTT` names places a mid-game rig never visits.
+    Judge on the rig by something local: a score register, or a death clip in the same PGC.
+  - **Gaps:**
+    - Dragon's Lair VTS 6 (18 windows) sits behind a g[0]-coded dispatcher;
+    - Weakest Link's later rounds (VTS 24–29) are keyed but not yet reached on the rig.
+  - **Detail:** `docs/hil_play_harness.md` "Answering" and "Buttons over video".
+  - **Next:**
+    - the other `dvdi/` reaction games (Space Ace, Dragon's Lair II, the ALG shooters);
+    - merge.
+- ✅ **HIL PLAY HARNESS, HOST SIDE (2026-10-23; HW-proven on the capture rig; ✅ MERGED
+  PR #180).**
+  - **Tools:**
+    - `tools/hil_play.py`: board agent, FIFO autoplayer, wall-clock capture;
+    - `tools/hil_timeline.py`: per-frame picture identification against the disc,
+      junctions, pace, audio vs reference, overlay reads, capture latency;
+    - `tools/disc_timing.py` (authored timing, shot targets);
+    - `tools/hil_disc.py` (profiles, draft, explore);
+    - `tools/hil_expect.py` (PASS/FAIL/NODATA).
+  - **Found on hardware for issue #176:**
+    - `EARLY_LEAD` makes the duel winnable before the draw;
+    - `main`'s VTS 15 cell 2 is unhittable (verdict at STC 0.520, arm at 1.032);
+    - the `dur_hold` 2.000 s still under the #176 hold causes the saloon gunshot silence
+      and the VTS 15 junction freeze;
+    - the hold9 re-judge race (STC mirror);
+    - the first-shootout purple blip's real trigger.
+  - **Verified:** hold7–hold12, one change per build. Detail: `docs/hil_play_harness.md`.
+  - **Next:**
+    - a shot model for non-ALG games;
+    - an explore run on Scene It and Scooby on the rig;
+    - merge.
 - ✅ **A TITLE CELL COMMAND WITH BUTTONS UP RUNS AT THE DISPLAYED CELL END (issue #176,
   2026-10-12; ✅ MERGED PR #179; ✅ HIL suite vs `main` + maintainer's play-test).**
   - **Field report:** in Mad Dog McCree a shot never registers. HW sweep 2026-10-11 on the
@@ -87,7 +151,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     below.)
   - **The HIL play harness takes over the play-testing (2026-10-23).** The maintainer
     could not keep play-testing every build; the harness session
-    (`feature/hil-play-harness`, `docs/hil_play_harness.md`) drives .236 with capture,
+    (PR #180, `docs/hil_play_harness.md`) drives the capture rig with capture,
     timed inputs and the nav event FIFO, merged here (X0..X2 wired) for
     `dev-cellcmdhold6`. Its findings, all capture-scored:
     - The ladder at Select 37.3 s (first shootout): v0.9.1 miss, hold1/2 hit, hold4/5
@@ -191,7 +255,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     (`main` 1 right / 11 wrong); Dragon's Lair II 72/72 (`main` dies at TT 1 PTT 6/5);
     Time Traveler 7/7 (`main` 0/5). Unchanged PASS on both: Thayer's Quest's route into
     VTS 2, Weakest Link's answers, Mad Dog's first-shootout arm timing. The suite is
-    `tools/hil_suite.py` on `feature/hil-play-harness` (quick tier ~23 min per build).
+    `tools/hil_suite.py` (PR #180; quick tier ~23 min per build).
   - **Merged (PR #179)** after the maintainer's play-test of `dev-cellcmdhold13` and a
     release-style smoke (T2 menus/film, PAL Progressive/Interlaced, every audio codec,
     subtitles, transport, a 15-min Men in Black soak: 0 lates/drops, 0 findings). Not yet
@@ -201,7 +265,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     re-judged at the re-anchor".
 
 - ✅ **HIL PLAY HARNESS, SLICE B: NAV EVENT FIFO (2026-10-22; fitted and HIL-proven on every
-  #176 build, MERGED with PR #179; the harness's host tools stay on `feature/hil-play-harness`).** `dvd/nav_trace.sv` is a 256 × 80-bit clk_sys FIFO of
+  #176 build, MERGED with PR #179; the harness's host tools MERGED with PR #180).** `dvd/nav_trace.sv` is a 256 × 80-bit clk_sys FIFO of
   timestamped navigation events. There are 16 sources: GPRM writes, STC jumps, key presses,
   button activation, HLI promotion, cell/PGC changes, flushes, audio-ring-low,
   pause/still/live/menu, and 3 spare hooks for issue #176's branch-only signals. Each entry
