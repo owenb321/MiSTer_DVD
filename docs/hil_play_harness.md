@@ -839,9 +839,11 @@ After a reset the edge detectors start at 0, so the state at reset release is lo
 This is the dvd_telem protocol over hps_io's EXT_BUS: `io_enable` frames a transaction,
 `io_strobe` clocks one word, the first strobe carries the command, and the word answered at
 strobe k is word k. 0x7C is free: Main uses 0x00–0x44, 0x61–63 and 0xF0–F9, and 0x7A/0x7B are
-dvd_telem. dvd_telem takes the bus only for 0x7A/0x7B and nav_trace only for 0x7C. Each
-decides on the transaction's first strobe, so the emu OR/mux (`ext_bus[32] = telem_drive |
-trc_drive`, `ext_bus[15:0] = trc_drive ? trc_dout : telem_dout`) never sees both drive.
+dvd_telem; 0x7D has since gone to the VM state snapshot (`dvd/vm_snap.sv`,
+`docs/nav_engine.md` §8). dvd_telem takes the bus only for 0x7A/0x7B, nav_trace only for
+0x7C and vm_snap only for 0x7D. Each decides on the transaction's first strobe, so the emu
+OR/mux (`ext_bus[32] = telem_drive | trc_drive | snap_drive`, `ext_bus[15:0] = trc_drive ?
+trc_dout : snap_drive ? snap_dout : telem_dout`) never sees two drive.
 
 | Word | Content |
 |---|---|

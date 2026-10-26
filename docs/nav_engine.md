@@ -136,6 +136,8 @@ whose ROM is that arm, which is how the runners' VM arms work now.
 | `run_select_noop --red` R5/R6 | microcode arms `werrbtn` / `wtobtn` (S25b / S25a) |
 | `run_chap_edge --red` N1–N6 | microcode arms `chnat`, `chnext`, `chfirst`, `chmenu`, `usrstuck`; N2 (the `vm_adv` mask) is a wrapper edit; the same V-arms as before |
 | `run_player_regs --red` R4 | the wrapper's SPRM20 window |
+| `bench/dvd/run_vm_ab.sh` (snapshots) | every script also carries `pulse snap` steps (§8): old FSM = new RTL proves a snapshot changes nothing; py = new on its words; `;MUT snapram` / `snapsprm`; wrapper arms W8–W10 |
+| `bench/dvd/run_vm_snap.sh --red` | the snapshot end to end, real microcode + `dvd/vm_snap.sv` (§8): 8 arms, S1–S10, `tools/check_vm_snap_wiring.py` (12 wiring mutations) |
 | `dvd_vm_tb`, `dvd_vm_atmos_tb`, the 12 reader+VM benches | unchanged in substance; the state that moved into the RAM is reached through `` `VM_GPRM(dut, i) `` etc. `dvd_vm_tb` prints the same 49 lines on both VMs. |
 | `run_reader_regress.sh --baseline <main>` | The PR #135 acceptance, met (2026-10-07). Verdicts are identical on all 51 arms. The 38 arms without the VM are bit-identical (log and trace). The 13 with it differ in their traces (a sequencer takes more cycles), and their logs differ only in numbers: `$finish` times, `cap=` cycle counts, printed `vm.state`. |
 
@@ -484,14 +486,67 @@ cannot be compared, because libdvdnav itself fails on them.
 
 ## 7. Next
 
-- **The ROM has 52 words free (972 / 1,024; sim-proven, ⏳ HW pending),** after the
-  2026-10-08 compaction
-  (PR #169): the domain and VTS setup shared by most jumps (`JSETV`,
-  `JSETV0`), and the mount clear as one loop over a contiguous RAM range. Past
-  that, a fifth M10K gives 1,280 words. The RSM save could still become a table
-  walk.
+- **The ROM has 28 words free (996 / 1,024)** since the state snapshot (§8) took 24.
+  The 2026-10-08 compaction (PR #169) had freed them: the domain and VTS setup shared
+  by most jumps (`JSETV`, `JSETV0`), and the mount clear as one loop over a contiguous
+  RAM range. Past that, a fifth M10K gives 1,280 words. The RSM save could still
+  become a table walk.
 - **The sequencer's register file has four read ports** (`rs`, `rt`, `rd` for `st`,
   `rk` for `dcmp`). Folding `st` onto `rt` and `dcmp`'s op onto a fixed register is
   the obvious ALM trim inside the 663.
 - **The reader's parse** (§10b's real prize, its 4,352 ALM): first the measurement
   split of `dvd_iso_reader`'s states, then the same method.
+
+## 8. State snapshot (save states, step 2)
+
+**Status (2026-10-26): 🔧 built and sim-proven on `feature/vm-snapshot`; ⏳ HW.** Read-only:
+it changes nothing the VM does. It is the first of the save-state steps agreed with the
+maintainer (full save states only, no resume-only feature): (1) the Scooby-Doo 2 freeze
+diagnosed (the restore's seek lands in an audio-only VOBU; `docs/roadmap.md` "Save
+states"), (2) **this**, (3) a restore exposed only to the HIL harness, (4) the user-facing
+feature.
+
+**What it gives.** The whole navigation state, read out of the running core consistently:
+`tools/mister.py snap` prints it by name. That is the data RAM (GPRMs, counter modes, the
+fallback chain, RSM, the dead-end latch), all 24 SPRMs as a command would read them, the
+wrapper's own state (domain, VTS, last menu, LFSR, ...), the reader's read-backs, and the
+playhead's position. Uses now: `nav_diff` can compare the whole state at a park (SPRM8 is a
+blind spot of §5 today); a bug report can carry it. Step 3 reads the same words back.
+
+**How.**
+
+| Piece | What it does |
+|---|---|
+| `vm.uasm` `E_SNAP` (24 words) | Three loops stream the words out through `O_SNAP`: data RAM `0x00..0x27`, SPRM `0..23` as `ld M_SPRMI[n] \| in P_SPRMW[n]`, input ports `0..31`. Then `PB_SNAPDONE`. It writes no RAM and no other output; the walk flag makes it count as idle to the wrapper, as the tick does. |
+| `dvd_vm` wrapper | `snap_req` sets `snap_pend`, **not** an `ev` latch (E_DISABLED clears every latch). `wev` offers it **last** (`UWEV_SNAP` = 13), only when nothing else is pending **and no SPRM7 part is held** — so a snapshot is always of a VM at rest. `snap_we`/`snap_d` are the output bus at `O_SNAP`; `snap_done` the pulse. |
+| `dvd/vm_snap.sv` | 128×16 M10K buffer + the EXT_BUS `0x7D` readout (the `nav_trace` protocol). The request bit (control word, strobe 1) fires `snap_req` **when its transaction ends**, so a buffer is never written while it is read. Latches the position at `snap_done`: NAV-pack LBN, `has_video` (`dsi_1stref_ea != 0`), `prev_video`, cell elapsed time, VOB/cell ids, `pos_fresh` (cleared by `load_flush`, set by `dsi_commit`). |
+| `tools/nav_isa.py` | `snap_layout()` names the 96 words; `snap_fmt()` (CRC-16 of the layout, the RAM map and the port list) is the format id the core reports and every reader checks. |
+| `dvd_ctl.cpp` `vmsnap` | One request transaction, then polls every 20 ms until `seq` moves with `busy` clear; writes `/tmp/dvd_vmsnap.json` whole (rename); 3 s timeout file if the VM never rests. HIL-armed only (`/media/fat/dvd_hil`). |
+| `tools/vm_snap.py` | Decodes the JSON by name; refuses a snapshot whose `fmt` is not this tree's. |
+
+**Why these choices.**
+- **A microcode handler, not a hardware read port.** After PR #168 almost all the state is
+  in the data RAM, so the copy is a loop: no read mux over flops, no second RAM port, and
+  consistency comes free (the handler runs only at rest). The old save-state branch needed
+  a 48-way capture mux, a retry protocol and a `coherent` trailer for the same job.
+- **`0x7D`, not the nav event FIFO.** A save must not be lossy; the FIFO drops records
+  when full. `0x7D` will also carry step 3's restore writes.
+- **Wait for a held SPRM7 part.** Found by the A/B (seed 35): the part lands at `vm_rest`,
+  and whether `pre_armed` cleared a cycle before the snapshot was taken decided whether the
+  snapshot saw it. Waiting makes it always see the landed value (wrapper arm W9).
+- **`has_video` and `prev_video` are in the position** because of `docs/roadmap.md` "Save
+  states" step 1: a restore must not land in a VOBU without a picture. Step 3 can snap back
+  to `prev_video` from what step 2 already records.
+
+**Gates.** `bench/dvd/run_vm_ab.sh --red` (transparency + words + arms), `bench/dvd/
+run_vm_snap.sh --red`, `main/tests/run_tests.sh --red` (`dvd_ctl_test` [6]–[11], arms
+`ctl-vs-*`), `tools/check_nav_trace_wiring.py` (the three-way reply bus).
+
+**Limits.** A mount aborts a running stream (`busy` stays set; the host times out and asks
+again). A request while a jump waits for its verdict waits for the VM's give-up timer
+(~0.62 s). The snapshot leaves out `sprm8_frozen`, `ptt_pend` and the sequencer's registers:
+none matters at rest, and the format is versioned, so one can be added if step 3 needs it.
+
+**Cost** (⏳ to measure: per-entity synthesis and a full fit). Estimated ~125–215 ALM and
+1 M10K; 24 ROM words measured.
+

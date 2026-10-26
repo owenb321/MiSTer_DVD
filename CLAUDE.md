@@ -379,6 +379,7 @@ otherwise; `--red` runs its mutation arms).
 | Title key on a disc with no Title menu is a no-op (audit 10b): mount-time VMGM probe, `emu.sv` key gate | ✅ HW A/B vs `main` (SPIDER-MAN_2, PANIC_ROOM; T2 positive control), MERGED PR #173 | `dvd_vm.md` "Title key on a disc with no Title menu" | `run_title_probe.sh --red`, `check_title_key_wiring.py` |
 | A title cell command with buttons up runs at the displayed cell end (issue #176), angle blocks included; windows arm at their authored start; in-title menus hide expired SPU units (purple blip) | ✅ HIL suite vs `main` (10 fixed, 0 regressions) + maintainer's play-test, MERGED PR #179 | `dvd_nav.md` "A cell command with buttons up", `subpicture.md` | `run_cmd_hold.sh --red`, `run_spu_window.sh --red`, `check_cmd_hold_wiring.py`, `check_spu_title_menu_wiring.py` |
 | HIL play harness + `hil_suite` regression gate (nav event FIFO `dvd/nav_trace.sv`, PR #179) | ✅ HW-proven (5 games, control arms), MERGED PR #180 | `hil_play_harness.md` | `run_nav_trace.sh --red`, `tools/hil_suite.py` |
+| VM state snapshot (save states step 2): `E_SNAP` microcode + `dvd/vm_snap.sv` (EXT_BUS 0x7D), `mister.py snap` | 🔧 sim-proven on `feature/vm-snapshot`, ⏳ fit + HW | `nav_engine.md` §8, `roadmap.md` "Save states" | `run_vm_snap.sh --red`, `run_vm_ab.sh --red`, `check_vm_snap_wiring.py` |
 
 ### Transport, HUD and input
 

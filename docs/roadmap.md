@@ -637,6 +637,32 @@ Follow-ups, all pre-existing and outside #176:
   against libdvdnav);
 - still unchecked by hand: a gapless in-title loop (Fairytopia), Mad Dog II, Crime Patrol.
 
+### ⏳ Save states: full save states only, in four steps (agreed 2026-10-26)
+
+The maintainer wants **full** save states (slots, any point, interactive discs included),
+not the per-disc resume of `feature/resume` on its own. The shelved design and its HW
+round are `docs/save_states.md` on branch `feature/save-states` (not on `main`). The
+microcoded VM (PR #168) moved nearly all VM state into one data RAM, which is what makes
+a cheap rebuild possible. Each step is useful on its own:
+
+1. ✅ **The Scooby-Doo 2 freeze, diagnosed (2026-10-26, HIL).** Not a boot-chain bug and
+   not reachable on `main`: the minigame's still+audio cells carry their only picture in
+   the cell's first VOBU (the other 59 are AC-3 only), and a restore's RBN seek landed in
+   one of the audio-only ones. **Rule for step 3: never land a restore in a VOBU without
+   a picture; snap back to `prev_video` or the cell start.** Record: `docs/save_states.md`
+   §5g on `feature/save-states` (commit ce43e35).
+2. 🔧 **A read-only VM state snapshot** (`feature/vm-snapshot`, sim-proven, ⏳ HW):
+   microcode handler `E_SNAP` + `dvd/vm_snap.sv` on EXT_BUS `0x7D` + `mister.py snap`.
+   `docs/nav_engine.md` §8. **Next:** a full fit (ALM/M10K), then the HW check —
+   snapshot Scooby-Doo 2 and Thayer's Quest at known parks and compare the GPRMs with
+   the nav event FIFO's GPRM writes.
+3. ⏳ **Restore, exposed only to the HIL harness** (`/tmp/dvd_ctl`, no OSD rows): the
+   microcode copies a blob back (stage it in spare RAM, check, then apply), the reader's
+   `jump_ttn_hint` / `angle_set` (from `feature/save-states`), the step-1 landing rule.
+   Then `hil_suite` can start mid-game, and save/restore round-trips can be swept.
+4. ⏳ **The user-facing feature:** the OSD rows, slot files and disc identity from
+   `feature/save-states`.
+
 ### ⏳ 2026-10-01 spec-audit: DVD Demystified 3rd-edition follow-ups (items 1–8 and 10b ✅; the rest re-ranked 2026-10-06, PR #165)
 
 The audit, with evidence and the user's decisions, is in

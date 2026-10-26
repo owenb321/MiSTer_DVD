@@ -22,6 +22,27 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **VM STATE SNAPSHOT — save states, step 2 (2026-10-26, branch `feature/vm-snapshot`;
+  sim-proven, ⏳ fit and HW).** `tools/mister.py snap` reads the DVD VM's whole state out
+  of the running core, consistently: data RAM (GPRMs, counter modes, RSM, fallback chain),
+  all 24 SPRMs as a command reads them, the wrapper's state, the reader's read-backs, and
+  the playhead (LBN, has-a-picture, `prev_video`, cell time). Read-only.
+  - **How:** a microcode handler (`vm.uasm` `E_SNAP`, 24 ROM words, 996 / 1,024 used)
+    streams 96 words through a new output port when the VM is at rest; `dvd/vm_snap.sv`
+    buffers them (1 M10K) for EXT_BUS `0x7D`; the custom Main's `vmsnap` writes
+    `/tmp/dvd_vmsnap.json`; `tools/vm_snap.py` names the words and refuses a format
+    (`snap_fmt`) that does not match the tree. Design: `docs/nav_engine.md` §8.
+  - **Found by the A/B:** the snapshot could see a held SPRM7 part or not, depending on
+    a one-cycle race with `pre_armed`. It now waits for the part to land (arm W9).
+  - **Gates:** `run_vm_ab.sh --red` now interleaves `pulse snap` steps, so old FSM = new RTL
+    proves a snapshot changes nothing (150 × 120, 23,810 pulses; 929 snapshots compared
+    word for word py = RTL on 120 × 120); `run_vm_snap.sh --red` (8 arms, S1–S10, 12
+    wiring mutations); `main/tests/run_tests.sh --red` (`dvd_ctl_test` [6]–[11],
+    `ctl-vs-*`); `check_nav_trace_wiring.py` updated for the three-way reply bus.
+  - **Next:** a full fit for the cost (estimated ~125–215 ALM), then HW: snapshot
+    Scooby-Doo 2 / Thayer's Quest at known parks against the nav FIFO's GPRM writes.
+    Then step 3 (`docs/roadmap.md` "Save states").
+
 - ✅ **HIL PLAY HARNESS: ANSWERING AND TIMED MOVES (2026-10-24; HW-proven on the capture
   rig; ✅ MERGED PR #180).** The harness now plays two more game types
   from keys derived in the core's own VM, each confirmed by a control arm that must fail.
