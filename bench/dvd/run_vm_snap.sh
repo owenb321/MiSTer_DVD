@@ -3,7 +3,8 @@
 # docs/nav_engine.md "State snapshot"). Save states, step 2.
 #
 #   GREEN  bench/dvd/vm_snap_tb.sv: arms [absent] [empty] [req] [words] [nochange]
-#          [pos] [reread] [busy] all PASS -- the real microcode and vm_snap together
+#          [pos] [reread] [busy] and the restore's [refuse] [load] [pending] all PASS --
+#          the real microcode and vm_snap together
 #          tools/check_vm_snap_wiring.py: the emu.sv / dvd_vm / nav_dsi / qsf /
 #          dvd_ctl.cpp seams (emu.sv has no bench)
 #   RED    (--red) every mutation of dvd/vm_snap.sv must fail EXACTLY the arms listed
@@ -71,7 +72,7 @@ PYEOF
     # S2 re-fires every cycle the request bit is held, so it also restarts the stream
     # over and over: the words, the re-read and the VM's rest are disturbed with it
     mut "S2 request fires mid-transaction"       "nochange req reread words" \
-        "if (!io_enable && req_l) begin" "if (req_l) begin"
+        "if (!io_enable && req_l && !rbusy) begin" "if (req_l && !rbusy) begin"
     mut "S3 len one short"                       "busy req words" \
         "len  <= {1'b0, wa};" "len  <= {1'b0, wa} - 8'd1;"
     mut "S4 seq never moves"                     "busy req" \
@@ -80,7 +81,8 @@ PYEOF
         "p_video <= |first_ref_ea;" "p_video <= 1'b1;"
     mut "S6 freshness survives a flush"          "pos" \
         "if (pos_clr)         fresh <= 1'b0;" "if (1'b0)            fresh <= 1'b0;"
-    mut "S7 no read-ahead restart"               "reread" \
+    # S7 also corrupts the reference blob the restore arms read back
+    mut "S7 no read-ahead restart"               "load refuse reread" \
         "begin dout_r <= {8'd0, p_cid}; raddr <= 7'd0; end" "begin dout_r <= {8'd0, p_cid}; end"
     mut "S8 a busy buffer streamed"              "busy" \
         "left   <= busy ? 8'd0 : len;" "left   <= len;"
@@ -91,6 +93,20 @@ PYEOF
         "end else dout_r <= 16'd0;
                 endcase" "end else dout_r <= q;
                 endcase"
+    # ---- the restore (save states step 3) ----
+    # The restore arms share one VM in sequence: a blob wrongly ACCEPTED in [refuse] is
+    # really applied, so the restore count [load] checks (and the state [pending] needs)
+    # moves with it. Those extra arms are this mutation's own consequence.
+    mut "S11 the checksum is never checked"      "load refuse" \
+        "else if (h_acc != h_sum)        verdict <= 3'd5;" "else if (1'b0)                  verdict <= 3'd5;"
+    mut "S12 a refused format still restores"    "load pending refuse" \
+        "else if (h_fmt != snap_fmt)     verdict <= 3'd3;" "else if (h_fmt != snap_fmt)     begin verdict <= 3'd3; rbusy <= 1'b1; restore_req <= 1'b1; end"
+    mut "S13 a load overwrites a pending blob"   "pending" \
+        "if (bcnt >= 8'd5 && h_cnt < WORDS && !rbusy && !busy) begin" "if (bcnt >= 8'd5 && h_cnt < WORDS && !busy) begin"
+    mut "S14 the VM reads the host's address"    "load" \
+        "q <= buf_m[rbusy ? rst_ra : raddr];" "q <= buf_m[raddr];"
+    mut "S15 applied restores not counted"       "load" \
+        "rbusy <= 1'b0; verdict <= 3'd2; rcount <= rcount + 5'd1;" "rbusy <= 1'b0; verdict <= 3'd2; rcount <= rcount;"
 
     echo "== RED (wiring: the checker must catch each)"
     python3 tools/check_vm_snap_wiring.py --red || fail=1

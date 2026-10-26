@@ -1647,6 +1647,7 @@ wire [7:0]  vm_jump_vts, vm_jump_cell, vm_jump_pgn;
 wire [15:0] vm_jump_pgcn;    // 15-bit DVD PGCN field
 wire [3:0]  vm_jump_entry;
 wire [6:0]  vm_jump_ttn;
+wire        vm_jump_ttn_hint;   // a restore's jump: the ttn is a hint (reader jhint_l)
 wire [9:0]  vm_jump_ptt;      // Phase 6: exact chapter/PTT part (JumpVTS_PTT)
 wire        vm_seek_pulse;
 wire [7:0]  vm_seek_cell;
@@ -2805,6 +2806,10 @@ player_regs player_regs_inst (
 // dvd_vm, which reads the request. Gated by tools/check_vm_snap_wiring.py.
 wire        vm_snap_req, vm_snap_we, vm_snap_done;
 wire [15:0] vm_snap_d, vm_snap_fmt;
+// ...and the restore's (save states step 3, docs/nav_engine.md §9)
+wire        vm_rst_req, vm_rst_done;
+wire [6:0]  vm_rst_ra;
+wire [15:0] vm_rst_q;
 
 dvd_vm dvd_vm_inst (
     .clk           (clk_sys),
@@ -2904,7 +2909,12 @@ dvd_vm dvd_vm_inst (
     .snap_we       (vm_snap_we),
     .snap_d        (vm_snap_d),
     .snap_done     (vm_snap_done),
-    .snap_fmt      (vm_snap_fmt)
+    .snap_fmt      (vm_snap_fmt),
+    .restore_req   (vm_rst_req),
+    .rst_ra        (vm_rst_ra),
+    .rst_q         (vm_rst_q),
+    .rst_done      (vm_rst_done),
+    .jump_ttn_hint (vm_jump_ttn_hint)
 );
 
 // Transport / VM seek mux (the VM's LinkCN/LinkPGN cell seeks share the
@@ -3755,6 +3765,7 @@ dvd_iso_reader dvd_iso_reader_inst (
     .jump_pgn       (vm_jump_pgn),
     .jump_ptt       (vm_jump_ptt),
     .jump_natural   (vm_from_wait_w),     // Phase B: VM CELL/POST-verdict jump
+    .jump_ttn_hint  (vm_jump_ttn_hint),   // a restore: keep the PGCN, take the title's map
     .jump_ack       (jump_ack),
     .keep_vbuf      (keep_vbuf),
     .jump_cross     (jump_cross),      // menu<->title crossing -> flush_ctl.soft_flush
@@ -6574,6 +6585,10 @@ vm_snap vm_snap_inst (
     .snap_d       (vm_snap_d),
     .snap_done    (vm_snap_done),
     .snap_fmt     (vm_snap_fmt),
+    .restore_req  (vm_rst_req),
+    .rst_ra       (vm_rst_ra),
+    .rst_q        (vm_rst_q),
+    .rst_done     (vm_rst_done),
     .pos_clr      (load_flush),
     .pos_commit   (dsi_commit),
     .nv_pck_lbn   (dsi_nv_pck_lbn),

@@ -51,13 +51,22 @@ SNAP_PORTS = {
     'drive': 'snap_drive', 'dout': 'snap_dout',
     'snap_req': 'vm_snap_req', 'snap_we': 'vm_snap_we', 'snap_d': 'vm_snap_d',
     'snap_done': 'vm_snap_done', 'snap_fmt': 'vm_snap_fmt',
+    'restore_req': 'vm_rst_req', 'rst_ra': 'vm_rst_ra', 'rst_q': 'vm_rst_q',
+    'rst_done': 'vm_rst_done',
     'pos_clr': 'load_flush', 'pos_commit': 'dsi_commit',
     'nv_pck_lbn': 'dsi_nv_pck_lbn', 'first_ref_ea': 'dsi_1stref_ea',
     'prev_video': 'dsi_prev_video', 'c_eltm': 'dsi_c_eltm', 'vob_idn': 'dsi_vob_idn',
     'c_idn': 'dsi_c_idn',
 }
 VM_PORTS = {'snap_req': 'vm_snap_req', 'snap_we': 'vm_snap_we', 'snap_d': 'vm_snap_d',
-            'snap_done': 'vm_snap_done', 'snap_fmt': 'vm_snap_fmt'}
+            'snap_done': 'vm_snap_done', 'snap_fmt': 'vm_snap_fmt',
+            'restore_req': 'vm_rst_req', 'rst_ra': 'vm_rst_ra', 'rst_q': 'vm_rst_q',
+            'rst_done': 'vm_rst_done', 'jump_ttn_hint': 'vm_jump_ttn_hint',
+            'jump_ttn': 'vm_jump_ttn', 'jump_pgcn': 'vm_jump_pgcn'}
+# the reader takes the restore's jump from the same nets (a hint on another net would
+# land the right PGC with another title's chapter map)
+RD_PORTS = {'jump_ttn_hint': 'vm_jump_ttn_hint', 'jump_ttn': 'vm_jump_ttn',
+            'jump_pgcn': 'vm_jump_pgcn'}
 DSI_PORTS = {'dsi_nv_pck_lbn': 'dsi_nv_pck_lbn', 'dsi_1stref_ea': 'dsi_1stref_ea',
              'dsi_prev_video': 'dsi_prev_video', 'dsi_c_eltm': 'dsi_c_eltm',
              'dsi_vob_idn': 'dsi_vob_idn', 'dsi_c_idn': 'dsi_c_idn', 'dsi_commit': 'dsi_commit'}
@@ -94,6 +103,9 @@ def run(txt, verbose=True):
     vm = connections(em, 'dvd_vm')
     for port, want in VM_PORTS.items():
         pin(vm, 'dvd_vm', port, want)
+    rd = connections(em, 'dvd_iso_reader')
+    for port, want in RD_PORTS.items():
+        pin(rd, 'dvd_iso_reader', port, want)
     ds = connections(em, 'nav_dsi')
     for port, want in DSI_PORTS.items():
         pin(ds, 'nav_dsi', port, want)
@@ -129,6 +141,7 @@ def run(txt, verbose=True):
     ok(rtl_magic is not None and rtl_magic != 0 and not (rtl_magic & 0x8000),
        'vm_snap MAGIC non-zero with bit 15 clear')
     ok(rtl_hdr == 13, 'vm_snap HDR = 13')
+    mwd = re.search(r"parameter\s*\[7:0\]\s*WORDS\s*=\s*8'd(\d+)", t)
     tr = re.search(r"parameter\s*\[15:0\]\s*CMD\s*=\s*16'h([0-9A-Fa-f]+)", s['trace'])
     others = [int(x, 16) for x in re.findall(r"parameter\s*\[15:0\]\s*CMD(?:_AF)?\s*=\s*16'h([0-9A-Fa-f]+)",
                                               s['telem'])] + ([int(tr.group(1), 16)] if tr else [])
@@ -139,6 +152,10 @@ def run(txt, verbose=True):
     words = int(mw.group(1)) if mw else None
     ok(rtl_buf is not None and words is not None and words <= rtl_buf - 1,
        f'the buffer ({rtl_buf}) holds USNAP_WORDS ({words}) below its saturating last slot')
+    ok(mwd is not None and words is not None and int(mwd.group(1)) == words,
+       f'vm_snap WORDS ({mwd.group(1) if mwd else None}) = USNAP_WORDS ({words}): a load is checked against it')
+    ok(re.search(r'q\s*<=\s*buf_m\[\s*rbusy\s*\?\s*rst_ra\s*:\s*raddr\s*\]\s*;', t) is not None,
+       'the buffer read port is the VM\'s while a restore is pending')
 
     if verbose:
         print('== DVD.qsf ==')
@@ -174,6 +191,10 @@ MUTATIONS = [
      'assign ext_bus[32]   = telem_drive | trc_drive;', 'the snapshot never takes the bus'),
     ('vm', 'assign snap_we  = o_we && (out_port == UOUT_SNAP);', 'assign snap_we  = o_we;',
      'every microcode output written into the snapshot'),
+    ('emu', '.jump_ttn_hint  (vm_jump_ttn_hint),', ".jump_ttn_hint  (1'b0),", 'the reader never sees the hint'),
+    ('emu', '.rst_q         (vm_rst_q),', ".rst_q         (16'd0),", 'the VM restores zeros'),
+    ('emu', '.rst_done     (vm_rst_done),', ".rst_done     (1'b0),", 'vm_snap never hears the restore end'),
+    ('snap', "parameter [7:0]  WORDS = 8'd96", "parameter [7:0]  WORDS = 8'd95", 'loads checked against the wrong length'),
     ('qsf', 'set_global_assignment -name SYSTEMVERILOG_FILE dvd/vm_snap.sv\n', '', 'qsf forgets the module'),
     ('ctl', '#define DVD_VMSNAP_MAGIC    0x5E02', '#define DVD_VMSNAP_MAGIC    0x5E01', 'Main magic drifts'),
     ('ctl', '#define UIO_DVD_VMSNAP      0x7D', '#define UIO_DVD_VMSNAP      0x7C', 'Main asks nav_trace'),
