@@ -364,7 +364,8 @@ int main(void)
 	check(vmsnap_disp_secs(0x001251D0, 162000, 90000, 1, 1) == 770, "front time minus the lead, rounded down");
 	check(vmsnap_disp_secs(0x001251D0, 90000, 90000, 1, 1) == 771, "no lead: the front time");
 	check(vmsnap_disp_secs(0x00125150, 90000, 90000, 1, 1) == 771, "25 fps frames (rate bits 01)");
-	check(vmsnap_disp_secs(0x001251D0, 90000, 162000, 1, 1) == -1, "a negative lead (a PTS discontinuity)");
+	check(vmsnap_disp_secs(0x001251D0, 90000, 162000, 1, 1) == 772, "a small negative lead: the picture is into the front VOBU");
+	check(vmsnap_disp_secs(0x001251D0, 90000, 270000, 1, 1) == -1, "a lead below -1.5 s (a PTS discontinuity)");
 	check(vmsnap_disp_secs(0x001251D0, 90000 + 31 * 90000, 90000, 1, 1) == -1, "a lead over 30 s");
 	check(vmsnap_disp_secs(0x001251D0, 162000, 90000, 0, 1) == -1, "a stale position (no NAV since a flush)");
 	check(vmsnap_disp_secs(0x001251D0, 162000, 90000, 1, 0) == -1, "a VOBU without a picture");

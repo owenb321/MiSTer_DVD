@@ -819,8 +819,12 @@ if [ "$RED" -eq 1 ]; then
         "s/(int64_t)ff \* 90000 \/ fps - lead;/(int64_t)ff * 90000 \/ fps + lead;/" ctl-vl-lead-added
     # no bound on the lead: a PTS restart between the demux and the screen lands anywhere
     red_case dvd_ctl.cpp dvd_ctl_test.cpp \
-        "FAIL a negative lead" \
-        "s/if (lead < 0 || lead > 30 \* 90000) return -1;/if (lead > 30 * 90000) return -1;/" ctl-vl-lead-unbounded
+        "FAIL a lead below -1.5 s" \
+        "s/if (lead < -135000 || lead > 30 \* 90000) return -1;/if (lead > 30 * 90000) return -1;/" ctl-vl-lead-unbounded
+    # the old rule: any negative lead refused -- a snapshot just after a seek loses its time
+    red_case dvd_ctl.cpp dvd_ctl_test.cpp \
+        "FAIL a small negative lead" \
+        "s/if (lead < -135000 || lead > 30 \* 90000) return -1;/if (lead < 0 || lead > 30 * 90000) return -1;/" ctl-vl-lead-positive-only
     # a no-picture VOBU given a time: the step-1 freeze, by seek instead of by restore
     red_case dvd_ctl.cpp dvd_ctl_test.cpp \
         "FAIL a VOBU without a picture" \

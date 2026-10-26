@@ -421,13 +421,16 @@ static void navtrace_drain(double t)
 // PTS and stc the displayed picture's, so the lead is sptm - stc. -> whole PGC seconds of
 // the picture on screen, or -1 when it cannot be trusted: no NAV pack since the last
 // flush, a VOBU with no picture (a still with an audio loop: land at the cell start,
-// docs/save_states.md §5g), or a lead outside 0..30 s (a PTS discontinuity between the
-// demux and the screen). Rounded DOWN: the time map's landing snaps forward a VOBU.
+// docs/save_states.md §5g), or a lead outside -1.5..30 s (a PTS discontinuity between the
+// demux and the screen). The lead may be slightly NEGATIVE: with the decoder's buffer
+// near empty (just after a seek) the picture on screen is a few frames into the front
+// VOBU itself -- measured -26 ms on the rig (docs/nav_engine.md §10) -- and the
+// formula adds it. Rounded DOWN: the time map's landing snaps forward a VOBU.
 static int vmsnap_disp_secs(uint32_t eltm, uint32_t sptm, uint32_t stc, int fresh, int video)
 {
 	if (!fresh || !video || !sptm) return -1;
 	int32_t lead = (int32_t)(sptm - stc);
-	if (lead < 0 || lead > 30 * 90000) return -1;
+	if (lead < -135000 || lead > 30 * 90000) return -1;
 	unsigned b0 = eltm >> 24, b1 = (eltm >> 16) & 0xFF, b2 = (eltm >> 8) & 0xFF, b3 = eltm & 0xFF;
 	unsigned hh = (b0 >> 4) * 10 + (b0 & 15);
 	unsigned mm = (b1 >> 4) * 10 + (b1 & 15);
