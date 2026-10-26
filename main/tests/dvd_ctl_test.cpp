@@ -26,6 +26,11 @@
 //     and at most 128 words read whatever len claims; a request that never
 //     completes ends in a {"timeout":true} file, not a hang.
 //
+// And the restore's `vmload <file>` (save states step 3), [12]..[15]:
+//   * the file vmsnap wrote is read back: control word 2, then fmt, len, the 16-bit
+//     sum of the words, and the words, in one transaction;
+//   * a pending verdict is not a result; applied and every refusal are, named.
+//
 // The module is #included, so this exercises the real code.
 
 #include <stdio.h>
@@ -38,9 +43,11 @@
 static char nt_log_path[64];
 static char ctl_log_path[64];
 static char vs_path[64];
+static char vl_path[64];
 #define DVD_NAVTRACE_LOG nt_log_path
 #define DVD_CTL_LOG      ctl_log_path
 #define DVD_VMSNAP_FILE  vs_path
+#define DVD_VMLOAD_FILE  vl_path
 
 // ---------------------------------------------------------------- fake world
 static uint16_t reply[2048];
@@ -280,6 +287,59 @@ int main(void)
 	READ_VS();
 	check(!vs_wait && strstr(vsbuf, "\"timeout\":true,\"busy\":1") != NULL, "times out at 3 s, says busy");
 
+	// ------------------------------------------------------------ the restore
+	snprintf(vl_path, sizeof(vl_path), "/tmp/dvd_ctl_test_vl_%d.json", (int)getpid());
+	static char vlbuf[512];
+	#define READ_VL() do { vlbuf[0] = 0; FILE *lf = fopen(vl_path, "r"); \
+		if (lf) { size_t ln_ = fread(vlbuf, 1, sizeof(vlbuf) - 1, lf); vlbuf[ln_] = 0; fclose(lf); } } while (0)
+
+	printf("[12] vmload of a file that is not a snapshot\n");
+	fresh(); reply_cmd = 0x7D;
+	vmload_request("/nonexistent/snap.json");
+	READ_VL();
+	check(strstr(vlbuf, "\"unreadable\":true") != NULL && n_cmd == 0, "refused before any SPI");
+
+	printf("[13] vmload sends the snapshot back\n");
+	// a snapshot file as vmsnap writes it: fmt 51157, words 4096..4191
+	{
+		FILE *sf = fopen(vs_path, "w");
+		fprintf(sf, "{\"t\":1.0,\"seq\":5,\"fmt\":51157,\"pos_fresh\":1,\"words\":[");
+		for (int i = 0; i < 96; i++) fprintf(sf, "%s%d", i ? "," : "", 0x1000 + i);
+		fprintf(sf, "]}\n");
+		fclose(sf);
+	}
+	fresh(); reply_cmd = 0x7D; reply[0] = 0x5E02; reply_len = 2048;
+	vmload_request(vs_path);
+	unsigned want_sum = 0;
+	for (int i = 0; i < 96; i++) want_sum += 0x1000 + i;
+	check(n_cmd == 1 && n_disable == 1, "one transaction");
+	check(n_words == 4 + 96, "control + fmt + len + sum + 96 words");
+	check(sent[0] == 2, "control word 2 (LOAD)");
+	check(sent[1] == 51157 && sent[2] == 96, "fmt and len from the file");
+	check(sent[3] == (uint16_t)want_sum, "the checksum is the 16-bit sum of the words");
+	check(sent[4] == 0x1000 && sent[99] == 0x105F, "the words, in order");
+	check(vl_wait, "waits for the verdict");
+
+	printf("[14] the verdict: pending is not a result, applied is\n");
+	unsigned l0 = vl_t0;
+	unlink(vl_path);
+	reply[4] = (1u << 13);                                // pending
+	vmload_poll(l0 + 25);
+	READ_VL();
+	check(vl_wait && vlbuf[0] == 0, "pending: still waiting, no file");
+	reply[4] = (2u << 13) | (1u << 8);                    // applied, count 1
+	vmload_poll(l0 + 50);
+	READ_VL();
+	check(!vl_wait && strstr(vlbuf, "\"verdict\":2,\"result\":\"applied\"") != NULL, "applied");
+
+	printf("[15] a refusal is named\n");
+	vl_wait = 1; vl_t0 = vl_last = l0;
+	reply[4] = (5u << 13);
+	vmload_poll(l0 + 25);
+	READ_VL();
+	check(!vl_wait && strstr(vlbuf, "\"result\":\"refused: checksum\"") != NULL, "refused: checksum");
+
+	unlink(vl_path);
 	unlink(vs_path);
 	unlink(nt_log_path);
 	unlink(ctl_log_path);

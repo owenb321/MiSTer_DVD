@@ -805,6 +805,14 @@ if [ "$RED" -eq 1 ]; then
     red_case dvd_ctl.cpp dvd_ctl_test.cpp \
         "FAIL times out at 3 s" \
         "s/if (now - vs_t0 > DVD_VMSNAP_TIMEOUT)/if (0)/" ctl-vs-no-timeout
+    # vmload without its checksum: every load refused by the core.
+    red_case dvd_ctl.cpp dvd_ctl_test.cpp \
+        "FAIL the checksum is the 16-bit sum" \
+        "s/^\tspi_w(sum);$/\tspi_w(0);/" ctl-vl-no-sum
+    # a pending verdict taken as the result: the host reports before the VM has restored.
+    red_case dvd_ctl.cpp dvd_ctl_test.cpp \
+        "FAIL pending: still waiting" \
+        "s/if (verdict == 1 || verdict == 0)/if (verdict == 0)/" ctl-vl-pending-final
     echo
 fi
 

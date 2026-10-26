@@ -98,6 +98,13 @@
 #ifndef DVD_VMSNAP_FILE
 #define DVD_VMSNAP_FILE     "/tmp/dvd_vmsnap.json"
 #endif
+// RESTORE (save states step 3, docs/nav_engine.md §9): `vmload <file>` sends a snapshot
+// file back as a LOAD (control bit 1: fmt, len, checksum, words); the core checks it
+// and the VM restores it at its next rest. The verdict (header word 4 [15:13]) is
+// polled into DVD_VMLOAD_FILE. HIL-armed only, like vmsnap: not a user feature yet.
+#ifndef DVD_VMLOAD_FILE
+#define DVD_VMLOAD_FILE     "/tmp/dvd_vmload.json"
+#endif
 
 static int  ctl_fd = -1;
 static unsigned last_telem_ms = 0;
@@ -482,6 +489,108 @@ static void vmsnap_poll(unsigned now)
 }
 
 // ---------------------------------------------------------------------------
+// VM state restore
+// ---------------------------------------------------------------------------
+static int      vl_wait = 0;          // a load is outstanding
+static unsigned vl_t0, vl_last;
+static const char *vl_names[8] = { "none", "pending", "applied", "refused: format",
+                                   "refused: length", "refused: checksum",
+                                   "refused: busy", "?" };
+
+static void vmload_result(const char *what, int verdict)
+{
+	FILE *f = fopen(DVD_VMLOAD_FILE, "w");
+	if (!f) return;
+	if (verdict < 0) fprintf(f, "{\"%s\":true}\n", what);
+	else fprintf(f, "{\"verdict\":%d,\"result\":\"%s\"}\n", verdict, vl_names[verdict & 7]);
+	fclose(f);
+}
+
+// Parse a vmsnap file: "fmt":N and "words":[a,b,...]. -> the word count, or -1.
+static int vmload_parse(const char *path, uint16_t *fmt, uint16_t *w, int maxw)
+{
+	static char buf[8192];
+	FILE *f = fopen(path, "r");
+	if (!f) return -1;
+	size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+	fclose(f);
+	buf[n] = 0;
+	const char *p = strstr(buf, "\"fmt\":");
+	const char *q = strstr(buf, "\"words\":[");
+	if (!p || !q) return -1;
+	*fmt = (uint16_t)strtoul(p + 6, NULL, 10);
+	q += 9;
+	int k = 0;
+	while (*q && *q != ']' && k < maxw)
+	{
+		char *e;
+		unsigned long v = strtoul(q, &e, 10);
+		if (e == q) return -1;
+		w[k++] = (uint16_t)v;
+		q = e;
+		while (*q == ',' || *q == ' ') q++;
+	}
+	return (*q == ']') ? k : -1;
+}
+
+static void vmload_request(const char *path)
+{
+	static uint16_t w[DVD_VMSNAP_MAXW];
+	uint16_t fmt = 0;
+	int n = vmload_parse(path, &fmt, w, DVD_VMSNAP_MAXW);
+	if (n <= 0)
+	{
+		ctl_log("DVD_CTL: vmload: cannot read a snapshot from %s", path);
+		vmload_result("unreadable", -1);
+		return;
+	}
+	uint16_t sum = 0;
+	for (int i = 0; i < n; i++) sum += w[i];
+	uint16_t m = spi_uio_cmd_cont(UIO_DVD_VMSNAP);
+	if (m != DVD_VMSNAP_MAGIC)
+	{
+		DisableIO();
+		ctl_log("DVD_CTL: core has no VM snapshot (0x7D)");
+		vmload_result("absent", -1);
+		return;
+	}
+	spi_w(2);                                   // control: LOAD
+	spi_w(fmt);
+	spi_w((uint16_t)n);
+	spi_w(sum);
+	for (int i = 0; i < n; i++) spi_w(w[i]);
+	DisableIO();                                // the core checks it as this ends
+	unlink(DVD_VMLOAD_FILE);
+	vl_wait = 1;
+	vl_t0 = vl_last = now_ms();
+	ctl_log("DVD_CTL: vmload %s: %d words, fmt %04x", path, n, fmt);
+}
+
+static void vmload_poll(unsigned now)
+{
+	if (now - vl_last < DVD_VMSNAP_POLL_MS) return;
+	vl_last = now;
+	uint16_t h[5];
+	h[0] = spi_uio_cmd_cont(UIO_DVD_VMSNAP);
+	for (int i = 1; i < 5; i++) h[i] = spi_w(0);
+	DisableIO();
+	int verdict = h[0] == DVD_VMSNAP_MAGIC ? (h[4] >> 13) & 7 : 0;
+	if (verdict == 1 || verdict == 0)
+	{
+		if (now - vl_t0 > DVD_VMSNAP_TIMEOUT)
+		{
+			vl_wait = 0;
+			ctl_log("DVD_CTL: vmload still pending at 3 s -- the VM never came to rest (Disc Menus off?)");
+			vmload_result("timeout", -1);
+		}
+		return;
+	}
+	vl_wait = 0;
+	ctl_log("DVD_CTL: vmload %s", vl_names[verdict]);
+	vmload_result(NULL, verdict);
+}
+
+// ---------------------------------------------------------------------------
 // command FIFO
 // ---------------------------------------------------------------------------
 static void ctl_open()
@@ -525,6 +634,10 @@ static void ctl_exec(char *line)
 	else if (!strcmp(line, "vmsnap"))
 	{
 		vmsnap_request();
+	}
+	else if (!strncmp(line, "vmload ", 7))
+	{
+		vmload_request(line + 7);
 	}
 	else
 	{
@@ -604,6 +717,7 @@ void dvd_ctl_tick()
 
 	unsigned t = now_ms();
 	if (vs_wait) vmsnap_poll(t);
+	if (vl_wait) vmload_poll(t);
 	if (t - last_telem_ms >= telem_period_ms)
 	{
 		last_telem_ms = t;

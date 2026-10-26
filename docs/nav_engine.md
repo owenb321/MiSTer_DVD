@@ -573,3 +573,54 @@ placed ALMs, but that is the seed (17 → 7): `dvd_telem` and `nav_trace`, untou
 **86.81** MHz (100 / −40 °C, gate 86.0 — a thin cold-corner margin, 0.81 MHz), `clk_mem`
 94.12 / 97.64.
 
+
+## 9. Restore (save states, step 3)
+
+**Status (2026-10-26): 🔧 built and sim-proven on `feature/vm-snapshot`; ⏳ fit and HW.**
+Exposed only to the HIL harness (`mister.py vmload`, the `dvd_ctl` FIFO): no OSD rows, no
+slot files. Step 4 is the user-facing feature (`docs/roadmap.md` "Save states").
+
+**What it does.** A snapshot taken by §8 goes back in: the VM's data RAM, its SPRMs and
+the wrapper's state are restored, and the VM jumps to the saved PGC and **cell**, PRE
+skipped. The landing is the cell's start, not a position inside it (below).
+
+**How.**
+
+| Piece | What it does |
+|---|---|
+| `dvd/vm_snap.sv` LOAD | Control bit 1: the transaction carries fmt, len, a 16-bit checksum and the blob, written into the snapshot buffer. **Checked when the transaction ends** (fmt = `snap_fmt`, len = `WORDS`, every word arrived, the sum); only then `restore_req`. The verdict (header word 4: pending, applied, refused format / length / checksum / busy) and a restore count are readable. A load or a snapshot request while a restore is pending is refused; a load while a snapshot is pending likewise. While pending, the buffer's read port is the VM's (`rst_ra` → `rst_q`). |
+| `dvd_vm` wrapper | `restore_req` sets `rst_pend`, offered after the snapshot, at rest, and **only with Disc Menus on** (`UWEV_RST` = 14). `RSTQ` (input port 27, once `ZERO27`) reads the blob word, 0 outside a restore, so a snapshot's copy of it is 0. `RSTW` writes LFSR, domain, VTS, menu_seen and the last-menu latch in that order (`nav_isa.RSTW_PORTS`, asserted contiguous). `FRZ8` freezes SPRM8 until the landing's load. `jump_ttn_hint` rides `O_J_TTN` bit 15. |
+| `vm.uasm` `E_RST` (62 words) | RAM 0x00..0x27 and the RAM-resident SPRMs (mask `0x2630`) word for word; SPRM1/2/3/6/7 and (frozen) SPRM8 through their ports; the eight wrapper registers through `RSTW`; then `UPRO` (a new activation), the jump (`JSET`: the saved domain; a title's VTS from the reader's read-back, a menu's from the VM's own, §5f of `save_states.md`; PGCN; cell), `skip_pre = 1`, `tt_resolve = 0`, `RSTDONE`, `JGO0`. |
+| `dvd_iso_reader` | `jump_ttn_hint`: the ttn feeds `want_ttn` (the title's chapter map) and `want_pgcn` keeps the exact PGCN. Clear, bit-identical to before. Ported from `feature/save-states`. |
+| ROM | 1,280 words (a fifth M10K, an 11-bit pc): the handler did not fit the 28 free. |
+| `dvd_ctl.cpp` `vmload <file>` | Reads a `vmsnap` file, sends the LOAD, polls the verdict into `/tmp/dvd_vmload.json`. |
+
+**Decisions.**
+- **Cell-granular landing.** Two things found in steps 1-2 make a within-cell landing
+  wrong today: the latched position is the last NAV pack DEMUXED, which leads the
+  picture by seconds in low-bitrate cells (§8 HW check); and a VOBU may carry no picture
+  (`save_states.md` §5g). For the interactive discs the harness drives, state changes at
+  cell boundaries, so the cell start is exact. A film needs the displayed picture's
+  position: a follow-up.
+- **`tt_resolve` is cleared, not restored.** It is a jump's pending "SPRM5 ← the reader's
+  resolved ttn" and a snapshot only catches it after a jump timed out. Restored, the
+  landing would overwrite the restored SPRM5 with the live `res_ttn` — found by
+  `vm_restore_check.py` (arm `rstttr`).
+- **Checked before applied.** The shelved branch wrote the VM's registers as the words
+  arrived and checked the sum after (§5c of `save_states.md`). Here nothing reaches the
+  VM until the whole blob has checked.
+- **Existing ports where they exist** (SPRMs, domain, VTS): the microcode's ROM words
+  are cheaper than another 16-bit mux input on registers that already have writers,
+  which is what cost the shelved branch +288 ALUTs.
+
+**Gates.** `bench/dvd/run_vm_ab.sh --red`: `vm_ab.py --restore` (py = RTL on every stream,
+restores interleaved), `tools/vm_restore_check.py` (a restore puts back what the snapshot
+took, over random histories; arms `rstram`, `rstw`, `rstfrz`, `rsthint`, `rstttr`), wrapper
+arms W11–W13. `bench/dvd/run_vm_snap.sh --red`: [refuse] [load] [pending], S11–S15, the
+wiring (hint, restore seam, `WORDS`). `main/tests/run_tests.sh --red`: `dvd_ctl_test`
+[12]–[15], `ctl-vl-*`. `run_reader_regress.sh` against the step-2 commit.
+
+**Limits.** A restore waits for the VM's rest and for Disc Menus on; with menus off it
+stays pending (verdict 1) and the host times out. A mount aborts a running restore; the
+request survives and runs after the boot chain. The disc must be the same one: nothing
+checks that yet (step 4's disc identity).

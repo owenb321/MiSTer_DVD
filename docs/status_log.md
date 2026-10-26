@@ -22,6 +22,18 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **VM STATE RESTORE — save states, step 3 (2026-10-26, branch `feature/vm-snapshot`;
+  sim-proven, ⏳ fit and HW).** `mister.py vmload <snap.json>` puts a snapshot back: the
+  VM's RAM, SPRMs and wrapper state are restored and it jumps to the saved PGC and cell,
+  PRE skipped. HIL-only. Design: `docs/nav_engine.md` §9.
+  - The blob is checked (format, length, checksum) in `vm_snap` before anything reaches
+    the VM; a verdict is readable. The reader gained `jump_ttn_hint` (a restored title
+    keeps its chapter map). The ROM grew to 1,280 words (fifth M10K).
+  - **Found:** a restored `tt_resolve` let the landing overwrite the restored SPRM5 with
+    the reader's live value; the restore now clears it (`vm_restore_check.py`, `rstttr`).
+  - Gates: `vm_ab.py --restore` (py = RTL), `vm_restore_check.py` (round trips + 5 arms),
+    W11–W13, `run_vm_snap.sh` [refuse] [load] [pending] + S11–S15, Main [12]–[15].
+
 - 🔧 **VM STATE SNAPSHOT — save states, step 2 (2026-10-26, branch `feature/vm-snapshot`;
   sim-proven, fitted, ✅ HW-checked on the rig).** `tools/mister.py snap` reads the DVD VM's whole state out
   of the running core, consistently: data RAM (GPRMs, counter modes, RSM, fallback chain),

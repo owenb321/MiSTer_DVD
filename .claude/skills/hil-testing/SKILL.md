@@ -39,6 +39,7 @@ tools/mister.py restore         # stock Main, harness files gone, saved settings
 | `mister.py shot --decode` | screenshot + decode the HUD to structured state |
 | `mister.py telem --watch 120` | the decoder's pacing counters, as rates |
 | `mister.py snap [-o x.json]` | the DVD VM's whole state by name: GPRMs, SPRMs, RSM, domain, the playhead (needs a core with `dvd/vm_snap.sv` and the harness Main; `docs/nav_engine.md` §8) |
+| `mister.py vmload x.json` | restore a `snap -o` file: the VM's state comes back and it jumps to the saved PGC and cell (Disc Menus on, same disc; `docs/nav_engine.md` §9) |
 | `mister.py osd "A/V Offset=+50ms"` | change a setting LIVE, no relaunch |
 | `mister.py options` | every OSD option and key name, derived from the RTL |
 | `hud_read.py read/blocks <png>` | decode a screenshot's HUD / `O[2]` diagnostic blocks |
