@@ -1203,13 +1203,16 @@ hps_io #(.CONF_STR(CONF_STR), .BLKSZ(4)) hps_io_inst (
 wire [35:0] ext_bus;
 wire        telem_drive;
 wire [15:0] telem_dout;
-// The nav event FIFO (dvd/nav_trace.sv, command 0x7C) answers on the same bus.
-// The two never drive at once: dvd_telem takes the bus only for 0x7A/0x7B and
-// nav_trace only for 0x7C, each decided on the transaction's first strobe.
+// The nav event FIFO (dvd/nav_trace.sv, command 0x7C) and the VM state snapshot
+// (dvd/vm_snap.sv, command 0x7D) answer on the same bus. No two ever drive at once:
+// dvd_telem takes the bus only for 0x7A/0x7B, nav_trace only for 0x7C and vm_snap
+// only for 0x7D, each decided on the transaction's first strobe.
 wire        trc_drive;
 wire [15:0] trc_dout;
-assign ext_bus[32]   = telem_drive | trc_drive;
-assign ext_bus[15:0] = trc_drive ? trc_dout : telem_dout;
+wire        snap_drive;
+wire [15:0] snap_dout;
+assign ext_bus[32]   = telem_drive | trc_drive | snap_drive;
+assign ext_bus[15:0] = trc_drive ? trc_dout : snap_drive ? snap_dout : telem_dout;
 
 // the audio engine's words (25..30): declared here, above their users below
 // (Verilog declaration order). cb_* is the DTS codebook copy (dts_cb_mem, further down).
@@ -2798,6 +2801,11 @@ player_regs player_regs_inst (
     .rmask_all_prohibited (pr_rmask_allp)
 );
 
+// the VM state snapshot's seam (dvd/vm_snap.sv, below nav_dsi): declared ahead of
+// dvd_vm, which reads the request. Gated by tools/check_vm_snap_wiring.py.
+wire        vm_snap_req, vm_snap_we, vm_snap_done;
+wire [15:0] vm_snap_d, vm_snap_fmt;
+
 dvd_vm dvd_vm_inst (
     .clk           (clk_sys),
     .rst_n         (reset_n),
@@ -2890,7 +2898,13 @@ dvd_vm dvd_vm_inst (
     // every GPRM write, for the nav event log (dvd/nav_trace.sv)
     .trc_gprm_we   (trc_gprm_we),
     .trc_gprm_a    (trc_gprm_a),
-    .trc_gprm_d    (trc_gprm_d)
+    .trc_gprm_d    (trc_gprm_d),
+    // the state snapshot (docs/nav_engine.md "State snapshot")
+    .snap_req      (vm_snap_req),
+    .snap_we       (vm_snap_we),
+    .snap_d        (vm_snap_d),
+    .snap_done     (vm_snap_done),
+    .snap_fmt      (vm_snap_fmt)
 );
 
 // Transport / VM seek mux (the VM's LinkCN/LinkPGN cell seeks share the
@@ -6515,6 +6529,7 @@ wire [15:0] dsi_vob_idn;
 // {hh,mm,ss} = dsi_c_eltm[31:8]; BCD 0..4 s = 24'h000000..24'h000004.
 assign chap_at_start = (dsi_c_eltm[31:8] <= 24'h000004);
 wire [31:0] dsi_nv_pck_lbn, dsi_vobu_ea, dsi_next_vobu, dsi_prev_vobu;
+wire [31:0] dsi_1stref_ea, dsi_prev_video;   // the VM snapshot's position (vm_snap)
 wire        dsi_commit;
 
 nav_dsi nav_dsi_inst (
@@ -6525,18 +6540,48 @@ nav_dsi nav_dsi_inst (
     .dsi_frame_start (ps_dsi_frame_start),
     .dsi_nv_pck_lbn (dsi_nv_pck_lbn),
     .dsi_vobu_ea    (dsi_vobu_ea),
-    .dsi_1stref_ea  (),
+    .dsi_1stref_ea  (dsi_1stref_ea),
     .dsi_vob_idn    (dsi_vob_idn),
     .dsi_c_idn      (dsi_c_idn),
     .dsi_c_eltm     (dsi_c_eltm),
     .dsi_next_vobu  (dsi_next_vobu),
     .dsi_prev_vobu  (dsi_prev_vobu),
     .dsi_next_video (),
-    .dsi_prev_video (),
+    .dsi_prev_video (dsi_prev_video),
     .dsi_commit     (dsi_commit),
     // seek/angle table read port -> Phase-8 time scrub (fwda/bwda[9] = +/-10 s)
     .tbl_raddr  (dsi_tbl_raddr),
     .tbl_rdata  (dsi_tbl_rdata)
+);
+
+// =========================================================================
+// VM STATE SNAPSHOT (dvd/vm_snap.sv; docs/nav_engine.md "State snapshot"). The HPS
+// asks over EXT_BUS 0x7D; dvd_vm's microcode streams the VM's whole state here the
+// next time it is at rest, and the playhead's position is latched with it. Save
+// states step 2: read-only, it changes nothing the VM does (run_vm_ab.sh). Placed
+// below nav_dsi, whose fields it latches. Gated by tools/check_vm_snap_wiring.py.
+// =========================================================================
+vm_snap vm_snap_inst (
+    .clk          (clk_sys),
+    .rst_n        (reset_n),
+    .io_enable    (ext_bus[34]),
+    .io_strobe    (ext_bus[33]),
+    .io_din       (ext_bus[31:16]),
+    .drive        (snap_drive),
+    .dout         (snap_dout),
+    .snap_req     (vm_snap_req),
+    .snap_we      (vm_snap_we),
+    .snap_d       (vm_snap_d),
+    .snap_done    (vm_snap_done),
+    .snap_fmt     (vm_snap_fmt),
+    .pos_clr      (load_flush),
+    .pos_commit   (dsi_commit),
+    .nv_pck_lbn   (dsi_nv_pck_lbn),
+    .first_ref_ea (dsi_1stref_ea),
+    .prev_video   (dsi_prev_video),
+    .c_eltm       (dsi_c_eltm),
+    .vob_idn      (dsi_vob_idn),
+    .c_idn        (dsi_c_idn)
 );
 
 // ★ NEW CELL for spu_decode's menu re-send guard (2026-09-18, Harry Potter

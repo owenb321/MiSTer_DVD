@@ -91,10 +91,13 @@ def run(txt, verbose=True):
     ok(re.search(r'\bnav_trace\s*#', em) is None, 'nav_trace takes its default CMD/MAGIC (no #() override)')
     for port, want in TRACE_PORTS.items():
         pin(nt, 'nav_trace', port, want)
-    ok(re.search(r'\bassign\s+ext_bus\[32\]\s*=\s*telem_drive\s*\|\s*trc_drive\s*;', em) is not None,
-       'ext_bus[32] = telem_drive | trc_drive')
-    ok(re.search(r'\bassign\s+ext_bus\[15:0\]\s*=\s*trc_drive\s*\?\s*trc_dout\s*:\s*telem_dout\s*;', em)
-       is not None, 'ext_bus[15:0] = trc_drive ? trc_dout : telem_dout')
+    # the reply bus is shared three ways since the VM snapshot (vm_snap, 0x7D); its
+    # own leg is pinned by tools/check_vm_snap_wiring.py
+    ok(re.search(r'\bassign\s+ext_bus\[32\]\s*=\s*telem_drive\s*\|\s*trc_drive\s*\|\s*snap_drive\s*;', em)
+       is not None, 'ext_bus[32] = telem_drive | trc_drive | snap_drive')
+    ok(re.search(r'\bassign\s+ext_bus\[15:0\]\s*=\s*trc_drive\s*\?\s*trc_dout\s*:\s*snap_drive\s*\?\s*'
+                 r'snap_dout\s*:\s*telem_dout\s*;', em)
+       is not None, 'ext_bus[15:0] = trc_drive ? trc_dout : snap_drive ? snap_dout : telem_dout')
     tl = connections(em, 'dvd_telem')
     pin(tl, 'dvd_telem', 'drive', 'telem_drive')
     pin(tl, 'dvd_telem', 'dout', 'telem_dout')
@@ -171,8 +174,8 @@ MUTATIONS = [
     ('emu', '.cell_cmd    (vm_cell_cmd_w),', '.cell_cmd    (hl_btn_cmd_valid),', 'cell command fed the activation'),
     ('emu', '.h_sptm      (hl_sptm_w),', '.h_sptm      (32\'d0),', 'HLI s_ptm tied off'),
     ('emu', '.stc         (av_stc),\n    .gprm_we', '.stc         (33\'d0),\n    .gprm_we', 'STC tied off'),
-    ('emu', 'assign ext_bus[15:0] = trc_drive ? trc_dout : telem_dout;',
-     'assign ext_bus[15:0] = telem_dout;', 'nav_trace reply never reaches the bus'),
+    ('emu', 'assign ext_bus[15:0] = trc_drive ? trc_dout : snap_drive ? snap_dout : telem_dout;',
+     'assign ext_bus[15:0] = snap_drive ? snap_dout : telem_dout;', 'nav_trace reply never reaches the bus'),
     ('emu', '.dbg_h_sptm (hl_sptm_w)', '.dbg_h_sptm ()', 'nav_pci s_ptm left unconnected'),
     ('vm', "assign trc_gprm_we = snoop_we && (snoop_a[7:4] == 4'd0);", 'assign trc_gprm_we = snoop_we;',
      'every data-RAM write logged as a GPRM'),
