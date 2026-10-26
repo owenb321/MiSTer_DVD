@@ -664,9 +664,11 @@ a cheap rebuild possible. Each step is useful on its own:
    boot logo (the §5g case) lands and plays, the state matching the snapshot.
    **Next:** let `hil_suite` start mid-game from a snapshot; split the ROM (3 M10K
    back).
-   🔧 **3b. Exact landing for films** (same branch, sim-proven, ⏳ fit + HW): the snapshot
-   records the displayed picture's PGC time (the demux lead taken off the HUD clock), and
-   the restore time-seeks there after its cell landing. `docs/nav_engine.md` §10. Open for films: the displayed picture's position (step 2's finding)
+   ✅ **3b. Exact landing for films** (same branch: sim-proven, fitted at +109 ALM,
+   HW-measured): the snapshot records the displayed picture's PGC time (the demux lead
+   taken off the HUD clock), and the restore time-seeks there after its cell landing.
+   Seven rig trials: within ±1 s of the saved picture (+0.24, +0.17, +0.56, −0.80 s with
+   the final rounding). `docs/nav_engine.md` §10. ⚠ The device is at 98 % ALM. Open for films: the displayed picture's position (step 2's finding)
    and the no-picture VOBU rule (step 1's).
 4. ⏳ **The user-facing feature:** the OSD rows, slot files and disc identity from
    `feature/save-states`.

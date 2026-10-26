@@ -22,8 +22,12 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **EXACT LANDING — a restore resumes a film at its picture (2026-10-26, branch
-  `feature/vm-snapshot`; sim-proven, ⏳ fit and HW).** The snapshot latches the HUD clock,
+- ✅ **EXACT LANDING — a restore resumes a film at its picture (2026-10-26, branch
+  `feature/vm-snapshot`; sim-proven, fitted, HW-measured).** Rig, Scooby-Doo 2's film,
+  measured with the nav FIFO: landings +0.24, +0.17, +0.56, −0.80 s from the saved
+  picture. Found on the rig: a slightly NEGATIVE demux lead is normal just after a seek
+  (−26 ms), and rounding down biased landings early; both fixed in the Main.
+  +109 ALM in `vm_snap`; the device is at 98 %. The snapshot latches the HUD clock,
   the front VOBU's `vobu_s_ptm` and the STC; the Main computes the displayed picture's PGC
   time (clock − lead) or −1 (no picture in the VOBU, stale, lead out of 0..30 s); the
   restore lands at the cell, then fires ONE time seek through the D-pad's path after the

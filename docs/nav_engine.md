@@ -646,7 +646,8 @@ checks that yet (step 4's disc identity).
 
 ## 10. Exact landing: a restore resumes a film at its picture (save states, step 3b)
 
-**Status (2026-10-26): 🔧 built and sim-proven on `feature/vm-snapshot`; ⏳ fit and HW.**
+**Status (2026-10-26): ✅ HW-measured on the rig (below); built, sim-proven and fitted on
+`feature/vm-snapshot`.**
 
 **What.** §9 lands at the saved cell's start: exact for interactive discs, a chapter's
 worth wrong for a film. Now a snapshot records the **displayed picture's** PGC time, and a
@@ -661,10 +662,13 @@ STC (the displayed picture's PTS; telemetry puts the display lag at ~0). The Mai
 
     disp_secs = floor( clock - (s_ptm - STC) / 90000 )
 
-and writes it into the snapshot file, or **−1** — land at the cell start — when it cannot
-be trusted: no NAV pack since the last flush (`pos_fresh`), a VOBU with no picture (a
-still with an audio loop: step 1's no-picture rule), or a lead outside 0..30 s (a PTS
-discontinuity between the demux front and the screen).
+rounded to the NEAREST second, and writes it into the snapshot file, or **−1** — land at
+the cell start — when it cannot be trusted: no NAV pack since the last flush
+(`pos_fresh`), a VOBU with no picture (a still with an audio loop: step 1's no-picture
+rule), or a lead outside −1.5..30 s (a PTS discontinuity between the demux front and the
+screen). ⚠ **The lead can be slightly negative** — measured −26 ms on the rig just after a
+seek, when the buffer is near empty and the picture is a few frames into the front VOBU
+itself; the first rule refused every negative lead and lost that snapshot's time.
 
 **The landing.** `vmload` sends `disp_secs` (0xFFFF for none) and the snapshot's NAV-pack
 sector (the time map's fallback, for the 3 % of discs without one) with the blob, under
@@ -684,9 +688,23 @@ abandoned if a menu landed, another PGC loads first, a disc is mounted, or ~3 s 
 - **After the picture, not after the load.** A seek issued while the jump's flush is still
   settling would race it; the first picture says the landing has finished.
 
-**Accuracy.** Rounded down to whole seconds, then the time map snaps forward to a VOBU:
-−1 to +0.7 s of the saved picture. OFFSET/DRIFT time maps (~3.5 % of the library, §2h) land
-2-6 s off, as their D-pad seeks do.
+**Accuracy, measured** (2026-10-26, rig, `DVD_vmsnap_20261026_1856.rbf`, Scooby-Doo 2's
+film). Instrument: pause, snapshot F (the saved picture's exact time from its raw clock,
+`s_ptm` and STC); Menu; arm the nav event FIFO; `vmload F`; snapshot G 5 s later. The
+landing's first picture is the first STC after the time seek's flush in the FIFO, mapped
+to PGC time through G's own PTS↔time relationship.
+- Rounded DOWN (first build): +0.30, −0.71, −1.05 s — biased early, as the time map lands
+  on either side of its target (−0.36..+0.30 s here), not only after it.
+- Rounded to the nearest second: **+0.24, +0.17, +0.56, −0.80 s.** The worst is the map's
+  own 0.36 s plus the rounding.
+- The FIFO shows each restore as: jump flush, the cell start's first picture (~40 ms),
+  the time seek's flush on the same tick, the landing's first picture ~175 ms later.
+OFFSET/DRIFT time maps (~3.5 % of the library, §2h) land 2-6 s off, as their D-pad seeks do.
+
+**Cost, measured** (`DVD_vmsnap_20261026_1856.rbf`, SEED 7, against §9's fit): `vm_snap`
+197 → 306 ALM, 346 → 625 registers (three 32-bit latches, the target and fallback, the
+landing state machine); the device is at 41,125 / 41,910 ALM (98 %). `clk_dec` 88.69 /
+**86.74** MHz (cold corner 0.74 above the gate), `clk_mem` 100.39 / 101.84.
 
 **Gates.** `bench/dvd/run_vm_snap.sh --red` [land] + [pos] (S16–S20, wiring: the clock,
 `s_ptm`, STC, `video_live`); `tools/check_tmap_seek_wiring.py --red` (R9–R12: on its own
