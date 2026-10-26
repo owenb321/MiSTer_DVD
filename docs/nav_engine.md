@@ -576,8 +576,8 @@ placed ALMs, but that is the seed (17 → 7): `dvd_telem` and `nav_trace`, untou
 
 ## 9. Restore (save states, step 3)
 
-**Status (2026-10-26): 🔧 built and sim-proven on `feature/vm-snapshot`; ⏳ fit and HW.**
-Exposed only to the HIL harness (`mister.py vmload`, the `dvd_ctl` FIFO): no OSD rows, no
+**Status (2026-10-26): ✅ HW-checked on the rig (below); built, sim-proven and fitted on
+`feature/vm-snapshot`.** Exposed only to the HIL harness (`mister.py vmload`, the `dvd_ctl` FIFO): no OSD rows, no
 slot files. Step 4 is the user-facing feature (`docs/roadmap.md` "Save states").
 
 **What it does.** A snapshot taken by §8 goes back in: the VM's data RAM, its SPRMs and
@@ -619,6 +619,25 @@ took, over random histories; arms `rstram`, `rstw`, `rstfrz`, `rsthint`, `rstttr
 arms W11–W13. `bench/dvd/run_vm_snap.sh --red`: [refuse] [load] [pending], S11–S15, the
 wiring (hint, restore seam, `WORDS`). `main/tests/run_tests.sh --red`: `dvd_ctl_test`
 [12]–[15], `ctl-vl-*`. `run_reader_regress.sh` against the step-2 commit.
+
+**HW check (2026-10-26, rig, `DVD_vmsnap_20261026_1700.rbf` + the branch's Main).**
+Scooby-Doo 2. Snapshot A in the HQ minigame (VTS 2 PGC 4, cell 1); Menu to the Additional
+Special Features menu (snapshot B differs from A in 27 words: g1, g8, g15, RSM, domain,
+last menu, LFSR, ...); `mister.py vmload A`: **applied**, the core lands back on the
+minigame's cell 1 and plays on into the HQ room. Snapshot C after the landing differs
+from A in 4 words, each accounted for: `fb` (the restore's own jump clears it), SPRM7 and
+the reader's cell (playback moved on, cell 1 → 2), `in_jpgcn` (the restore's jump target).
+**The §5g case:** a fresh launch, `vmload A` during the WB logo: lands in the minigame,
+picture moving, `play_err` 0 — no freeze (the cell start has the picture the §5g landing
+lacked). `in_btn0..3` (the last activated button's command, a wrapper latch nothing reads
+at rest) is not restored.
+
+**Cost, measured** (`DVD_vmsnap_20261026_1700.rbf`, SEED 7, against step 2's fit):
+`vm_snap` 125 → 197 ALM (the LOAD path and its check), `dvd_vm` 888 → 915 ALM, `nav_seq`
+576 → 571 ALM: **~98 ALM**. ⚠ **M10K +4, not +1:** Quartus rounds the 1,280-word ROM up to
+2,048 deep (8 blocks for `nav_seq`'s ROM). RAM blocks 532 → 536 / 553 (17 free). Splitting
+the ROM into 1,024 + 256-word arrays should give 3 back: a follow-up. Timing passes:
+`clk_dec` 91.26 / 87.68 MHz, `clk_mem` 99.06 / 99.65.
 
 **Limits.** A restore waits for the VM's rest and for Disc Menus on; with menus off it
 stays pending (verdict 1) and the host times out. A mount aborts a running restore; the

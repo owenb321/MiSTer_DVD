@@ -109,6 +109,13 @@ blocked in state D (no screenshots, no telemetry). Seen on OZ (#112) at `VTS_08_
 RBN ~2000. Recovery: eject the tray (pending reads then fail fast), then `restore`. Check
 `dmesg | grep sr1` before blaming the core.
 
+**★ Do not hand-restore `[DVD] main=` to the Main you found.** `deploy --main` deletes every
+`MiSTer_DVDcss_hil_*` that is not running at that moment -- including the rig owner's,
+once your own earlier deploy is the running one. Pointing the ini back at it by name
+then names a file that is gone, and the next core load starts no Main. Check `ls
+/media/fat/MiSTer_DVDcss_hil_*` first; if it is gone, rebuild that Main from its commit
+(its `.json` names it) and `deploy --main` it (2026-10-26).
+
 **★ Never overwrite the running `MiSTer_DVDcss`.** It reboots the box (`execl` on a
 deleted exe → `app_restart` → `reboot(1)`). `deploy --main` handles this; it installs under
 a hash-derived name and repoints `[DVD] main=`.

@@ -656,12 +656,14 @@ a cheap rebuild possible. Each step is useful on its own:
    `dvd/vm_snap.sv` on EXT_BUS `0x7D` + `mister.py snap`. `docs/nav_engine.md` §8.
    ⚠ Its position is the last NAV pack demuxed, which can lead the screen by seconds:
    step 3 must save the displayed picture's position instead.
-3. 🔧 **Restore, exposed only to the HIL harness** (`feature/vm-snapshot`, sim-proven, ⏳
-   fit + HW): `mister.py vmload`, `vm.uasm` `E_RST`, `vm_snap` LOAD checked before it is
-   applied, the reader's `jump_ttn_hint`; a 1,280-word ROM. `docs/nav_engine.md` §9.
-   Lands at the saved CELL's start. **Next:** fit, then HW (save in Scooby-Doo 2's
-   minigame, play elsewhere, load, snapshot again and compare). Then `hil_suite` can
-   start mid-game. Open for films: the displayed picture's position (step 2's finding)
+3. ✅ **Restore, exposed only to the HIL harness** (`feature/vm-snapshot`: sim-proven,
+   fitted at ~98 ALM + 4 M10K, HW-checked; not yet merged): `mister.py vmload`,
+   `vm.uasm` `E_RST`, `vm_snap` LOAD checked before it is applied, the reader's
+   `jump_ttn_hint`; a 1,280-word ROM. `docs/nav_engine.md` §9. Lands at the saved
+   CELL's start. On the rig: a minigame snapshot restored from the menu and from the
+   boot logo (the §5g case) lands and plays, the state matching the snapshot.
+   **Next:** let `hil_suite` start mid-game from a snapshot; split the ROM (3 M10K
+   back). Open for films: the displayed picture's position (step 2's finding)
    and the no-picture VOBU rule (step 1's).
 4. ⏳ **The user-facing feature:** the OSD rows, slot files and disc identity from
    `feature/save-states`.

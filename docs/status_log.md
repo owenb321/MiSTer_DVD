@@ -23,7 +23,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 ## Hardware status (THIS fork, verified 2026-06-21)
 
 - 🔧 **VM STATE RESTORE — save states, step 3 (2026-10-26, branch `feature/vm-snapshot`;
-  sim-proven, ⏳ fit and HW).** `mister.py vmload <snap.json>` puts a snapshot back: the
+  sim-proven, fitted, ✅ HW-checked on the rig).** `mister.py vmload <snap.json>` puts a snapshot back: the
   VM's RAM, SPRMs and wrapper state are restored and it jumps to the saved PGC and cell,
   PRE skipped. HIL-only. Design: `docs/nav_engine.md` §9.
   - The blob is checked (format, length, checksum) in `vm_snap` before anything reaches
@@ -32,7 +32,12 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
   - **Found:** a restored `tt_resolve` let the landing overwrite the restored SPRM5 with
     the reader's live value; the restore now clears it (`vm_restore_check.py`, `rstttr`).
   - Gates: `vm_ab.py --restore` (py = RTL), `vm_restore_check.py` (round trips + 5 arms),
-    W11–W13, `run_vm_snap.sh` [refuse] [load] [pending] + S11–S15, Main [12]–[15].
+    W11–W13, `run_vm_snap.sh` [refuse] [load] [pending] + S11–S15, Main [12]–[15];
+    `run_reader_regress.sh` IDENTICAL to the step-2 commit.
+  - **HW (rig):** Scooby-Doo 2's minigame restored from the menu and during the boot logo
+    (the §5g case): lands, plays, no freeze; the state after equals the snapshot but for
+    four words playback itself moves. Cost ~98 ALM; ⚠ +4 M10K (the 1,280-word ROM rounds
+    to 2,048 deep; a split would give 3 back).
 
 - 🔧 **VM STATE SNAPSHOT — save states, step 2 (2026-10-26, branch `feature/vm-snapshot`;
   sim-proven, fitted, ✅ HW-checked on the rig).** `tools/mister.py snap` reads the DVD VM's whole state out
