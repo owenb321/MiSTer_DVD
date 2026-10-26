@@ -406,7 +406,8 @@ Two rules in that method cost a mistake each:
 - The disc's clock `g[8]` is counter mode, and it never counts offline. So the setup sets
   it first (`x7100000875300000`, g[8] = 30000), or else every answer reads as a timeout.
 
-Keys are cached by image fingerprint in `tools/streams/hil_keys/<fp>.jsonl` (gitignored).
+Keys are kept by image fingerprint in `tools/hil_discs/keys/<fp>.jsonl` (committed; see
+"Regression suite").
 A full scan takes hours. `--rejudge KEYS` re-applies a changed rule to the stored paths in
 seconds. Weakest Link: 1,126 keys (50 per bank in VTS 3–19 and 24–28, 13 in VTS 20 and
 29).
@@ -614,7 +615,7 @@ Result: 233 keyed moves. The rest:
 - 1 where every option dies;
 - 18 unreached (VTS 6): see the limits below.
 
-Keys are cached as `tools/streams/hil_keys/<fp>.moves.jsonl`. `--rejudge` re-applies the
+Keys are kept as `tools/hil_discs/keys/<fp>.moves.jsonl` (committed). `--rejudge` re-applies the
 rules to the stored paths.
 
 **Rig check (`moves_right`).** A move is **wrong** if the rig plays a death cell of its PGC
@@ -680,6 +681,15 @@ Design decisions:
   `dvd/nav_trace.sv`); before it the control was a `main` + FIFO build
   (`DVD_playharness_*`). Without it most checks read NODATA, and NODATA is never counted
   as a pass.
+- **The keys are committed** (`tools/hil_discs/keys/`, 2.3 MB of JSON lines): 4 of the 7
+  quick-tier scenarios answer from them, and rebuilding takes ~30 min per reaction disc and
+  hours for Weakest Link, so a cold checkout could not otherwise run the gate. They hold
+  navigation only (cells, buttons, timings, VM paths: the same kind of data as a nav
+  bundle), no video or audio. When a key rule changes, re-key the affected discs
+  (`tools/move_key.py <iso> --json tools/hil_discs/keys/<fp>.moves.jsonl`, or `quiz_key.py
+  --vm --setup <profile quiz.setup>`) and commit them with the rule, so the diff shows
+  which answers moved. `hil_play` falls back to the gitignored `tools/streams/hil_keys/`
+  for keys still being worked on.
 - **The wrong-move/wrong-answer arms are not in the suite.** They test the instrument,
   not the build. Re-run them when a check or a key changes.
 

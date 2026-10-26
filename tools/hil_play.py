@@ -585,6 +585,17 @@ def launch(sc):
         sys.exit('launch: the image did not mount (%s) -- is the share mounted?' % log.strip())
 
 
+def key_file(fp, suffix):
+    """(path, where-to-build) of an image's VM-judged keys. The committed set in
+    tools/hil_discs/keys/ comes first, so the suite runs on any checkout; a local cache in
+    tools/streams/hil_keys/ (gitignored) is the fallback for keys still being worked on."""
+    for d in (os.path.join(HERE, 'hil_discs', 'keys'), os.path.join(HERE, 'streams', 'hil_keys')):
+        p = os.path.join(d, fp + suffix)
+        if os.path.exists(p):
+            return p, p
+    return None, os.path.join(HERE, 'hil_discs', 'keys', fp + suffix)
+
+
 def run_agent(sc, out_dir):
     names = M.key_names()
     sc['_keys'] = {k: names[k] for k in ('up', 'down', 'left', 'right', 'select')}
@@ -597,10 +608,10 @@ def run_agent(sc, out_dir):
             # VM-judged keys take minutes per disc: cached by image fingerprint
             import hil_disc
             import quiz_key
-            kf = os.path.join(HERE, 'streams', 'hil_keys', '%s.jsonl' % hil_disc.fingerprint(sc.get('_local_iso')))
-            if not os.path.exists(kf):
-                sys.exit('no VM answer keys cached for this image: build them with\n'
-                         '  tools/quiz_key.py <iso> --vm --setup <profile quiz.setup> --json %s' % kf)
+            kf, want = key_file(hil_disc.fingerprint(sc.get('_local_iso')), '.jsonl')
+            if not kf:
+                sys.exit('no VM answer keys for this image: build them with\n'
+                         '  tools/quiz_key.py <iso> --vm --setup <profile quiz.setup> --json %s' % want)
             st['play']['responses'] = quiz_key.responses(sc.get('_local_iso'), kf,
                                                         st['play'].get('pick', 'right'))
             print('  responses: %d VM-judged answer keys' % len(st['play']['responses']), flush=True)
@@ -608,10 +619,10 @@ def run_agent(sc, out_dir):
             # timed moves (reaction games), judged in the VM: cached by image fingerprint
             import hil_disc
             import move_key
-            kf = os.path.join(HERE, 'streams', 'hil_keys', '%s.moves.jsonl' % hil_disc.fingerprint(sc.get('_local_iso')))
-            if not os.path.exists(kf):
-                sys.exit('no move keys cached for this image: build them with\n'
-                         '  tools/move_key.py <iso> --json %s' % kf)
+            kf, want = key_file(hil_disc.fingerprint(sc.get('_local_iso')), '.moves.jsonl')
+            if not kf:
+                sys.exit('no move keys for this image: build them with\n'
+                         '  tools/move_key.py <iso> --json %s' % want)
             st['play']['responses'] = move_key.responses(sc.get('_local_iso'), kf,
                                                          st['play'].get('pick', 'right'))
             # windows the profile says not to answer (a tutorial the route skips past:

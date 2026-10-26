@@ -26,7 +26,8 @@ handler restarts a DIFFERENT title's scene.)
 
 A window is reached by x-tokens: JumpTT (the title that lands in its VTS) and LinkCN
 (its first cell), so whatever the scene set up before the move is not run. Keys are
-cached by image fingerprint like quiz keys: tools/streams/hil_keys/<fp>.moves.jsonl.
+kept by image fingerprint like quiz keys: tools/hil_discs/keys/<fp>.moves.jsonl
+(committed, so the suite runs on any checkout; re-key and commit when a rule changes).
 """
 import argparse
 import collections
