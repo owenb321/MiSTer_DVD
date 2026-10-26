@@ -145,7 +145,7 @@ module dvd_vm_tb;
         .cfg_sprm14(cfg14), .cfg_sprm15(cfg15), .cfg_sprm20(cfg20),
         // new VM ports tied off (a floating input is X).
         .agl_set(agl_set), .agl_set_val(agl_set_val),
-        .ptt_upd(ptt_upd), .ptt_val(ptt_val), .snap_req(1'b0),
+        .ptt_upd(ptt_upd), .ptt_val(ptt_val), .snap_req(1'b0), .restore_req(1'b0), .rst_q(16'd0),
         .sprm_agln(sprm_agln), .pre_done(pre_done),
         .clk(clk), .rst_n(rst_n), .enable(enable), .start(start), .cfg_lang(16'h656E),
         .rnd_seed(rnd_seed), .sec_tick(sec_tick),

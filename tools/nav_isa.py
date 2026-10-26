@@ -88,19 +88,27 @@ IN_PORTS = [
     'CUR_VTS', 'CUR_PGCN', 'CUR_CELL', 'CELL_COUNT', 'NEXT_PGCN', 'PREV_PGCN', 'GOUP_PGCN',
     'NR_PRE', 'NR_POST', 'NR_CELL', 'NR_PGMS', 'AUTO_VTS', 'BEST_MENU_VTS', 'RES_TTN',
     'MENU_ACTIVE', 'CC_NR', 'CHEDGE_DIR', 'LFSR', 'VM_DOM', 'VM_VTS', 'MENU_SEEN',
-    'LM_V', 'LM_DOM', 'LM_VTS', 'LM_PGCN', 'JPGCN', 'EVENTS', 'ZERO27',
+    'LM_V', 'LM_DOM', 'LM_VTS', 'LM_PGCN', 'JPGCN', 'EVENTS', 'RSTQ',
     'BTN0', 'BTN1', 'BTN2', 'BTN3']
 IN = {n: i for i, n in enumerate(IN_PORTS)}
 IN['SPRMW'] = 32                 # 32..63: the live-SPRM window (0 for RAM-resident SPRMs)
+# RSTQ (27, once ZERO27): the restore blob's word at the RSTA address (dvd/vm_snap.sv's
+# buffer, a registered read: `out O_RSTA` then one instruction before `in`). It reads 0
+# unless a restore is running, so a snapshot's copy of it is always 0.
+# RSTW writes the wrapper's registers whose ports are input ports LFSR..LM_PGCN, in that
+# order (the wrapper counts them): it relies on these eight being contiguous.
+RSTW_PORTS = ['LFSR', 'VM_DOM', 'VM_VTS', 'MENU_SEEN', 'LM_V', 'LM_DOM', 'LM_VTS', 'LM_PGCN']
+assert IN_PORTS[IN['LFSR']:IN['LFSR'] + len(RSTW_PORTS)] == RSTW_PORTS
 # Outputs (out / outi). J_DE = {entry[3:0], 2'b0, dom[1:0]} (entry << 4 | dom).
 OUT_PORTS = [
     'J_DE', 'J_VTS', 'J_PGCN', 'RSV3', 'J_TTN', 'J_PGN', 'J_PTT', 'J_CELL',
     'SEEK_CELL', 'PULSE', 'BTNF_VAL', 'LF_PGCN', 'SPRM1', 'SPRM2', 'SPRM3', 'SPRM8',
-    'VM_DOM', 'VM_VTS', 'FLAGS', 'EVCLR', 'EVSET', 'SPRM6', 'SPRM7', 'SNAP']
+    'VM_DOM', 'VM_VTS', 'FLAGS', 'EVCLR', 'EVSET', 'SPRM6', 'SPRM7', 'SNAP', 'RSTA',
+    'RSTW']
 OUT = {n: i for i, n in enumerate(OUT_PORTS)}
 # PULSE bits
 PULSE_BITS = ['JUMP', 'SEEK', 'REPLAY', 'ADV', 'BTNF', 'LINKFAIL', 'LFSTEP', 'WARM', 'TICKDONE',
-              'SNAPDONE']
+              'SNAPDONE', 'RSTDONE', 'FRZ8']
 PB = {n: 1 << i for i, n in enumerate(PULSE_BITS)}
 # FLAGS bits: blk[1:0], nat_src, usr_edge, walk (the tick walk counts as V_IDLE)
 FLAG_BITS = {'BLK': 0, 'NAT': 2, 'USR': 3, 'WALK': 4}     # bit positions; blk is 2 bits
@@ -111,7 +119,7 @@ EV = {n: 1 << i for i, n in enumerate(EVENTS)}
 # WEV indices. SNAP is not an event latch: the wrapper keeps the request apart from
 # `ev` (E_DISABLED clears every latch) and offers it last, only when nothing else is
 # pending -- so a snapshot is always of a VM at rest.
-WEV_IDLE = ['TICK', 'DISABLED'] + EVENTS + ['SNAP']
+WEV_IDLE = ['TICK', 'DISABLED'] + EVENTS + ['SNAP', 'RESTORE']
 WEV_WAIT = ['LOADED', 'ERROR', 'TIMEOUT']
 
 # ------------------------------------------------------------------ the data RAM map
@@ -144,6 +152,7 @@ RAM_MAP = {
 SNAP_RAM_END = 0x28                   # data RAM 0x00..0x27: everything below the scratch
 SNAP_SPRMS = 24                       # SPRM 0..23 as the VM reads them (RAM image | window)
 SNAP_INS = 32                         # input ports 0..31: the wrapper's state, the reader's
+SPRM_RAM = (4, 5, 9, 10, 13)          # the SPRMs whose only copy is the data RAM's image
 
 
 def snap_layout():
@@ -204,6 +213,11 @@ def base_equ():
     equ['SNAP_RAM_END'] = SNAP_RAM_END
     equ['SNAP_SPRMS'] = SNAP_SPRMS
     equ['SNAP_INS'] = SNAP_INS
+    equ['SNAP_IN0'] = SNAP_RAM_END + SNAP_SPRMS       # the first input-port word
+    equ['SNAP_WORDS'] = SNAP_RAM_END + SNAP_SPRMS + SNAP_INS
+    equ['SPRM_RAM_MASK'] = sum(1 << n for n in SPRM_RAM)
+    equ['RSTW_FIRST'] = SNAP_RAM_END + SNAP_SPRMS + IN['LFSR']
+    equ['RSTW_N'] = len(RSTW_PORTS)
     equ.update({'M_' + k: v for k, v in RAM_MAP.items()})
     equ.update(FB_CODES)
     equ.update(DOM_CODES)
@@ -537,6 +551,7 @@ def ucode_svh(words, labels):
         lines.append(f'localparam integer UEV_{n} = {i};')
     lines.append(f'localparam integer UEV_N = {len(EVENTS)};')
     lines.append(f"localparam [3:0] UWEV_SNAP = 4'd{WEV_IDLE.index('SNAP')};")
+    lines.append(f"localparam [3:0] UWEV_RST = 4'd{WEV_IDLE.index('RESTORE')};")
     lines.append(f'localparam integer USNAP_WORDS = {len(snap_layout())};')
     lines.append(f"localparam [15:0] USNAP_FMT = 16'h{snap_fmt():04x};")
     for n, a in RAM_MAP.items():

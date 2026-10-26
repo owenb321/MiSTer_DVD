@@ -29,6 +29,11 @@ steps are exactly what they were before snapshots existed. The old FSM has no sn
 so a snap step is a no-op there: old = new over the same script is the proof that taking
 a snapshot changes nothing the VM does. The snapshot's words (the N stream) are compared
 py vs new, and a ;MUT arm that corrupts them must make that comparison fail.
+
+RESTORES (--restore, docs/nav_engine.md §9). The scripts also carry `pulse restore` steps
+(the last completed snapshot goes back). The old FSM cannot restore, so these run py vs
+new only, on every stream -- pulses, SPRM changes, state, trace, cycles, snapshots. That
+the restore puts back what the snapshot took is tools/vm_restore_check.py's to prove.
 """
 import argparse
 import concurrent.futures
@@ -147,7 +152,7 @@ def rand_table(rng):
     return out
 
 
-def gen_script(seed, steps):
+def gen_script(seed, steps, restore=False):
     rng = random.Random(seed)
     rsn = random.Random(seed ^ 0x5A5A5A)  # the snapshot steps: their own stream
     s = [f'# vm_ab seed {seed}']
@@ -198,6 +203,8 @@ def gen_script(seed, steps):
             s.append('settle')
         if rsn.random() < 0.08:
             s.append('pulse snap')
+        if restore and rsn.random() < 0.05:
+            s.append('pulse restore')
     return s
 
 
@@ -279,6 +286,18 @@ def one(job):
     """One script on every VM. -> (name, the old FSM's log, [failure messages])."""
     name, lines, old, new, keep, red = job
     msgs = []
+    if old is None:                       # --restore: py vs new on every stream
+        lp, err = run_py(lines, trace=True)
+        if lp is None:
+            return name, None, [f'FAIL {name} [py]: {err}']
+        ln, err = run_rtl(new, lines, name + '.new', trace=True)
+        if ln is None:
+            return name, None, [f'FAIL {name} [new]: did not run:\n{err}']
+        if keep:
+            open(os.path.join(SIM, name + '.py.txt'), 'w').write('\n'.join(lp) + '\n')
+            open(os.path.join(SIM, name + '.new.txt'), 'w').write('\n'.join(ln) + '\n')
+        d = compare(lp, ln, 'PLSTCN')
+        return name, lp, ([f'FAIL {name} [new vs py]: {d}'] if d else [])
     lo, err = run_rtl(old, lines, name + '.old')
     if lo is None:
         return name, None, [f'FAIL {name}: the old FSM did not run:\n{err}']
@@ -321,6 +340,8 @@ def main():
     ap.add_argument('--script', help='run one script file instead of the generator')
     ap.add_argument('--new', action='store_true', help='also run the microcoded RTL')
     ap.add_argument('--red', action='store_true', help='every ;MUT arm must diverge')
+    ap.add_argument('--restore', action='store_true',
+                    help='scripts with restore steps, py vs new only (implies --new)')
     ap.add_argument('--vm-src', help='with --new: this dvd_vm.sv instead of dvd/dvd_vm.sv '
                     '(a mutant; run_vm_ab.sh never edits the tree)')
     a = ap.parse_args()
@@ -328,9 +349,10 @@ def main():
     if a.script:
         corpus = [(os.path.basename(a.script), open(a.script).read().splitlines())]
     else:
-        corpus = [(f'seed{s}', gen_script(s, a.steps)) for s in range(a.first, a.first + a.seeds)]
-    old = build(False)
-    new = build(True, a.vm_src) if a.new else None
+        corpus = [(f'seed{s}', gen_script(s, a.steps, a.restore))
+                  for s in range(a.first, a.first + a.seeds)]
+    old = None if a.restore else build(False)
+    new = build(True, a.vm_src) if (a.new or a.restore) else None
 
     jobs = [(name, lines, old, new, bool(a.script), a.red) for name, lines in corpus]
     with concurrent.futures.ProcessPoolExecutor(max_workers=os.cpu_count()) as ex:
@@ -342,12 +364,21 @@ def main():
             print(m)
             fails += 1
     npulse = sum(1 for lo in olds.values() for ln in lo if ln.startswith('P '))
-    print(f'vm_ab: {len(corpus)} scripts, {npulse} pulses from the old FSM')
+    if a.restore:
+        nr = sum(1 for lo in olds.values() for ln in lo if ln.endswith(' RSTDONE'))
+        print(f'vm_ab: {len(corpus)} scripts, {npulse} pulses, {nr} restores (py = new)')
+    else:
+        print(f'vm_ab: {len(corpus)} scripts, {npulse} pulses from the old FSM')
 
     if a.red:
         arms = re.findall(r';\s*MUT\s+(\w+)\s*:', open(N.UASM).read())
         goods = {}
         for arm in arms:
+            if arm.startswith('rst'):
+                # a restore arm: no script here restores, so the old FSM cannot see it.
+                # tools/vm_restore_check.py --red owns these arms.
+                print(f'  RED {arm}: restore arm -- vm_restore_check.py --red')
+                continue
             bit = None
             for name, lines in corpus:
                 lp, err = run_py(lines, arm)
