@@ -23,7 +23,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 ## Hardware status (THIS fork, verified 2026-06-21)
 
 - 🔧 **VM STATE SNAPSHOT — save states, step 2 (2026-10-26, branch `feature/vm-snapshot`;
-  sim-proven, ⏳ fit and HW).** `tools/mister.py snap` reads the DVD VM's whole state out
+  sim-proven and fitted, ⏳ HW).** `tools/mister.py snap` reads the DVD VM's whole state out
   of the running core, consistently: data RAM (GPRMs, counter modes, RSM, fallback chain),
   all 24 SPRMs as a command reads them, the wrapper's state, the reader's read-backs, and
   the playhead (LBN, has-a-picture, `prev_video`, cell time). Read-only.
@@ -39,9 +39,11 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     word for word py = RTL on 120 × 120); `run_vm_snap.sh --red` (8 arms, S1–S10, 12
     wiring mutations); `main/tests/run_tests.sh --red` (`dvd_ctl_test` [6]–[11],
     `ctl-vs-*`); `check_nav_trace_wiring.py` updated for the three-way reply bus.
-  - **Next:** a full fit for the cost (estimated ~125–215 ALM), then HW: snapshot
-    Scooby-Doo 2 / Thayer's Quest at known parks against the nav FIFO's GPRM writes.
-    Then step 3 (`docs/roadmap.md` "Save states").
+  - **Cost, measured** (full fit, SEED 7, `DVD_vmsnap_20261026_1540.rbf`): `vm_snap` 125 ALM /
+    220 regs / 1 M10K, `dvd_vm` +17 ALM: ~142 ALM + 1 M10K. Timing passes; `clk_dec`'s cold
+    corner is thin (86.81 against 86.0). Detail: `docs/nav_engine.md` §8.
+  - **Next:** HW: snapshot Scooby-Doo 2 / Thayer's Quest at known parks against the nav
+    FIFO's GPRM writes. Then step 3 (`docs/roadmap.md` "Save states").
 
 - ✅ **HIL PLAY HARNESS: ANSWERING AND TIMED MOVES (2026-10-24; HW-proven on the capture
   rig; ✅ MERGED PR #180).** The harness now plays two more game types

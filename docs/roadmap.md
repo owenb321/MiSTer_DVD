@@ -651,9 +651,9 @@ a cheap rebuild possible. Each step is useful on its own:
    one of the audio-only ones. **Rule for step 3: never land a restore in a VOBU without
    a picture; snap back to `prev_video` or the cell start.** Record: `docs/save_states.md`
    §5g on `feature/save-states` (commit ce43e35).
-2. 🔧 **A read-only VM state snapshot** (`feature/vm-snapshot`, sim-proven, ⏳ HW):
-   microcode handler `E_SNAP` + `dvd/vm_snap.sv` on EXT_BUS `0x7D` + `mister.py snap`.
-   `docs/nav_engine.md` §8. **Next:** a full fit (ALM/M10K), then the HW check —
+2. 🔧 **A read-only VM state snapshot** (`feature/vm-snapshot`, sim-proven, fitted at
+   ~142 ALM + 1 M10K, ⏳ HW): microcode handler `E_SNAP` + `dvd/vm_snap.sv` on EXT_BUS
+   `0x7D` + `mister.py snap`. `docs/nav_engine.md` §8. **Next:** the HW check —
    snapshot Scooby-Doo 2 and Thayer's Quest at known parks and compare the GPRMs with
    the nav event FIFO's GPRM writes.
 3. ⏳ **Restore, exposed only to the HIL harness** (`/tmp/dvd_ctl`, no OSD rows): the

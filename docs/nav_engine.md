@@ -499,7 +499,7 @@ cannot be compared, because libdvdnav itself fails on them.
 
 ## 8. State snapshot (save states, step 2)
 
-**Status (2026-10-26): 🔧 built and sim-proven on `feature/vm-snapshot`; ⏳ HW.** Read-only:
+**Status (2026-10-26): 🔧 built, sim-proven and fitted on `feature/vm-snapshot`; ⏳ HW.** Read-only:
 it changes nothing the VM does. It is the first of the save-state steps agreed with the
 maintainer (full save states only, no resume-only feature): (1) the Scooby-Doo 2 freeze
 diagnosed (the restore's seek lands in an audio-only VOBU; `docs/roadmap.md` "Save
@@ -547,6 +547,12 @@ again). A request while a jump waits for its verdict waits for the VM's give-up 
 (~0.62 s). The snapshot leaves out `sprm8_frozen`, `ptt_pend` and the sequencer's registers:
 none matters at rest, and the format is versioned, so one can be added if step 3 needs it.
 
-**Cost** (⏳ to measure: per-entity synthesis and a full fit). Estimated ~125–215 ALM and
-1 M10K; 24 ROM words measured.
+**Cost, measured** (full fit `DVD_vmsnap_20261026_1540.rbf`, SEED 7, against the
+`DVD_playharness_20261025_0214` fit of `main`'s code): `vm_snap` **125 ALM, 220 registers,
+1 M10K**; `dvd_vm` 871 → 888 ALM (+17; its registers unchanged at 741, the ROM still 4 M10K);
+24 ROM words. About **142 ALM + 1 M10K** attributable. The design total moved 39,080 → 40,838
+placed ALMs, but that is the seed (17 → 7): `dvd_telem` and `nav_trace`, untouched, moved
++82 and +45 in the same fit. RAM blocks 530 → 532 / 553. Timing passes: `clk_dec` 90.49 /
+**86.81** MHz (100 / −40 °C, gate 86.0 — a thin cold-corner margin, 0.81 MHz), `clk_mem`
+94.12 / 97.64.
 
