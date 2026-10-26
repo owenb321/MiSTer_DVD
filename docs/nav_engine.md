@@ -45,7 +45,7 @@ cross-cutting lesson). Everything that is a *decision* is microcode.
   engine's layout.
 - **Registers:** 16 × 16 bits; r0 = 0.
 - **Memories:**
-  - 1K-word program ROM (4 M10K);
+  - 1,280-word program ROM (5 M10K, an 11-bit pc; 4 M10K and 1K words until the save-state restore, §8);
   - 256 × 16 single-port data RAM (1 M10K);
   - 4-deep call stack.
 - **Timing:** `ld` / `ldc` / `ldp` take 2 cycles, everything else 1.

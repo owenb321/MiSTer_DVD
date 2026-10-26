@@ -2,7 +2,7 @@
 // The navigation sequencer's program size, opcodes, ports, and the data RAM
 // map (docs/nav_engine.md). Benches read the RAM through these addresses.
 localparam integer UC_WORDS = 996;
-localparam integer UC_DEPTH = 1024;
+localparam integer UC_DEPTH = 1280;
 localparam [5:0] UOP_NOP = 6'd0;
 localparam [5:0] UOP_ALU = 6'd1;
 localparam [5:0] UOP_ALUI = 6'd2;

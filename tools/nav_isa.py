@@ -76,7 +76,8 @@ FNS = ['add', 'sub', 'and', 'or', 'xor', 'shl', 'shr', 'sadd', 'ssub',
 FN = {n: i for i, n in enumerate(FNS)}
 CONDS = ['eq', 'ne', 'ltu', 'geu']
 STACK_DEPTH = 4
-UC_DEPTH = 1024                  # 4 M10K at 40 bits (256 x 40 each)
+UC_DEPTH = 1280                  # 5 M10K at 40 bits (256 x 40 each); the pc is 11 bits
+PC_MASK = 0x7FF
 RAM_WORDS = 256
 CMD_WORDS = 2048                 # 4096 bytes = 512 commands, the reader's table
 PMAP_BYTES = 128
@@ -486,7 +487,7 @@ class Machine:
                 raise SeqError(f'ret with an empty stack at pc {self.pc}')
             npc = self.stack.pop()
         elif op == 'jr':
-            npc = (imm + R[rs]) & (UC_DEPTH - 1)
+            npc = (imm + R[rs]) & PC_MASK
         elif op == 'wev':
             idx = self.io.wev(aux)
             if idx is None:
