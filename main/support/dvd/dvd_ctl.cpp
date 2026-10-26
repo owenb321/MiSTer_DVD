@@ -425,7 +425,9 @@ static void navtrace_drain(double t)
 // demux and the screen). The lead may be slightly NEGATIVE: with the decoder's buffer
 // near empty (just after a seek) the picture on screen is a few frames into the front
 // VOBU itself -- measured -26 ms on the rig (docs/nav_engine.md §10) -- and the
-// formula adds it. Rounded DOWN: the time map's landing snaps forward a VOBU.
+// formula adds it. Rounded to the NEAREST second: the time map lands on either side of
+// its target (measured -0.36..+0.30 s), so rounding down only biased every landing early
+// (three rig trials -0.49 s on average; docs/nav_engine.md §10).
 static int vmsnap_disp_secs(uint32_t eltm, uint32_t sptm, uint32_t stc, int fresh, int video)
 {
 	if (!fresh || !video || !sptm) return -1;
@@ -439,7 +441,7 @@ static int vmsnap_disp_secs(uint32_t eltm, uint32_t sptm, uint32_t stc, int fres
 	unsigned fps = ((b3 >> 6) == 1) ? 25 : 30;            // dvd_time rate bits (11 = 30)
 	if (mm > 59 || ss > 59 || ff >= fps) return -1;
 	int64_t ticks = (int64_t)((hh * 60 + mm) * 60 + ss) * 90000 + (int64_t)ff * 90000 / fps - lead;
-	return ticks < 0 ? 0 : (int)(ticks / 90000);
+	return ticks < 0 ? 0 : (int)((ticks + 45000) / 90000);
 }
 
 static int      vs_wait = 0;          // a request is outstanding

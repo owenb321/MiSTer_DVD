@@ -825,6 +825,10 @@ if [ "$RED" -eq 1 ]; then
     red_case dvd_ctl.cpp dvd_ctl_test.cpp \
         "FAIL a small negative lead" \
         "s/if (lead < -135000 || lead > 30 \* 90000) return -1;/if (lead < 0 || lead > 30 * 90000) return -1;/" ctl-vl-lead-positive-only
+    # rounded down again: every landing biased early by up to a second
+    red_case dvd_ctl.cpp dvd_ctl_test.cpp \
+        "FAIL 770.83 s rounds up" \
+        "s/(int)((ticks + 45000) \/ 90000)/(int)(ticks \/ 90000)/" ctl-vl-floor
     # a no-picture VOBU given a time: the step-1 freeze, by seek instead of by restore
     red_case dvd_ctl.cpp dvd_ctl_test.cpp \
         "FAIL a VOBU without a picture" \

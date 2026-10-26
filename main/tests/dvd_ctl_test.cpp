@@ -360,8 +360,9 @@ int main(void)
 	check(!vl_wait && strstr(vlbuf, "\"result\":\"refused: checksum\"") != NULL, "refused: checksum");
 
 	printf("[16] the displayed picture's time\n");
-	// 0:12:51 + 10 frames (30 fps) at the demux front, which is 0.8 s ahead: 770.53 s
-	check(vmsnap_disp_secs(0x001251D0, 162000, 90000, 1, 1) == 770, "front time minus the lead, rounded down");
+	// 0:12:51 + 10 frames (30 fps) at the demux front, which is 0.8 s ahead: 770.53 s -> 771
+	check(vmsnap_disp_secs(0x001251D0, 162000, 90000, 1, 1) == 771, "front time minus the lead, to the nearest second");
+	check(vmsnap_disp_secs(0x001251D0, 90000 + 45000, 90000, 1, 1) == 771, "770.83 s rounds up, not down");
 	check(vmsnap_disp_secs(0x001251D0, 90000, 90000, 1, 1) == 771, "no lead: the front time");
 	check(vmsnap_disp_secs(0x00125150, 90000, 90000, 1, 1) == 771, "25 fps frames (rate bits 01)");
 	check(vmsnap_disp_secs(0x001251D0, 90000, 162000, 1, 1) == 772, "a small negative lead: the picture is into the front VOBU");
