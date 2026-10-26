@@ -91,7 +91,7 @@
 // dvd_telem, 0x7C nav_trace). MAGIC has bit 15 clear: a core without it answers 0.
 #define UIO_DVD_VMSNAP      0x7D
 #define DVD_VMSNAP_MAGIC    0x5E02
-#define DVD_VMSNAP_HDR      13
+#define DVD_VMSNAP_HDR      19
 #define DVD_VMSNAP_MAXW     128
 #define DVD_VMSNAP_TIMEOUT  3000
 #define DVD_VMSNAP_POLL_MS  20
@@ -415,6 +415,30 @@ static void navtrace_drain(double t)
 // ---------------------------------------------------------------------------
 // VM state snapshot
 // ---------------------------------------------------------------------------
+// THE DISPLAYED PICTURE'S TIME (docs/nav_engine.md §10). The core's clock (eltm, BCD
+// dvd_time) is the PGC time of the VOBU the demux just parsed, which leads the picture
+// by the decoder's buffer -- seconds in a low-bitrate cell. sptm is that VOBU's start
+// PTS and stc the displayed picture's, so the lead is sptm - stc. -> whole PGC seconds of
+// the picture on screen, or -1 when it cannot be trusted: no NAV pack since the last
+// flush, a VOBU with no picture (a still with an audio loop: land at the cell start,
+// docs/save_states.md §5g), or a lead outside 0..30 s (a PTS discontinuity between the
+// demux and the screen). Rounded DOWN: the time map's landing snaps forward a VOBU.
+static int vmsnap_disp_secs(uint32_t eltm, uint32_t sptm, uint32_t stc, int fresh, int video)
+{
+	if (!fresh || !video || !sptm) return -1;
+	int32_t lead = (int32_t)(sptm - stc);
+	if (lead < 0 || lead > 30 * 90000) return -1;
+	unsigned b0 = eltm >> 24, b1 = (eltm >> 16) & 0xFF, b2 = (eltm >> 8) & 0xFF, b3 = eltm & 0xFF;
+	unsigned hh = (b0 >> 4) * 10 + (b0 & 15);
+	unsigned mm = (b1 >> 4) * 10 + (b1 & 15);
+	unsigned ss = (b2 >> 4) * 10 + (b2 & 15);
+	unsigned ff = ((b3 >> 4) & 3) * 10 + (b3 & 15);
+	unsigned fps = ((b3 >> 6) == 1) ? 25 : 30;            // dvd_time rate bits (11 = 30)
+	if (mm > 59 || ss > 59 || ff >= fps) return -1;
+	int64_t ticks = (int64_t)((hh * 60 + mm) * 60 + ss) * 90000 + (int64_t)ff * 90000 / fps - lead;
+	return ticks < 0 ? 0 : (int)(ticks / 90000);
+}
+
 static int      vs_wait = 0;          // a request is outstanding
 static uint16_t vs_seq0;              // the core's seq when we asked
 static unsigned vs_t0, vs_last;
@@ -475,12 +499,17 @@ static void vmsnap_poll(unsigned now)
 	snprintf(tmp, sizeof(tmp), "%s.tmp", DVD_VMSNAP_FILE);
 	FILE *f = fopen(tmp, "w");
 	if (!f) return;
+	uint32_t eltm = ((uint32_t)h[13] << 16) | h[14];
+	uint32_t sptm = ((uint32_t)h[15] << 16) | h[16];
+	uint32_t stc  = ((uint32_t)h[17] << 16) | h[18];
 	fprintf(f, "{\"t\":%.6f,\"seq\":%u,\"fmt\":%u,\"pos_fresh\":%u,\"has_video\":%u,"
 	        "\"nv_pck_lbn\":%u,\"prev_video\":%u,\"c_eltm\":%u,\"vob_idn\":%u,\"c_idn\":%u,"
+	        "\"eltm\":%u,\"sptm\":%u,\"stc\":%u,\"disp_secs\":%d,"
 	        "\"words\":[",
 	        ts.tv_sec + ts.tv_nsec / 1e9, h[1], h[3], (h[4] >> 1) & 1, h[4] & 1,
 	        ((unsigned)h[5] << 16) | h[6], ((unsigned)h[7] << 16) | h[8],
-	        ((unsigned)h[9] << 16) | h[10], h[11], h[12] & 0xFF);
+	        ((unsigned)h[9] << 16) | h[10], h[11], h[12] & 0xFF,
+	        eltm, sptm, stc, vmsnap_disp_secs(eltm, sptm, stc, (h[4] >> 1) & 1, h[4] & 1));
 	for (unsigned i = 0; i < len; i++) fprintf(f, "%s%u", i ? "," : "", w[i]);
 	fprintf(f, "]}\n");
 	fclose(f);
@@ -506,8 +535,11 @@ static void vmload_result(const char *what, int verdict)
 	fclose(f);
 }
 
-// Parse a vmsnap file: "fmt":N and "words":[a,b,...]. -> the word count, or -1.
-static int vmload_parse(const char *path, uint16_t *fmt, uint16_t *w, int maxw)
+// Parse a vmsnap file: "fmt":N, "words":[a,b,...], and the landing: "disp_secs" (-1 or
+// absent = the saved cell's start) and "nv_pck_lbn" (the time map's fallback sector).
+// -> the word count, or -1.
+static int vmload_parse(const char *path, uint16_t *fmt, uint16_t *w, int maxw,
+                        int *tm, uint32_t *rbn)
 {
 	static char buf[8192];
 	FILE *f = fopen(path, "r");
@@ -519,6 +551,10 @@ static int vmload_parse(const char *path, uint16_t *fmt, uint16_t *w, int maxw)
 	const char *q = strstr(buf, "\"words\":[");
 	if (!p || !q) return -1;
 	*fmt = (uint16_t)strtoul(p + 6, NULL, 10);
+	const char *d = strstr(buf, "\"disp_secs\":");
+	const char *r = strstr(buf, "\"nv_pck_lbn\":");
+	*tm  = d ? (int)strtol(d + 12, NULL, 10) : -1;
+	*rbn = r ? (uint32_t)strtoul(r + 13, NULL, 10) : 0;
 	q += 9;
 	int k = 0;
 	while (*q && *q != ']' && k < maxw)
@@ -537,14 +573,18 @@ static void vmload_request(const char *path)
 {
 	static uint16_t w[DVD_VMSNAP_MAXW];
 	uint16_t fmt = 0;
-	int n = vmload_parse(path, &fmt, w, DVD_VMSNAP_MAXW);
+	int disp = -1;
+	uint32_t rbn = 0;
+	int n = vmload_parse(path, &fmt, w, DVD_VMSNAP_MAXW, &disp, &rbn);
 	if (n <= 0)
 	{
 		ctl_log("DVD_CTL: vmload: cannot read a snapshot from %s", path);
 		vmload_result("unreadable", -1);
 		return;
 	}
-	uint16_t sum = 0;
+	// the landing: a time (PGC seconds) or 0xFFFF = the saved cell's start
+	uint16_t tm = (disp >= 0 && disp < 0xFFFF) ? (uint16_t)disp : 0xFFFF;
+	uint16_t sum = (uint16_t)(tm + (rbn >> 16) + (rbn & 0xFFFF));
 	for (int i = 0; i < n; i++) sum += w[i];
 	uint16_t m = spi_uio_cmd_cont(UIO_DVD_VMSNAP);
 	if (m != DVD_VMSNAP_MAGIC)
@@ -558,12 +598,16 @@ static void vmload_request(const char *path)
 	spi_w(fmt);
 	spi_w((uint16_t)n);
 	spi_w(sum);
+	spi_w(tm);
+	spi_w((uint16_t)(rbn >> 16));
+	spi_w((uint16_t)rbn);
 	for (int i = 0; i < n; i++) spi_w(w[i]);
 	DisableIO();                                // the core checks it as this ends
 	unlink(DVD_VMLOAD_FILE);
 	vl_wait = 1;
 	vl_t0 = vl_last = now_ms();
-	ctl_log("DVD_CTL: vmload %s: %d words, fmt %04x", path, n, fmt);
+	ctl_log("DVD_CTL: vmload %s: %d words, fmt %04x, land at %s%d", path, n, fmt,
+	        tm == 0xFFFF ? "the cell start " : "", tm == 0xFFFF ? -1 : tm);
 }
 
 static void vmload_poll(unsigned now)

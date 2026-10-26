@@ -795,7 +795,7 @@ if [ "$RED" -eq 1 ]; then
         "s/uint16_t seq = spi_w(1);/uint16_t seq = spi_w(0);/" ctl-vs-no-request
     # A busy buffer read: words the core is still writing, handed out as a snapshot.
     red_case dvd_ctl.cpp dvd_ctl_test.cpp \
-        "FAIL busy: only the 13 header words" \
+        "FAIL busy: only the 19 header words" \
         "s/int ready = h\[0\] == DVD_VMSNAP_MAGIC \&\& !busy \&\&/int ready = h[0] == DVD_VMSNAP_MAGIC \&\&/" ctl-vs-busy-read
     # The buffer cap off by one: the last word of a full reply is left on the bus.
     red_case dvd_ctl.cpp dvd_ctl_test.cpp \
@@ -813,6 +813,18 @@ if [ "$RED" -eq 1 ]; then
     red_case dvd_ctl.cpp dvd_ctl_test.cpp \
         "FAIL pending: still waiting" \
         "s/if (verdict == 1 || verdict == 0)/if (verdict == 0)/" ctl-vl-pending-final
+    # the lead added instead of taken off: a resume lands seconds AFTER the picture
+    red_case dvd_ctl.cpp dvd_ctl_test.cpp \
+        "FAIL front time minus the lead" \
+        "s/(int64_t)ff \* 90000 \/ fps - lead;/(int64_t)ff * 90000 \/ fps + lead;/" ctl-vl-lead-added
+    # no bound on the lead: a PTS restart between the demux and the screen lands anywhere
+    red_case dvd_ctl.cpp dvd_ctl_test.cpp \
+        "FAIL a negative lead" \
+        "s/if (lead < 0 || lead > 30 \* 90000) return -1;/if (lead > 30 * 90000) return -1;/" ctl-vl-lead-unbounded
+    # a no-picture VOBU given a time: the step-1 freeze, by seek instead of by restore
+    red_case dvd_ctl.cpp dvd_ctl_test.cpp \
+        "FAIL a VOBU without a picture" \
+        "s/if (!fresh || !video || !sptm) return -1;/if (!fresh || !sptm) return -1;/" ctl-vl-no-video-timed
     echo
 fi
 

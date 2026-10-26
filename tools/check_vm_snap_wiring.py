@@ -42,6 +42,7 @@ FILES = {
     'emu': 'dvd/emu.sv', 'vm': 'dvd/dvd_vm.sv', 'snap': 'dvd/vm_snap.sv',
     'trace': 'dvd/nav_trace.sv', 'telem': 'dvd/dvd_telem.sv', 'qsf': 'DVD.qsf',
     'ctl': 'main/support/dvd/dvd_ctl.cpp', 'svh': 'dvd/nav/nav_ucode.svh',
+    'pci': 'dvd/nav_pci.sv',
 }
 
 # vm_snap port -> the emu.sv expression it must be connected to (whitespace-free)
@@ -57,6 +58,13 @@ SNAP_PORTS = {
     'nv_pck_lbn': 'dsi_nv_pck_lbn', 'first_ref_ea': 'dsi_1stref_ea',
     'prev_video': 'dsi_prev_video', 'c_eltm': 'dsi_c_eltm', 'vob_idn': 'dsi_vob_idn',
     'c_idn': 'dsi_c_idn',
+    # the displayed time's raw parts and the landing (docs/nav_engine.md §10): the HUD
+    # clock, the front VOBU's s_ptm, the STC; the reader's load, the first picture, a
+    # menu, a mount; and the seek it fires
+    'eltm': 'whole_eltm_w', 'vobu_sptm': 'hl_vobu_sptm_w', 'stc': 'av_stc',
+    'pgc_loaded': 'pgc_loaded', 'video_live': 'video_live_s2', 'menu_active': 'menu_active',
+    'mount': 'start_streaming', 'rst_seek_pulse': 'rst_seek_pulse',
+    'rst_seek_secs': 'rst_seek_secs', 'rst_seek_rbn': 'rst_seek_rbn',
 }
 VM_PORTS = {'snap_req': 'vm_snap_req', 'snap_we': 'vm_snap_we', 'snap_d': 'vm_snap_d',
             'snap_done': 'vm_snap_done', 'snap_fmt': 'vm_snap_fmt',
@@ -106,6 +114,8 @@ def run(txt, verbose=True):
     rd = connections(em, 'dvd_iso_reader')
     for port, want in RD_PORTS.items():
         pin(rd, 'dvd_iso_reader', port, want)
+    pc = connections(em, 'nav_pci')
+    pin(pc, 'nav_pci', 'vobu_sptm', 'hl_vobu_sptm_w')
     ds = connections(em, 'nav_dsi')
     for port, want in DSI_PORTS.items():
         pin(ds, 'nav_dsi', port, want)
@@ -133,14 +143,16 @@ def run(txt, verbose=True):
     t = s['snap']
     mc = re.search(r"parameter\s*\[15:0\]\s*CMD\s*=\s*16'h([0-9A-Fa-f]+)", t)
     mm = re.search(r"parameter\s*\[15:0\]\s*MAGIC\s*=\s*16'h([0-9A-Fa-f]+)", t)
-    mh = re.search(r"localparam\s*\[3:0\]\s*HDR\s*=\s*4'd(\d+)", t)
+    mh = re.search(r"localparam\s*\[4:0\]\s*HDR\s*=\s*5'd(\d+)", t)
     rtl_cmd = int(mc.group(1), 16) if mc else None
     rtl_magic = int(mm.group(1), 16) if mm else None
     rtl_hdr = int(mh.group(1)) if mh else None
     ok(rtl_cmd == 0x7D, 'vm_snap CMD = 0x007D')
     ok(rtl_magic is not None and rtl_magic != 0 and not (rtl_magic & 0x8000),
        'vm_snap MAGIC non-zero with bit 15 clear')
-    ok(rtl_hdr == 13, 'vm_snap HDR = 13')
+    ok(rtl_hdr == 19, 'vm_snap HDR = 19')
+    ok(re.search(r'\bassign\s+vobu_sptm\s*=\s*f_vptm\s*;', strip_comments(txt['pci'])) is not None,
+       'nav_pci vobu_sptm = f_vptm (pci_gi.vobu_s_ptm)')
     mwd = re.search(r"parameter\s*\[7:0\]\s*WORDS\s*=\s*8'd(\d+)", t)
     tr = re.search(r"parameter\s*\[15:0\]\s*CMD\s*=\s*16'h([0-9A-Fa-f]+)", s['trace'])
     others = [int(x, 16) for x in re.findall(r"parameter\s*\[15:0\]\s*CMD(?:_AF)?\s*=\s*16'h([0-9A-Fa-f]+)",
@@ -198,7 +210,13 @@ MUTATIONS = [
     ('qsf', 'set_global_assignment -name SYSTEMVERILOG_FILE dvd/vm_snap.sv\n', '', 'qsf forgets the module'),
     ('ctl', '#define DVD_VMSNAP_MAGIC    0x5E02', '#define DVD_VMSNAP_MAGIC    0x5E01', 'Main magic drifts'),
     ('ctl', '#define UIO_DVD_VMSNAP      0x7D', '#define UIO_DVD_VMSNAP      0x7C', 'Main asks nav_trace'),
-    ('ctl', '#define DVD_VMSNAP_HDR      13', '#define DVD_VMSNAP_HDR      12', 'Main header one short'),
+    ('ctl', '#define DVD_VMSNAP_HDR      19', '#define DVD_VMSNAP_HDR      18', 'Main header one short'),
+    ('emu', '.stc          (av_stc),             // ...and the displayed picture\'s PTS',
+     '.stc          (33\'d0),', 'the displayed PTS tied off'),
+    ('emu', '.eltm         (whole_eltm_w),       // the HUD clock, at the demux front',
+     '.eltm         (dsi_c_eltm),', 'the cell clock instead of the PGC clock'),
+    ('emu', '.video_live   (video_live_s2),', ".video_live   (1'b1),", 'the seek fires before a picture'),
+    ('pci', 'assign vobu_sptm     = f_vptm;', 'assign vobu_sptm     = f_sptm;', 'the HLI start PTS, not the VOBU\'s'),
 ]
 
 

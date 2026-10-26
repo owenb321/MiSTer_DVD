@@ -663,7 +663,10 @@ a cheap rebuild possible. Each step is useful on its own:
    CELL's start. On the rig: a minigame snapshot restored from the menu and from the
    boot logo (the §5g case) lands and plays, the state matching the snapshot.
    **Next:** let `hil_suite` start mid-game from a snapshot; split the ROM (3 M10K
-   back). Open for films: the displayed picture's position (step 2's finding)
+   back).
+   🔧 **3b. Exact landing for films** (same branch, sim-proven, ⏳ fit + HW): the snapshot
+   records the displayed picture's PGC time (the demux lead taken off the HUD clock), and
+   the restore time-seeks there after its cell landing. `docs/nav_engine.md` §10. Open for films: the displayed picture's position (step 2's finding)
    and the no-picture VOBU rule (step 1's).
 4. ⏳ **The user-facing feature:** the OSD rows, slot files and disc identity from
    `feature/save-states`.

@@ -643,3 +643,55 @@ the ROM into 1,024 + 256-word arrays should give 3 back: a follow-up. Timing pas
 stays pending (verdict 1) and the host times out. A mount aborts a running restore; the
 request survives and runs after the boot chain. The disc must be the same one: nothing
 checks that yet (step 4's disc identity).
+
+## 10. Exact landing: a restore resumes a film at its picture (save states, step 3b)
+
+**Status (2026-10-26): 🔧 built and sim-proven on `feature/vm-snapshot`; ⏳ fit and HW.**
+
+**What.** §9 lands at the saved cell's start: exact for interactive discs, a chapter's
+worth wrong for a film. Now a snapshot records the **displayed picture's** PGC time, and a
+restore lands at the cell, then seeks to that time through the D-pad's own time-map path
+(§2h of `docs/dvd_nav.md`: landings 0.3-0.7 s after the target on hardware).
+
+**The displayed time.** The HUD clock (`whole_eltm`) is the PGC time of the VOBU the demux
+just parsed: it leads the picture by the decoder's buffer, ~1 s in a film and seconds in a
+low-bitrate cell (§8's HW check). `vm_snap` latches three raw values with the snapshot, on
+the same cycle: that clock, that VOBU's `vobu_s_ptm` (newly exported by `nav_pci`), and the
+STC (the displayed picture's PTS; telemetry puts the display lag at ~0). The Main computes
+
+    disp_secs = floor( clock - (s_ptm - STC) / 90000 )
+
+and writes it into the snapshot file, or **−1** — land at the cell start — when it cannot
+be trusted: no NAV pack since the last flush (`pos_fresh`), a VOBU with no picture (a
+still with an audio loop: step 1's no-picture rule), or a lead outside 0..30 s (a PTS
+discontinuity between the demux front and the screen).
+
+**The landing.** `vmload` sends `disp_secs` (0xFFFF for none) and the snapshot's NAV-pack
+sector (the time map's fallback, for the 3 % of discs without one) with the blob, under
+the checksum. `vm_snap` arms on `rst_done`, waits for the landing's `pgc_loaded` and then
+its first picture (`video_live` rising), and fires **one** `rst_seek_pulse`. `emu.sv` ORs
+it into the scrub's seek in front of `mode_realign` (`seek_any_pulse`) and qualifies it as
+a time seek on its own pulse — the D-pad's path exactly, but not a HUD user event. It is
+abandoned if a menu landed, another PGC loads first, a disc is mounted, or ~3 s pass.
+
+**Why this way.**
+- **Time, not a sector.** A sector for the picture on screen would need the display side
+  to track which VOBU each picture came from (a FIFO of NAV packs against PTS). The time
+  seek already exists, is HW-confirmed, and goes through the disc's own time map.
+- **Host arithmetic, not RTL.** Three 32-bit latches in `vm_snap` cost a few dozen ALMs;
+  the BCD conversion, the lead, the bounds and the fallbacks are C, under test
+  (`dvd_ctl_test` [16]), and step 4's Main reuses them.
+- **After the picture, not after the load.** A seek issued while the jump's flush is still
+  settling would race it; the first picture says the landing has finished.
+
+**Accuracy.** Rounded down to whole seconds, then the time map snaps forward to a VOBU:
+−1 to +0.7 s of the saved picture. OFFSET/DRIFT time maps (~3.5 % of the library, §2h) land
+2-6 s off, as their D-pad seeks do.
+
+**Gates.** `bench/dvd/run_vm_snap.sh --red` [land] + [pos] (S16–S20, wiring: the clock,
+`s_ptm`, STC, `video_live`); `tools/check_tmap_seek_wiring.py --red` (R9–R12: on its own
+pulse, its own time, through `mode_realign`, not a HUD event); `main/tests/run_tests.sh
+--red` ([13], [16]; `ctl-vl-lead-added`, `-lead-unbounded`, `-no-video-timed`).
+
+**Limits.** Two flushes per restore (the cell landing, then the seek): a brief picture of
+the cell start shows first. A snapshot whose lead is out of bounds lands at the cell start.

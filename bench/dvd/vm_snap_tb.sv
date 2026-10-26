@@ -33,6 +33,12 @@
 //   [pending]  a load while a restore is still pending (the VM is waiting on a jump):
 //              verdict 6, and the pending blob is not overwritten
 //
+// EXACT LANDING (docs/nav_engine.md §10):
+//   [land]     a load with a time target fires ONE rst_seek_pulse carrying that time and
+//              the fallback RBN, after the landing's PGC load and its first picture; none
+//              without a target, none when a menu landed, none when another PGC loaded
+//              before the picture; [pos] also checks the clock / s_ptm / STC latches
+//
 // Run: iverilog -g2012 -I dvd -o /tmp/vs dvd/dvd_vm.sv dvd/vm_snap.sv bench/dvd/vm_snap_tb.sv && vvp /tmp/vs
 `timescale 1ns/1ps
 `default_nettype none
@@ -40,7 +46,7 @@
 module vm_snap_tb;
     `include "nav/nav_ucode.svh"
     localparam [15:0] CMD = 16'h007D, MAGIC = 16'h5E02;
-    localparam integer HDR = 13;
+    localparam integer HDR = 19;
 
     reg clk = 0;
     always #5 clk = ~clk;
@@ -70,6 +76,11 @@ module vm_snap_tb;
     reg        agl_set = 0; reg [3:0] agl_set_val = 0;
     reg        ptt_upd = 0; reg [10:0] ptt_val = 0;
 
+    // ---- the displayed time's raw parts, and the landing ----
+    reg [31:0] eltm = 0, vobu_sptm = 0;
+    reg [32:0] stc = 0;
+    reg        video_live = 0, mount = 0;
+    wire       rst_seek_pulse; wire [16:0] rst_seek_secs; wire [31:0] rst_seek_rbn;
     // ---- the position ----
     reg        pos_clr = 0, pos_commit = 0;
     reg [31:0] nv_pck_lbn = 0, first_ref_ea = 0, prev_video = 0, c_eltm = 0;
@@ -120,7 +131,10 @@ module vm_snap_tb;
         .snap_done(snap_done), .snap_fmt(snap_fmt), .restore_req(restore_req), .rst_ra(rst_ra),
         .rst_q(rst_q), .rst_done(rst_done), .pos_clr(pos_clr), .pos_commit(pos_commit),
         .nv_pck_lbn(nv_pck_lbn), .first_ref_ea(first_ref_ea), .prev_video(prev_video),
-        .c_eltm(c_eltm), .vob_idn(vob_idn), .c_idn(c_idn));
+        .c_eltm(c_eltm), .vob_idn(vob_idn), .c_idn(c_idn),
+        .eltm(eltm), .vobu_sptm(vobu_sptm), .stc(stc), .pgc_loaded(pgc_loaded),
+        .video_live(video_live), .menu_active(menu_active), .mount(mount),
+        .rst_seek_pulse(rst_seek_pulse), .rst_seek_secs(rst_seek_secs), .rst_seek_rbn(rst_seek_rbn));
 
     reg drive_seen = 1'b0;
     always @(posedge clk) if (drive === 1'b1) drive_seen <= 1'b1;
@@ -215,7 +229,11 @@ module vm_snap_tb;
     reg  [15:0] blob [0:127];
     reg  [15:0] tx2  [0:127];
     reg  [15:0] sum, sum2;
-    integer     n_rreq = 0, n_jump = 0;
+    integer     n_rreq = 0, n_jump = 0, n_seek = 0;
+    reg  [16:0] s_secs; reg [31:0] s_rbn;
+    always @(posedge clk) if (rst_seek_pulse === 1'b1) begin
+        n_seek = n_seek + 1; s_secs = rst_seek_secs; s_rbn = rst_seek_rbn;
+    end
     reg  [15:0] j_pgcn; reg [7:0] j_cell; reg [1:0] j_dom;
     always @(posedge clk) begin
         if (restore_req === 1'b1) n_rreq = n_rreq + 1;
@@ -224,10 +242,15 @@ module vm_snap_tb;
         end
     end
     // a LOAD: control bit 1, then fmt, len, checksum and the first n words of `blob`
+    // `sm` is the blob's sum; the landing's words (ld_tm, ld_rbn) are added to it here,
+    // as the host's checksum covers them
+    reg [15:0] ld_tm = 16'hFFFF;
+    reg [31:0] ld_rbn = 32'd0;
     task load(input [15:0] fmt, input [15:0] ln, input [15:0] sm, input integer n); begin
-        tx[0] = fmt; tx[1] = ln; tx[2] = sm;
-        for (k = 0; k < n; k = k + 1) tx[3 + k] = blob[k];
-        ntx = 3 + n;
+        tx[0] = fmt; tx[1] = ln; tx[2] = sm + ld_tm + ld_rbn[31:16] + ld_rbn[15:0];
+        tx[3] = ld_tm; tx[4] = ld_rbn[31:16]; tx[5] = ld_rbn[15:0];
+        for (k = 0; k < n; k = k + 1) tx[6 + k] = blob[k];
+        ntx = 6 + n;
         txn(CMD, 16'd2, 2 + ntx);
         ntx = 0;
     end endtask
@@ -269,6 +292,7 @@ module vm_snap_tb;
         vm.last_menu_pgcn = 16'h0033; vm.ev_btn_cmd = 64'h0123_4567_89AB_CDEF;
         nv_pck_lbn = 32'h0001_5513; first_ref_ea = 32'd0; prev_video = 32'hBFFF_FF3C;
         c_eltm = 32'h0001_1823; vob_idn = 16'd7; c_idn = 8'd4;
+        eltm = 32'h0012_51D0; vobu_sptm = 32'h0002_7AC4; stc = 33'h1_0001_2345;
         @(negedge clk) pos_commit = 1; @(negedge clk) pos_commit = 0;
         nclk(4);
 
@@ -317,6 +341,9 @@ module vm_snap_tb;
         check({w[7], w[8]} === 32'hBFFF_FF3C, "prev_video");
         check({w[9], w[10]} === 32'h0001_1823, "c_eltm");
         check(w[11] === 16'd7 && w[12] === 16'd4, "vob_idn / c_idn");
+        check({w[13], w[14]} === 32'h0012_51D0, "the clock (eltm)");
+        check({w[15], w[16]} === 32'h0002_7AC4, "the front VOBU's s_ptm");
+        check({w[17], w[18]} === 32'h0001_2345, "the STC's low 32 bits");
         // a flush makes the position stale; a VOBU with a picture sets has_video
         @(negedge clk) pos_clr = 1; @(negedge clk) pos_clr = 0;
         first_ref_ea = 32'd45;
@@ -427,6 +454,50 @@ module vm_snap_tb;
         check(w[4][15:13] === 3'd6, "a load over a pending restore is not refused");
         ok = 1; for (i = 0; i < USNAP_WORDS; i = i + 1) if (dut.buf_m[i] !== tx2[i]) ok = 0;
         check(ok, "the pending blob was overwritten");
+        end_arm;
+
+        // ------------------------------------------------------------ [land]
+        begin_arm("land");
+        // finish [pending]: its verdict lets the pending restore (no target) run and land
+        @(negedge clk) pgc_loaded = 1; @(negedge clk) pgc_loaded = 0;
+        wait_rst(4000);
+        @(negedge clk) pgc_loaded = 1; @(negedge clk) pgc_loaded = 0;
+        nclk(40); video_live = 1; nclk(40); video_live = 0;
+        check(n_seek == 0, "a restore without a time target sought");
+        for (i = 0; i < USNAP_WORDS; i = i + 1) blob[i] = tx2[i];
+        // (a) a target: one seek, after the landing's load AND its first picture
+        ld_tm = 16'd123; ld_rbn = 32'h0001_2345; menu_active = 0;
+        load(USNAP_FMT, 16'd96, sum, USNAP_WORDS); wait_rst(4000);
+        nclk(40); video_live = 1; nclk(10); video_live = 0;
+        check(n_seek == 0, "the seek fired before the landing's PGC loaded");
+        @(negedge clk) pgc_loaded = 1; @(negedge clk) pgc_loaded = 0;
+        nclk(40);
+        check(n_seek == 0, "the seek fired before the landing's first picture");
+        video_live = 1; nclk(10);
+        check(n_seek == 1 && s_secs === 17'd123 && s_rbn === 32'h0001_2345,
+              "not one seek to the target time with the fallback RBN");
+        video_live = 0; nclk(40); video_live = 1; nclk(10); video_live = 0;
+        check(n_seek == 1, "a second picture fired the seek again");
+        // (b) a menu landed: no seek
+        ld_tm = 16'd200; menu_active = 1;
+        load(USNAP_FMT, 16'd96, sum, USNAP_WORDS); wait_rst(4000);
+        @(negedge clk) pgc_loaded = 1; @(negedge clk) pgc_loaded = 0;
+        nclk(20); video_live = 1; nclk(10); video_live = 0;
+        check(n_seek == 1, "a menu landing sought");
+        menu_active = 0;
+        // (c) another PGC loads before the landing's picture: abandoned
+        load(USNAP_FMT, 16'd96, sum, USNAP_WORDS); wait_rst(4000);
+        @(negedge clk) pgc_loaded = 1; @(negedge clk) pgc_loaded = 0;
+        nclk(20);
+        @(negedge clk) pgc_loaded = 1; @(negedge clk) pgc_loaded = 0;
+        nclk(20); video_live = 1; nclk(10); video_live = 0;
+        check(n_seek == 1, "a seek fired after another PGC loaded first");
+        // (d) a mount in between: abandoned
+        load(USNAP_FMT, 16'd96, sum, USNAP_WORDS); wait_rst(4000);
+        @(negedge clk) mount = 1; @(negedge clk) mount = 0;
+        @(negedge clk) pgc_loaded = 1; @(negedge clk) pgc_loaded = 0;
+        nclk(20); video_live = 1; nclk(10); video_live = 0;
+        check(n_seek == 1, "a seek fired across a mount");
         end_arm;
 
         if (any_fail) $display("RESULT: FAIL");

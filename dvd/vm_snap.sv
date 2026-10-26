@@ -43,12 +43,25 @@
 //   word 9,10   c_eltm[31:16], [15:0]       cell elapsed time (BCD)
 //   word 11     vob_idn
 //   word 12     {8'd0, c_idn}
-//   words 13 .. 13+len-1   the snapshot, tools/nav_isa.py snap_layout() order
+//   word 13,14  eltm[31:16], [15:0]   the HUD clock's PGC time (BCD dvd_time) -- at the
+//               DEMUX front: it leads the picture by the decoder's buffer
+//   word 15,16  sptm[31:16], [15:0]   that front VOBU's vobu_s_ptm (nav_pci)
+//   word 17,18  stc[31:16], [15:0]    the STC = the displayed picture's PTS
+//               -> the host's displayed time = eltm - (sptm - stc) / 90000 (§10)
+//   words 19 .. 19+len-1   the snapshot, tools/nav_isa.py snap_layout() order
 //   any further word: 0
 //   control word (io_din at strobe 1): bit 0 = take a new snapshot when this
 //   transaction ends; bit 1 = LOAD: the words that follow are a blob to restore --
-//   strobe 2 fmt, 3 len, 4 checksum (16-bit sum of the blob), 5.. the blob -- and the
-//   replies to them are the header words as usual (the host ignores them)
+//   strobe 2 fmt, 3 len, 4 checksum, 5 tm (PGC seconds to land at, 0xFFFF = the
+//   saved cell's start), 6/7 the fallback RBN (hi, lo) for a disc without a time
+//   map, 8.. the blob; the checksum is the 16-bit sum of the words from strobe 5 on
+//   -- and the replies to them are the header words as usual (the host ignores them)
+//
+// ★ EXACT LANDING (docs/nav_engine.md §10). The VM's restore lands at the saved CELL's
+// start. With a time target, once that landing has loaded and its first picture is on
+// screen, rst_seek_pulse fires ONE time seek (the D-pad's own path: the disc's time
+// map, the RBN as its fallback). Abandoned if another PGC loads first, a disc is
+// mounted, a menu is what landed, or ~3 s pass.
 //
 // ★ RESTORE (save states step 3, docs/nav_engine.md §9). A LOAD writes the blob into the
 // same buffer. When its transaction ends the blob is CHECKED -- fmt = snap_fmt, len =
@@ -72,7 +85,8 @@
 module vm_snap #(
     parameter [15:0] CMD   = 16'h007D,   // free: Main 0x00-0x44, 0x61-63, 0xF0-F9; 0x7A/0x7B dvd_telem, 0x7C nav_trace
     parameter [15:0] MAGIC = 16'h5E02,
-    parameter [7:0]  WORDS = 8'd96       // = USNAP_WORDS (check_vm_snap_wiring.py pins it)
+    parameter [7:0]  WORDS = 8'd96,      // = USNAP_WORDS (check_vm_snap_wiring.py pins it)
+    parameter [26:0] SEEK_WD = 27'd81_000_000   // ~3 s at clk_sys: give the landing up
 ) (
     input         clk,                   // clk_sys
     input         rst_n,                 // core reset only
@@ -103,10 +117,22 @@ module vm_snap #(
     input  [31:0] prev_video,
     input  [31:0] c_eltm,
     input  [15:0] vob_idn,
-    input   [7:0] c_idn
+    input   [7:0] c_idn,
+    input  [31:0] eltm,                  // the HUD clock (whole_eltm): PGC time at the front
+    input  [31:0] vobu_sptm,             // nav_pci: the front VOBU's start PTS
+    input  [32:0] stc,                   // av_stc: the displayed picture's PTS
+
+    // --- the landing's time seek (emu ORs it into the scrub seek) ---------------
+    input         pgc_loaded,            // the reader loaded a PGC
+    input         video_live,            // the display shows a decoded picture
+    input         menu_active,           // the loaded PGC is a menu
+    input         mount,                 // start_streaming: a new disc
+    output reg        rst_seek_pulse,
+    output reg [16:0] rst_seek_secs,
+    output reg [31:0] rst_seek_rbn
 );
 
-    localparam [3:0] HDR = 4'd13;
+    localparam [4:0] HDR = 5'd19;
 
     // ---- the buffer: one write port (the VM's snapshot, or the host's load -- never
     //      both: the VM writes only at rest, a load only lands while it is not
@@ -130,14 +156,16 @@ module vm_snap #(
     // ---- the snapshot's bookkeeping and its position ----------------------------
     reg         busy, req_l, fresh;
     reg         load_l;                  // this transaction carries a blob
-    reg  [15:0] h_fmt, h_len, h_sum, h_acc;
+    reg  [15:0] h_fmt, h_len, h_sum, h_acc, h_tm, h_rbnh, h_rbnl;
+    reg  [15:0] l_tm;                    // the applied load's target: 0xFFFF = none
+    reg  [31:0] l_rbn;
     reg  [7:0]  h_cnt;
     reg  [2:0]  verdict;
     reg  [4:0]  rcount;
     reg  [15:0] seq;
     reg  [7:0]  len;
     reg         p_fresh, p_video;
-    reg  [31:0] p_lbn, p_prev, p_eltm;
+    reg  [31:0] p_lbn, p_prev, p_eltm, p_tm, p_sptm, p_stc;
     reg  [15:0] p_vob;
     reg  [7:0]  p_cid;
 
@@ -145,8 +173,10 @@ module vm_snap #(
         if (!rst_n) begin
             snap_req <= 1'b0; busy <= 1'b0; wa <= 7'd0; seq <= 16'd0; len <= 8'd0;
             restore_req <= 1'b0; rbusy <= 1'b0; verdict <= 3'd0; rcount <= 5'd0;
+            l_tm <= 16'hFFFF; l_rbn <= 32'd0;
             fresh <= 1'b0; p_fresh <= 1'b0; p_video <= 1'b0;
             p_lbn <= 32'd0; p_prev <= 32'd0; p_eltm <= 32'd0; p_vob <= 16'd0; p_cid <= 8'd0;
+            p_tm <= 32'd0; p_sptm <= 32'd0; p_stc <= 32'd0;
         end else begin
             snap_req <= 1'b0;
             restore_req <= 1'b0;
@@ -165,6 +195,7 @@ module vm_snap #(
                 else if (h_acc != h_sum)        verdict <= 3'd5;
                 else begin
                     verdict <= 3'd1; rbusy <= 1'b1; restore_req <= 1'b1;
+                    l_tm <= h_tm; l_rbn <= {h_rbnh, h_rbnl};
                 end
                 if (!rbusy && !busy) len <= 8'd0;   // the buffer no longer holds a snapshot
             end
@@ -177,12 +208,44 @@ module vm_snap #(
                 p_fresh <= fresh; p_video <= |first_ref_ea;
                 p_lbn <= nv_pck_lbn; p_prev <= prev_video; p_eltm <= c_eltm;
                 p_vob <= vob_idn; p_cid <= c_idn;
+                p_tm <= eltm; p_sptm <= vobu_sptm; p_stc <= stc[31:0];
             end
         end
     end
 
+    // ---- the landing's time seek (§10) ----------------------------------------------
+    localparam [1:0] RS_IDLE = 2'd0, RS_LOAD = 2'd1, RS_LIVE = 2'd2;
+    reg  [1:0]  rs;
+    reg  [26:0] rs_tmr;
+    reg         live_d;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            rs <= RS_IDLE; rs_tmr <= 27'd0; live_d <= 1'b0;
+            rst_seek_pulse <= 1'b0; rst_seek_secs <= 17'd0; rst_seek_rbn <= 32'd0;
+        end else begin
+            rst_seek_pulse <= 1'b0;
+            live_d <= video_live;
+            if (rs != RS_IDLE) rs_tmr <= rs_tmr + 27'd1;
+            if (mount || (rs != RS_IDLE && rs_tmr == SEEK_WD))
+                rs <= RS_IDLE;                         // a new disc, or never landed
+            else case (rs)
+            RS_IDLE: if (rst_done && rbusy && l_tm != 16'hFFFF) begin
+                         rs <= RS_LOAD; rs_tmr <= 27'd0;
+                     end
+            RS_LOAD: if (pgc_loaded) rs <= menu_active ? RS_IDLE : RS_LIVE;
+            default: if (pgc_loaded) rs <= RS_IDLE;    // something else loaded first
+                     else if (video_live && !live_d) begin
+                         rst_seek_pulse <= 1'b1;         // the landing's first picture
+                         rst_seek_secs  <= {1'b0, l_tm};
+                         rst_seek_rbn   <= l_rbn;
+                         rs <= RS_IDLE;
+                     end
+            endcase
+        end
+    end
+
     // ---- readout ---------------------------------------------------------------
-    reg  [3:0]  wcnt;                    // header word index, saturates at HDR
+    reg  [4:0]  wcnt;                    // header word index, saturates at HDR
     reg  [7:0]  bcnt;                    // strobes in this transaction (a load's word index)
     reg         active;
     reg  [15:0] dout_r;
@@ -193,13 +256,14 @@ module vm_snap #(
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            wcnt <= 4'd0; active <= 1'b0; dout_r <= 16'd0; left <= 8'd0; raddr <= 7'd0;
+            wcnt <= 5'd0; active <= 1'b0; dout_r <= 16'd0; left <= 8'd0; raddr <= 7'd0;
             seq_s <= 16'd0; len_s <= 8'd0; busy_s <= 1'b0; req_l <= 1'b0;
             load_l <= 1'b0; h_we <= 1'b0; h_wa <= 7'd0; h_wd <= 16'd0;
             h_fmt <= 16'd0; h_len <= 16'd0; h_sum <= 16'd0; h_acc <= 16'd0; h_cnt <= 8'd0;
+            h_tm <= 16'hFFFF; h_rbnh <= 16'd0; h_rbnl <= 16'd0;
             bcnt <= 8'd0;
         end else if (!io_enable) begin
-            wcnt <= 4'd0; active <= 1'b0; dout_r <= 16'd0; left <= 8'd0; req_l <= 1'b0;
+            wcnt <= 5'd0; active <= 1'b0; dout_r <= 16'd0; left <= 8'd0; req_l <= 1'b0;
             load_l <= 1'b0; h_we <= 1'b0; bcnt <= 8'd0;
         end else if (!io_strobe) begin
             h_we <= 1'b0;                    // one write per strobe
@@ -212,8 +276,11 @@ module vm_snap #(
                     8'd2: h_fmt <= io_din;
                     8'd3: h_len <= io_din;
                     8'd4: h_sum <= io_din;
+                    8'd5: begin h_tm   <= io_din; h_acc <= h_acc + io_din; end
+                    8'd6: begin h_rbnh <= io_din; h_acc <= h_acc + io_din; end
+                    8'd7: begin h_rbnl <= io_din; h_acc <= h_acc + io_din; end
                     default:
-                        if (bcnt >= 8'd5 && h_cnt < WORDS && !rbusy && !busy) begin
+                        if (bcnt >= 8'd8 && h_cnt < WORDS && !rbusy && !busy) begin
                             h_we  <= 1'b1;
                             h_wa  <= h_cnt[6:0];
                             h_wd  <= io_din;
@@ -222,8 +289,8 @@ module vm_snap #(
                         end
                 endcase
             end
-            if (wcnt != HDR) wcnt <= wcnt + 4'd1;
-            if (wcnt == 4'd0) begin
+            if (wcnt != HDR) wcnt <= wcnt + 5'd1;
+            if (wcnt == 5'd0) begin
                 active <= (io_din == CMD);
                 if (io_din == CMD) begin
                     seq_s  <= seq;
@@ -234,21 +301,27 @@ module vm_snap #(
                 end
             end else if (active) begin
                 case (wcnt)
-                    4'd1: begin
+                    5'd1: begin
                         dout_r <= seq_s; req_l <= io_din[0]; load_l <= io_din[1];
-                        h_acc <= 16'd0; h_cnt <= 8'd0;
+                        h_acc <= 16'd0; h_cnt <= 8'd0; h_tm <= 16'hFFFF;
                     end
-                    4'd2: dout_r <= {busy_s, 7'd0, len_s};
-                    4'd3: dout_r <= snap_fmt;
-                    4'd4: dout_r <= {verdict, rcount, 6'd0, p_fresh, p_video};
-                    4'd5: dout_r <= p_lbn[31:16];
-                    4'd6: dout_r <= p_lbn[15:0];
-                    4'd7: dout_r <= p_prev[31:16];
-                    4'd8: dout_r <= p_prev[15:0];
-                    4'd9: dout_r <= p_eltm[31:16];
-                    4'd10: dout_r <= p_eltm[15:0];
-                    4'd11: dout_r <= p_vob;
-                    4'd12: begin dout_r <= {8'd0, p_cid}; raddr <= 7'd0; end   // read-ahead
+                    5'd2: dout_r <= {busy_s, 7'd0, len_s};
+                    5'd3: dout_r <= snap_fmt;
+                    5'd4: dout_r <= {verdict, rcount, 6'd0, p_fresh, p_video};
+                    5'd5: dout_r <= p_lbn[31:16];
+                    5'd6: dout_r <= p_lbn[15:0];
+                    5'd7: dout_r <= p_prev[31:16];
+                    5'd8: dout_r <= p_prev[15:0];
+                    5'd9: dout_r <= p_eltm[31:16];
+                    5'd10: dout_r <= p_eltm[15:0];
+                    5'd11: dout_r <= p_vob;
+                    5'd12: dout_r <= {8'd0, p_cid};
+                    5'd13: dout_r <= p_tm[31:16];
+                    5'd14: dout_r <= p_tm[15:0];
+                    5'd15: dout_r <= p_sptm[31:16];
+                    5'd16: dout_r <= p_sptm[15:0];
+                    5'd17: dout_r <= p_stc[31:16];
+                    5'd18: begin dout_r <= p_stc[15:0]; raddr <= 7'd0; end   // read-ahead
                     default:
                         if (left != 8'd0) begin
                             dout_r <= q;

@@ -50,6 +50,10 @@ def decode(obj):
         raise ValueError('%d words, the layout has %d' % (len(words), len(names)))
     pos = {k: obj[k] for k in ('pos_fresh', 'has_video', 'nv_pck_lbn', 'prev_video',
                                'c_eltm', 'vob_idn', 'c_idn')}
+    # the displayed picture's PGC time (docs/nav_engine.md §10); -1 = a load lands at
+    # the saved cell's start. Absent in snapshots taken before the exact landing.
+    for k in ('eltm', 'sptm', 'stc', 'disp_secs'):
+        pos[k] = obj.get(k, -1 if k == 'disp_secs' else 0)
     return {'seq': obj['seq'], 'state': dict(zip(names, words)), 'pos': pos}
 
 
@@ -63,6 +67,13 @@ def show(d):
         p['nv_pck_lbn'], p['vob_idn'], p['c_idn'], bcd_time(p['c_eltm']),
         'has video' if p['has_video'] else 'NO VIDEO in this VOBU',
         'fresh' if p['pos_fresh'] else 'STALE (flushed since the last NAV pack)'))
+    lead = ((p['sptm'] - p['stc']) & 0xFFFFFFFF) / 90000.0 if p['sptm'] else 0.0
+    if p['disp_secs'] >= 0:
+        print('  on screen %d:%02d:%02d PGC time (the clock %s at the demux, %.2f s ahead): a load '
+              'lands there' % (p['disp_secs'] // 3600, p['disp_secs'] // 60 % 60, p['disp_secs'] % 60,
+                               bcd_time(p['eltm']), lead))
+    else:
+        print('  on screen no trusted time: a load lands at the saved cell\'s start')
     print('  GPRM      ' + ' '.join('%04x' % s['g%d' % i] for i in range(16)))
     print('  counters  %04x (one bit per GPRM in counter mode)' % s['gmode'])
     print('  SPRM      ' + ' '.join('%d:%04x' % (n, s['sprm%d' % n]) for n in range(24)))

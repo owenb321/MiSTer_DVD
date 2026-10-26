@@ -22,6 +22,14 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **EXACT LANDING — a restore resumes a film at its picture (2026-10-26, branch
+  `feature/vm-snapshot`; sim-proven, ⏳ fit and HW).** The snapshot latches the HUD clock,
+  the front VOBU's `vobu_s_ptm` and the STC; the Main computes the displayed picture's PGC
+  time (clock − lead) or −1 (no picture in the VOBU, stale, lead out of 0..30 s); the
+  restore lands at the cell, then fires ONE time seek through the D-pad's path after the
+  landing's first picture. `docs/nav_engine.md` §10. Gates: `run_vm_snap.sh` [land]
+  S16–S20, `check_tmap_seek_wiring.py` R9–R12, `dvd_ctl_test` [16] + 3 arms.
+
 - 🔧 **VM STATE RESTORE — save states, step 3 (2026-10-26, branch `feature/vm-snapshot`;
   sim-proven, fitted, ✅ HW-checked on the rig).** `mister.py vmload <snap.json>` puts a snapshot back: the
   VM's RAM, SPRMs and wrapper state are restored and it jumps to the saved PGC and cell,

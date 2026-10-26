@@ -83,12 +83,12 @@ PYEOF
         "if (pos_clr)         fresh <= 1'b0;" "if (1'b0)            fresh <= 1'b0;"
     # S7 also corrupts the reference blob the restore arms read back
     mut "S7 no read-ahead restart"               "load refuse reread" \
-        "begin dout_r <= {8'd0, p_cid}; raddr <= 7'd0; end" "begin dout_r <= {8'd0, p_cid}; end"
+        "begin dout_r <= p_stc[15:0]; raddr <= 7'd0; end" "begin dout_r <= p_stc[15:0]; end"
     mut "S8 a busy buffer streamed"              "busy" \
         "left   <= busy ? 8'd0 : len;" "left   <= len;"
     mut "S9 position latched live, not at done"  "pos" \
         "p_lbn <= nv_pck_lbn; p_prev <= prev_video;" "p_prev <= prev_video;" \
-        "4'd5: dout_r <= p_lbn[31:16];" "4'd5: dout_r <= nv_pck_lbn[31:16] ^ 16'h0001;"
+        "5'd5: dout_r <= p_lbn[31:16];" "5'd5: dout_r <= nv_pck_lbn[31:16] ^ 16'h0001;"
     mut "S10 words past len not zero"            "busy empty words" \
         "end else dout_r <= 16'd0;
                 endcase" "end else dout_r <= q;
@@ -99,14 +99,27 @@ PYEOF
     # moves with it. Those extra arms are this mutation's own consequence.
     mut "S11 the checksum is never checked"      "load refuse" \
         "else if (h_acc != h_sum)        verdict <= 3'd5;" "else if (1'b0)                  verdict <= 3'd5;"
-    mut "S12 a refused format still restores"    "load pending refuse" \
+    mut "S12 a refused format still restores"    "land load pending refuse" \
         "else if (h_fmt != snap_fmt)     verdict <= 3'd3;" "else if (h_fmt != snap_fmt)     begin verdict <= 3'd3; rbusy <= 1'b1; restore_req <= 1'b1; end"
     mut "S13 a load overwrites a pending blob"   "pending" \
-        "if (bcnt >= 8'd5 && h_cnt < WORDS && !rbusy && !busy) begin" "if (bcnt >= 8'd5 && h_cnt < WORDS && !busy) begin"
+        "if (bcnt >= 8'd8 && h_cnt < WORDS && !rbusy && !busy) begin" "if (bcnt >= 8'd8 && h_cnt < WORDS && !busy) begin"
     mut "S14 the VM reads the host's address"    "load" \
         "q <= buf_m[rbusy ? rst_ra : raddr];" "q <= buf_m[raddr];"
     mut "S15 applied restores not counted"       "load" \
         "rbusy <= 1'b0; verdict <= 3'd2; rcount <= rcount + 5'd1;" "rbusy <= 1'b0; verdict <= 3'd2; rcount <= rcount;"
+    # ---- the exact landing (§10) ----
+    mut "S16 the seek fires before the picture"  "land" \
+        "else if (video_live && !live_d) begin" "else begin"
+    mut "S17 a menu landing seeks"               "land" \
+        "RS_LOAD: if (pgc_loaded) rs <= menu_active ? RS_IDLE : RS_LIVE;" "RS_LOAD: if (pgc_loaded) rs <= RS_LIVE;"
+    mut "S18 another load does not abandon it"   "land" \
+        "default: if (pgc_loaded) rs <= RS_IDLE;    // something else loaded first" "default: if (1'b0) rs <= RS_IDLE;"
+    # S19: every LOAD carries the target word, so with it outside the sum every load
+    # is refused, and every restore arm fails with it
+    mut "S19 the target not under the checksum"  "land load pending refuse" \
+        "8'd5: begin h_tm   <= io_din; h_acc <= h_acc + io_din; end" "8'd5: h_tm <= io_din;"
+    mut "S20 the cell clock latched, not the PGC's" "pos" \
+        "p_tm <= eltm;" "p_tm <= c_eltm;"
 
     echo "== RED (wiring: the checker must catch each)"
     python3 tools/check_vm_snap_wiring.py --red || fail=1

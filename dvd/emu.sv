@@ -1631,6 +1631,15 @@ wire        cdda_tracks_on = cdda_mode_w && cdda_toc_valid_w;
 // outputs; seek_rbn_pulse/seek_rbn are what reaches dvd_iso_reader.
 wire       scrub_seek_pulse;         // pulse: time scrub (from scrub_ctrl)
 wire [31:0] scrub_seek_rbn;          // its target RBN (2048-sector, VTSTT_VOBS-rel)
+// A restore's exact landing (dvd/vm_snap.sv, docs/nav_engine.md §10): ONE time seek
+// after the restored PGC has loaded and shows a picture. It rides the scrub's seek --
+// the same arbitration (mode_realign) and the same time-map path as a D-pad gesture --
+// but not the HUD's user-event (a restore is not a user transport press).
+wire        rst_seek_pulse;
+wire [16:0] rst_seek_secs;
+wire [31:0] rst_seek_rbn;
+wire        seek_any_pulse = scrub_seek_pulse | rst_seek_pulse;
+wire [31:0] seek_any_rbn   = rst_seek_pulse ? rst_seek_rbn : scrub_seek_rbn;
 wire       seek_rbn_pulse;           // pulse: arbitrated raw-RBN seek -> reader
 wire [31:0] seek_rbn;                // its target RBN (2048-sector, VTSTT_VOBS-rel)
 reg        angle_pulse;              // pulse: cycle camera angle (Phase 9) -> reader
@@ -3471,8 +3480,8 @@ mode_realign mode_realign_i (
     .start_streaming (start_streaming),
     .video_live      (video_live_s2),   // clears the blank on the first new-mode frame
     .blank_en        (media_seen),      // never blank the boot idle screen
-    .scrub_pulse     (scrub_seek_pulse),
-    .scrub_rbn       (scrub_seek_rbn),
+    .scrub_pulse     (seek_any_pulse),  // the scrub's seek, or a restore's landing (§10)
+    .scrub_rbn       (seek_any_rbn),
     .seek_rbn_pulse  (seek_rbn_pulse),  // -> dvd_iso_reader (arbitrated)
     .seek_rbn        (seek_rbn),
     .mode_switch     (mode_switch),
@@ -3728,8 +3737,8 @@ dvd_iso_reader dvd_iso_reader_inst (
     // ...qualified as a TIME seek when it is a fired D-pad gesture's (issue #127).
     // scrub_seek_pulse, NOT seek_rbn_pulse: mode_realign's own re-align seeks share
     // that output and are sector seeks.
-    .seek_tm_req    (scrub_seek_pulse & (dpad_tm_v | scrub_tm_req)),
-    .seek_tm_secs   (dpad_tm_v ? dpad_tm_s : scrub_tgt_secs),
+    .seek_tm_req    ((scrub_seek_pulse & (dpad_tm_v | scrub_tm_req)) | rst_seek_pulse),
+    .seek_tm_secs   (rst_seek_pulse ? rst_seek_secs : dpad_tm_v ? dpad_tm_s : scrub_tgt_secs),
     .tmap_used      (tmap_used_w),
     .tmap_fell      (tmap_fell_w),
     .ifo_bup_vmg    (ifo_bup_vmg_w),
@@ -6388,6 +6397,9 @@ wire [31:0] hl_sptm_w;                    // nav_pci: that HLI's start PTS (nav_
 wire        hl_rj_w, hl_rj_ok_w;          // nav_pci: re-judge at a re-anchor, and its verdict (nav_trace X0)
 wire        hl_fb_promo_w;                // nav_pci: a fallback promotion (nav_trace X1)
 wire [31:0] hl_nxt_sptm_w;                // nav_pci: the parked HLI's start PTS (X1 payload)
+wire [31:0] hl_vobu_sptm_w;               // nav_pci: the front VOBU's start PTS (vm_snap)
+wire [31:0] whole_eltm_w;                 // the HUD clock (declared ahead of vm_snap; driven
+                                          // by hud_time_add, Phase 11 below)
 nav_pci nav_pci_inst (
     .hli_arm    (hli_arm_w),
     .clk        (clk_sys),
@@ -6463,7 +6475,8 @@ nav_pci nav_pci_inst (
     .dbg_rj        (hl_rj_w),        // -> nav_trace X0 (issue #176): re-judge at a re-anchor
     .dbg_rj_ok     (hl_rj_ok_w),
     .dbg_fb_promo  (hl_fb_promo_w),  // -> nav_trace X1: a FALLBACK promotion
-    .dbg_nxt_sptm  (hl_nxt_sptm_w)
+    .dbg_nxt_sptm  (hl_nxt_sptm_w),
+    .vobu_sptm     (hl_vobu_sptm_w)      // -> vm_snap: the front VOBU's start PTS
 );
 
 // =========================================================================
@@ -6596,7 +6609,17 @@ vm_snap vm_snap_inst (
     .prev_video   (dsi_prev_video),
     .c_eltm       (dsi_c_eltm),
     .vob_idn      (dsi_vob_idn),
-    .c_idn        (dsi_c_idn)
+    .c_idn        (dsi_c_idn),
+    .eltm         (whole_eltm_w),       // the HUD clock, at the demux front
+    .vobu_sptm    (hl_vobu_sptm_w),     // ...that VOBU's start PTS
+    .stc          (av_stc),             // ...and the displayed picture's PTS
+    .pgc_loaded   (pgc_loaded),
+    .video_live   (video_live_s2),
+    .menu_active  (menu_active),
+    .mount        (start_streaming),
+    .rst_seek_pulse (rst_seek_pulse),
+    .rst_seek_secs  (rst_seek_secs),
+    .rst_seek_rbn   (rst_seek_rbn)
 );
 
 // ★ NEW CELL for spu_decode's menu re-send guard (2026-09-18, Harry Potter
@@ -6688,8 +6711,7 @@ wire [3:0]  hud_alpha_w;
 // add (rate-aware frame carry). Falls back to the bare cell-relative time
 // when no cell list is loaded (linear .VOB fallback). Known Phase-7
 // characteristic: c_eltm is parse-front-timed, so the readout leads the
-// picture by the VBUF depth (~1 s).
-wire [31:0] whole_eltm_w;
+// picture by the VBUF depth (~1 s). (whole_eltm_w is declared beside nav_pci.)
 bcd_time_add hud_time_add (
     .a   (cur_cell_start_w),
     .b   (dsi_c_eltm),
