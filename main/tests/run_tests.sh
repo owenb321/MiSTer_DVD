@@ -786,6 +786,25 @@ if [ "$RED" -eq 1 ]; then
     red_case dvd_ctl.cpp dvd_ctl_test.cpp \
         "reads exactly 64 entries" \
         "s/? DVD_NAVTRACE_MAXN : h\[1\];/? DVD_NAVTRACE_MAXN - 1 : h[1];/" ctl-nt-cap-short
+
+    # ---- dvd_ctl: the VM state snapshot (0x7D, dvd/vm_snap.sv) -----------
+    # The request without its control word: the core is asked nothing, and every
+    # vmsnap ends in a timeout.
+    red_case dvd_ctl.cpp dvd_ctl_test.cpp \
+        "FAIL control word 1" \
+        "s/uint16_t seq = spi_w(1);/uint16_t seq = spi_w(0);/" ctl-vs-no-request
+    # A busy buffer read: words the core is still writing, handed out as a snapshot.
+    red_case dvd_ctl.cpp dvd_ctl_test.cpp \
+        "FAIL busy: only the 13 header words" \
+        "s/int ready = h\[0\] == DVD_VMSNAP_MAGIC \&\& !busy \&\&/int ready = h[0] == DVD_VMSNAP_MAGIC \&\&/" ctl-vs-busy-read
+    # The buffer cap off by one: the last word of a full reply is left on the bus.
+    red_case dvd_ctl.cpp dvd_ctl_test.cpp \
+        "FAIL reads at most 128 words" \
+        "s/if (len > DVD_VMSNAP_MAXW) len = DVD_VMSNAP_MAXW;/if (len > DVD_VMSNAP_MAXW) len = DVD_VMSNAP_MAXW - 1;/" ctl-vs-cap-short
+    # No timeout: a VM that never comes to rest leaves the host waiting forever.
+    red_case dvd_ctl.cpp dvd_ctl_test.cpp \
+        "FAIL times out at 3 s" \
+        "s/if (now - vs_t0 > DVD_VMSNAP_TIMEOUT)/if (0)/" ctl-vs-no-timeout
     echo
 fi
 

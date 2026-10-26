@@ -16,6 +16,16 @@
 //   * Dropped and merged events are cumulative wrapping counters in the header;
 //     an increase is reported as its own LOST line, never silently.
 //
+// And the VM state snapshot (0x7D, dvd/vm_snap.sv; docs/nav_engine.md "State
+// snapshot"), [6]..[11]:
+//   * The request carries control word 1 and nothing else; a core without the
+//     snapshot gets one {"absent":true} file and no wait.
+//   * While the core says busy, or seq has not moved, only the 13 header words are
+//     clocked -- never a payload, never a file -- and polls are rate-limited.
+//   * A complete snapshot is written whole (via rename), with the position decoded
+//     and at most 128 words read whatever len claims; a request that never
+//     completes ends in a {"timeout":true} file, not a hang.
+//
 // The module is #included, so this exercises the real code.
 
 #include <stdio.h>
@@ -27,24 +37,29 @@
 
 static char nt_log_path[64];
 static char ctl_log_path[64];
+static char vs_path[64];
 #define DVD_NAVTRACE_LOG nt_log_path
 #define DVD_CTL_LOG      ctl_log_path
+#define DVD_VMSNAP_FILE  vs_path
 
 // ---------------------------------------------------------------- fake world
 static uint16_t reply[2048];
 static int      reply_len = 0, reply_pos = 0;
 static int      n_cmd = 0, n_words = 0, n_disable = 0;
 static uint16_t last_cmd = 0;
+static uint16_t reply_cmd = 0x7C;                   // the command the fake core answers
+static uint16_t sent[2048];                         // what the host clocked out, per word
 
 static uint16_t spi_uio_cmd_cont(uint16_t cmd)
 {
 	n_cmd++; last_cmd = cmd; reply_pos = 1;
-	return (cmd == 0x7C && reply_len > 0) ? reply[0] : 0;
+	return (cmd == reply_cmd && reply_len > 0) ? reply[0] : 0;
 }
-static uint16_t spi_w(uint16_t)
+static uint16_t spi_w(uint16_t x)
 {
+	if (n_words < 2048) sent[n_words] = x;
 	n_words++;
-	return (last_cmd == 0x7C && reply_pos < reply_len) ? reply[reply_pos++] : 0;
+	return (last_cmd == reply_cmd && reply_pos < reply_len) ? reply[reply_pos++] : 0;
 }
 static void DisableIO(void)                         { n_disable++; }
 static int  is_dvd(void)                            { return 1; }
@@ -192,6 +207,80 @@ int main(void)
 	tev = num(line(1), "\"t_ev\":");
 	check(tev > 19.9923 && tev < 19.9926, "t_ev 679 ticks (7.5 ms) before the drain");
 
+	// ------------------------------------------------------------ the VM snapshot
+	snprintf(vs_path, sizeof(vs_path), "/tmp/dvd_ctl_test_vs_%d.json", (int)getpid());
+	static char vsbuf[8192];
+	#define READ_VS() do { vsbuf[0] = 0; FILE *vf = fopen(vs_path, "r"); \
+		if (vf) { size_t vn = fread(vsbuf, 1, sizeof(vsbuf) - 1, vf); vsbuf[vn] = 0; fclose(vf); } } while (0)
+
+	printf("[6] vmsnap on a core without the snapshot\n");
+	fresh(); reply_cmd = 0x7D; unlink(vs_path);
+	vmsnap_request();
+	READ_VS();
+	check(strstr(vsbuf, "\"absent\":true") != NULL, "one {\"absent\":true} file");
+	check(!vs_wait, "no wait for an absent core");
+
+	printf("[7] the request\n");
+	fresh(); reply_cmd = 0x7D;
+	reply[0] = 0x5E02; reply[1] = 4; reply_len = 2;
+	vmsnap_request();
+	check(n_cmd == 1 && n_words == 1 && n_disable == 1, "one transaction: command + one word");
+	check(sent[0] == 1, "control word 1 (take a snapshot when this transaction ends)");
+	check(vs_wait && vs_seq0 == 4, "waits for seq to move from 4");
+	READ_VS();
+	check(vsbuf[0] == 0, "a stale snapshot file is removed at the request");
+
+	printf("[8] polls while busy, or before seq moves\n");
+	unsigned t0 = vs_t0;
+	reply[0] = 0x5E02; reply[1] = 5; reply[2] = 0x8060; reply_len = 2048;   // seq moved, but busy
+	n_words = 0;
+	vmsnap_poll(t0 + 5);
+	check(n_words == 0, "a poll within 20 ms of the last does nothing");
+	vmsnap_poll(t0 + 25);
+	check(n_words == 12, "busy: only the 13 header words are clocked");
+	reply[1] = 4; reply[2] = 0x0060;                      // not busy, but seq still 4
+	n_words = 0;
+	vmsnap_poll(t0 + 50);
+	check(n_words == 12, "seq unchanged: only the header");
+	READ_VS();
+	check(vsbuf[0] == 0 && vs_wait, "no file yet, still waiting");
+
+	printf("[9] a complete snapshot\n");
+	reply[1] = 5; reply[2] = 96; reply[3] = 0xC7D5; reply[4] = 0x0002;     // fresh, no video
+	reply[5] = 0x0001; reply[6] = 0x5513; reply[7] = 0xBFFF; reply[8] = 0xFF3C;
+	reply[9] = 0x0001; reply[10] = 0x1823; reply[11] = 7; reply[12] = 4;
+	for (int i = 0; i < 96; i++) reply[13 + i] = (uint16_t)(0x1000 + i);
+	reply[13 + 96] = 0xDEAD;                              // past len: must not be read
+	n_words = 0;
+	vmsnap_poll(t0 + 75);
+	check(n_words == 12 + 96, "header + exactly len words");
+	check(!vs_wait, "done");
+	READ_VS();
+	check(strstr(vsbuf, "\"seq\":5,\"fmt\":51157,\"pos_fresh\":1,\"has_video\":0,") != NULL,
+	      "seq, fmt, flags");
+	check(strstr(vsbuf, "\"nv_pck_lbn\":87315,\"prev_video\":3221225276,\"c_eltm\":71715,"
+	             "\"vob_idn\":7,\"c_idn\":4,") != NULL, "the position");
+	check(strstr(vsbuf, "\"words\":[4096,4097,") != NULL && strstr(vsbuf, ",4191]}") != NULL,
+	      "the 96 words, in order");
+	check(strstr(vsbuf, "57005") == NULL, "nothing past len");
+
+	printf("[10] a reply claiming more words than the buffer\n");
+	vs_wait = 1; vs_seq0 = 5; vs_t0 = vs_last = t0;
+	reply[1] = 6; reply[2] = 200;
+	n_words = 0;
+	vmsnap_poll(t0 + 100);
+	check(n_words == 12 + 128, "reads at most 128 words");
+
+	printf("[11] a request that never completes\n");
+	vs_wait = 1; vs_seq0 = 6; vs_t0 = vs_last = t0; unlink(vs_path);
+	reply[1] = 6; reply[2] = 0x8060;
+	vmsnap_poll(t0 + 1000);
+	check(vs_wait, "still waiting at 1 s");
+	vmsnap_poll(t0 + 3100);
+	READ_VS();
+	check(!vs_wait && strstr(vsbuf, "\"timeout\":true,\"busy\":1") != NULL, "times out at 3 s, says busy");
+
+	unlink(vs_path);
 	unlink(nt_log_path);
 	unlink(ctl_log_path);
 	printf(fails ? "dvd_ctl_test: %d FAILURE(S)\n" : "dvd_ctl_test: ALL GREEN\n", fails);

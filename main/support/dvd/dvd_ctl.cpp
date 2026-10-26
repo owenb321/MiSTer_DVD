@@ -83,6 +83,22 @@
 #define DVD_NAVTRACE_LOG   "/tmp/dvd_navtrace.jsonl"
 #endif
 
+// VM STATE SNAPSHOT (dvd/vm_snap.sv, docs/nav_engine.md "State snapshot"). `vmsnap`
+// on the command FIFO asks the core for one; the next ticks poll until it is complete
+// and write it to DVD_VMSNAP_FILE: the raw words plus the position, decoded on the
+// host by tools/vm_snap.py (the layout's names live there, keyed by `fmt`). Must match
+// dvd/vm_snap.sv. 0x7D is free (Main 0x00-0x44, 0x61-63, 0xF0-F9; 0x7A/0x7B
+// dvd_telem, 0x7C nav_trace). MAGIC has bit 15 clear: a core without it answers 0.
+#define UIO_DVD_VMSNAP      0x7D
+#define DVD_VMSNAP_MAGIC    0x5E02
+#define DVD_VMSNAP_HDR      13
+#define DVD_VMSNAP_MAXW     128
+#define DVD_VMSNAP_TIMEOUT  3000
+#define DVD_VMSNAP_POLL_MS  20
+#ifndef DVD_VMSNAP_FILE
+#define DVD_VMSNAP_FILE     "/tmp/dvd_vmsnap.json"
+#endif
+
 static int  ctl_fd = -1;
 static unsigned last_telem_ms = 0;
 static unsigned telem_period_ms = TELEM_PERIOD_MS;
@@ -390,6 +406,82 @@ static void navtrace_drain(double t)
 }
 
 // ---------------------------------------------------------------------------
+// VM state snapshot
+// ---------------------------------------------------------------------------
+static int      vs_wait = 0;          // a request is outstanding
+static uint16_t vs_seq0;              // the core's seq when we asked
+static unsigned vs_t0, vs_last;
+
+// One transaction: the command, then the control word (bit 0 = take a snapshot when
+// this transaction ends). The core never writes the buffer while a transaction is
+// open, so asking and reading are always separate transactions.
+static void vmsnap_request()
+{
+	uint16_t m = spi_uio_cmd_cont(UIO_DVD_VMSNAP);
+	uint16_t seq = spi_w(1);
+	DisableIO();
+	if (m != DVD_VMSNAP_MAGIC)
+	{
+		ctl_log("DVD_CTL: core has no VM snapshot (0x7D)");
+		FILE *f = fopen(DVD_VMSNAP_FILE, "w");
+		if (f) { fprintf(f, "{\"absent\":true}\n"); fclose(f); }
+		return;
+	}
+	unlink(DVD_VMSNAP_FILE);
+	vs_seq0 = seq;
+	vs_wait = 1;
+	vs_t0 = vs_last = now_ms();
+	ctl_log("DVD_CTL: vmsnap requested (seq %u)", seq);
+}
+
+// Read the header; once a new snapshot is complete (seq moved, not busy), its words
+// follow in the same transaction. Otherwise only the 13 header words are clocked.
+static void vmsnap_poll(unsigned now)
+{
+	if (now - vs_last < DVD_VMSNAP_POLL_MS) return;
+	vs_last = now;
+	uint16_t h[DVD_VMSNAP_HDR];
+	static uint16_t w[DVD_VMSNAP_MAXW];
+	h[0] = spi_uio_cmd_cont(UIO_DVD_VMSNAP);
+	for (int i = 1; i < DVD_VMSNAP_HDR; i++) h[i] = spi_w(0);
+	int busy = h[2] >> 15;
+	unsigned len = h[2] & 0xFF;
+	int ready = h[0] == DVD_VMSNAP_MAGIC && !busy && h[1] != vs_seq0 && len;
+	if (len > DVD_VMSNAP_MAXW) len = DVD_VMSNAP_MAXW;      // never past our buffer
+	if (ready) for (unsigned i = 0; i < len; i++) w[i] = spi_w(0);
+	DisableIO();
+	if (!ready)
+	{
+		if (now - vs_t0 > DVD_VMSNAP_TIMEOUT)
+		{
+			vs_wait = 0;
+			ctl_log("DVD_CTL: vmsnap timed out (busy %d) -- the VM never came to rest", busy);
+			FILE *f = fopen(DVD_VMSNAP_FILE, "w");
+			if (f) { fprintf(f, "{\"timeout\":true,\"busy\":%d}\n", busy); fclose(f); }
+		}
+		return;
+	}
+	vs_wait = 0;
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	char tmp[256];
+	snprintf(tmp, sizeof(tmp), "%s.tmp", DVD_VMSNAP_FILE);
+	FILE *f = fopen(tmp, "w");
+	if (!f) return;
+	fprintf(f, "{\"t\":%.6f,\"seq\":%u,\"fmt\":%u,\"pos_fresh\":%u,\"has_video\":%u,"
+	        "\"nv_pck_lbn\":%u,\"prev_video\":%u,\"c_eltm\":%u,\"vob_idn\":%u,\"c_idn\":%u,"
+	        "\"words\":[",
+	        ts.tv_sec + ts.tv_nsec / 1e9, h[1], h[3], (h[4] >> 1) & 1, h[4] & 1,
+	        ((unsigned)h[5] << 16) | h[6], ((unsigned)h[7] << 16) | h[8],
+	        ((unsigned)h[9] << 16) | h[10], h[11], h[12] & 0xFF);
+	for (unsigned i = 0; i < len; i++) fprintf(f, "%s%u", i ? "," : "", w[i]);
+	fprintf(f, "]}\n");
+	fclose(f);
+	rename(tmp, DVD_VMSNAP_FILE);                      // a reader never sees half a file
+	ctl_log("DVD_CTL: vmsnap seq %u, %u words, fmt %04x", h[1], len, h[3]);
+}
+
+// ---------------------------------------------------------------------------
 // command FIFO
 // ---------------------------------------------------------------------------
 static void ctl_open()
@@ -429,6 +521,10 @@ static void ctl_exec(char *line)
 	else if (!strcmp(line, "ping"))
 	{
 		ctl_log("DVD_CTL: ping");
+	}
+	else if (!strcmp(line, "vmsnap"))
+	{
+		vmsnap_request();
 	}
 	else
 	{
@@ -507,6 +603,7 @@ void dvd_ctl_tick()
 	}
 
 	unsigned t = now_ms();
+	if (vs_wait) vmsnap_poll(t);
 	if (t - last_telem_ms >= telem_period_ms)
 	{
 		last_telem_ms = t;
