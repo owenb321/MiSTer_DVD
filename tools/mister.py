@@ -1135,6 +1135,31 @@ def cmd_log(args):
     print(out.rstrip())
 
 
+def cmd_snap(args):
+    """Take a VM state snapshot on the rig (dvd_ctl `vmsnap`, EXT_BUS 0x7D) and print
+    it by name (tools/vm_snap.py; docs/nav_engine.md "State snapshot"). Needs the
+    harness Main and a core with dvd/vm_snap.sv."""
+    import vm_snap
+    _, out = ssh('''
+rm -f /tmp/dvd_vmsnap.json
+echo vmsnap > /tmp/dvd_ctl
+i=0
+while [ ! -s /tmp/dvd_vmsnap.json ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+cat /tmp/dvd_vmsnap.json 2>/dev/null || true
+''')
+    out = out.strip()
+    if not out:
+        sys.exit('mister: no snapshot file -- is the harness Main running (deploy --main)?')
+    if args.out:
+        open(args.out, 'w').write(out + '\n')
+    try:
+        d = vm_snap.decode(json.loads(out))
+    except ValueError as e:
+        sys.exit(f'mister: {e}')
+    vm_snap.show(d)
+    return 0
+
+
 def cmd_options(args):
     print('OSD options (from dvd/emu.sv CONF_STR):')
     for label, s, e, vals in options():
@@ -1233,6 +1258,10 @@ def main():
     p.add_argument('--afmt', choices=('alsa', 'pulse'),
                    help='ffmpeg audio input format (auto-detected)')
     p.set_defaults(fn=cmd_capture)
+
+    p = sub.add_parser('snap', help="the VM's whole state, by name (EXT_BUS 0x7D)")
+    p.add_argument('-o', '--out', help='also keep the raw JSON here')
+    p.set_defaults(fn=cmd_snap)
 
     p = sub.add_parser('log')
     p.add_argument('-n', type=int, default=20)
