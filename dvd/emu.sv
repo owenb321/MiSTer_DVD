@@ -704,7 +704,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-playharness"
+`define CORE_VERSION "dev-cellcmdhold13"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -3752,6 +3752,10 @@ dvd_iso_reader dvd_iso_reader_inst (
     .cur_pgcn_o     (cur_pgcn_rd),
     .best_menu_vts  (best_menu_vts),
     .menu_btns_armed(hl_btns_armed),      // Phase 3: cell-loop heuristic (vm off)
+    // Issue #176: buttons on screen OR on the way. Pending matters: the reader
+    // reaches a cell's end ~a VBUF ahead of the display, where a window opening in
+    // the cell's last second is still parsed-but-not-promoted.
+    .cc_btns        (hl_btns_armed | hl_btns_pend),
 
     .vm_mode        (menus_on),           // Phase 4: the VM drives navigation
     .vm_adv         (vm_adv_w),
@@ -6271,6 +6275,10 @@ spu_decode spu_decode_inst (
     // the highlight subpicture leads the displayed frame by the VBUF depth, same as
     // a menu-domain menu, so the STC window would gate it out.
     .menu_mode  ((menus_on && menu_active) || sp_menu_early || force_43_subp),
+    // In-title menu only (sp_menu_early already excludes the menu domain): an expired
+    // unit stays hidden and an early decode shows nothing (spu_decode title_menu; Mad
+    // Dog's purple blip). A menu-domain menu and Force 4:3 Subpics stay windowless.
+    .title_menu (sp_menu_early && !force_43_subp),
     .interlaced (fields_eff),              // interlaced raster: v_pos = absolute frame line, +2/field-line (240p: progressive, +1)
     .sp_byte        (ps_sp_byte),
     .sp_valid       (ps_sp_valid),
@@ -6352,6 +6360,9 @@ wire [31:0] hl_coli;
 
 wire hli_arm_w;                           // nav_pci: an HLI with buttons was promoted
 wire [31:0] hl_sptm_w;                    // nav_pci: that HLI's start PTS (nav_trace)
+wire        hl_rj_w, hl_rj_ok_w;          // nav_pci: re-judge at a re-anchor, and its verdict (nav_trace X0)
+wire        hl_fb_promo_w;                // nav_pci: a fallback promotion (nav_trace X1)
+wire [31:0] hl_nxt_sptm_w;                // nav_pci: the parked HLI's start PTS (X1 payload)
 nav_pci nav_pci_inst (
     .hli_arm    (hli_arm_w),
     .clk        (clk_sys),
@@ -6423,7 +6434,11 @@ nav_pci nav_pci_inst (
     .btn_sel    (hl_btn_sel),
     .dbg_btn_ns (hl_btn_ns),         // gate in-title multi-button menu nav (Scene It)
     .hli_seen   (hl_menu_seen),      // early menu-HLI detect -> open the subpicture gate in time
-    .dbg_h_sptm (hl_sptm_w)          // -> nav_trace HLI_ARM payload
+    .dbg_h_sptm (hl_sptm_w),         // -> nav_trace HLI_ARM payload
+    .dbg_rj        (hl_rj_w),        // -> nav_trace X0 (issue #176): re-judge at a re-anchor
+    .dbg_rj_ok     (hl_rj_ok_w),
+    .dbg_fb_promo  (hl_fb_promo_w),  // -> nav_trace X1: a FALLBACK promotion
+    .dbg_nxt_sptm  (hl_nxt_sptm_w)
 );
 
 // =========================================================================
@@ -6435,10 +6450,18 @@ nav_pci nav_pci_inst (
 // over EXT_BUS command 0x7C (dvd_ctl.cpp, only while the harness's fast-telemetry
 // arm file exists). Placed here, below every source it reads (Verilog declaration
 // order). Wiring gated by tools/check_nav_trace_wiring.py.
-// ⚠ #176 HOOKS: x_ev/x_pl are spare event inputs for signals that exist only on
-// the issue #176 branch (nav_pci's h_so / nxt_early, the cc_aud_low release).
-// Wire them there, as X0..X2 (codes 14..16); they are tied off here.
+// #176 HOOKS: x_ev/x_pl carry nav_pci's re-judge and fallback promotions as X0..X1
+// (codes 14..15); X2 is tied off. See trc_x_ev below.
 // =========================================================================
+// Issue #176 events, X0..X1 (codes 14..15); X2 (16) is tied off:
+//   X0 re-judge  : nav_pci re-judged its pending window at a content re-anchor (pulse);
+//                  payload {nxt_sptm[24:0], taken onto the new timeline}
+//   X1 fallback  : nav_pci promoted a pending through the ~1 s FALLBACK (pulse);
+//                  payload {nxt_sptm[24:0], 1}
+wire [2:0]  trc_x_ev = {1'b0, hl_fb_promo_w, hl_rj_w};
+wire [77:0] trc_x_pl = {26'd0,
+                        {hl_nxt_sptm_w[24:0], 1'b1},
+                        {hl_nxt_sptm_w[24:0], hl_rj_ok_w}};
 nav_trace nav_trace_inst (
     .clk         (clk_sys),
     .rst_n       (reset_n),
@@ -6473,8 +6496,8 @@ nav_trace nav_trace_inst (
     .pause       (pause_q),
     .still       (still_active),
     .video_live  (video_live_s2),
-    .x_ev        (3'd0),
-    .x_pl        (78'd0)
+    .x_ev        (trc_x_ev),
+    .x_pl        (trc_x_pl)
 );
 
 // =========================================================================

@@ -9,6 +9,13 @@
 #          red-clamp : the contiguity clamp  -> [A] the icon must blink again
 #          red-hold  : the display-order hold -> [B] the subtitle must truncate
 #          red-both  : the pre-#63 behaviour   -> both
+#          red-dirty : a decode shows under the old unit's params -> [E] [F2] the purple blip
+#          red-always: every decode blanks, not only an early one -> [A] the white
+#                      rabbit blinks at each re-send
+#          red-tm-expired: an in-title menu shows an expired unit -> [F1]
+#          red-tm-dirty  : an in-title menu shows an early decode -> [F2]
+#          red-tm-window : an in-title menu waits for the show time -> [F3]
+#                          (the windowless start Scene It relies on)
 # Also re-runs spu_decode_tb, which must pass UNCHANGED: it is the evidence that
 # the golden-model bitmap, the menu path and the spec-max/over-spec handling are
 # untouched.
@@ -56,6 +63,11 @@ if [ "${1:-}" = "--red" ]; then
     red red-clamp 's|c_show  <= (spu_contig \&\& !spu_due) ? stc : w_show_eff;|c_show  <= w_show_eff;|' A
     red red-hold  's|if (c_valid \&\& !spu_due \&\& !menu_mode) state <= S_HOLD;|if (menu_mode \&\& !menu_mode) state <= S_HOLD;|' B
     red red-both  's|c_show  <= (spu_contig \&\& !spu_due) ? stc : w_show_eff;|c_show  <= w_show_eff;|; s|if (c_valid \&\& !spu_due \&\& !menu_mode) state <= S_HOLD;|if (menu_mode \&\& !menu_mode) state <= S_HOLD;|' A+B
+    red red-dirty 's|                   !(bm_dirty \&\& (!menu_mode \|\| title_menu)) \&\&||' E+F2
+    red red-always 's|bm_dirty <= !spu_due \&\& !spu_contig;|bm_dirty <= 1'"'"'b1;|' A
+    red red-tm-expired 's|(menu_mode ? (!title_menu \|\| (stc < c_hide))|(menu_mode ? 1'"'"'b1|' F1
+    red red-tm-dirty   's|!(bm_dirty \&\& (!menu_mode \|\| title_menu)) \&\&|!(bm_dirty \&\& !menu_mode) \&\&|' F2
+    red red-tm-window  's|(menu_mode ? (!title_menu \|\| (stc < c_hide))|(menu_mode ? (!title_menu \|\| ((stc >= c_show) \&\& (stc < c_hide)))|' F3
 fi
 
 [ $fail -eq 0 ] && echo "ALL GREEN" || echo "FAILURES"

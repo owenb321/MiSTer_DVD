@@ -113,6 +113,7 @@ module iso_reader_auddrain_tb;
     wire        ptt_upd_w;
     wire [10:0] ptt_cur_w;
     dvd_iso_reader #(.DRAIN_WD(DRAIN_WD_TB)) dut (
+        .cc_btns(1'b0),   // issue #176 hold off: a new input floats Z unless tied
         .ptt_upd(ptt_upd_w), .ptt_cur(ptt_cur_w),
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size),

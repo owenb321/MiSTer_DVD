@@ -52,7 +52,7 @@ module spu_newcell_tb;
 
     spu_decode #(.HOLD_CYCLES(63000)) dut (
         .clk(clk), .rst_n(rst_n), .enable(1'b1), .forced_only(1'b0), .interlaced(1'b0),
-        .menu_mode(1'b1), .new_cell(new_cell), .newcell_load(nl),
+        .menu_mode(1'b1), .title_menu(1'b0), .new_cell(new_cell), .newcell_load(nl),
         .sp_byte(sp_byte), .sp_valid(sp_valid), .sp_frame_start(sp_frame_start),
         .sp_pts(sp_pts), .sp_pts_valid(sp_pts_valid),
         .stc(stc), .q_x(q_x), .q_y(q_y), .q_idx(q_idx), .q_inside(q_inside),

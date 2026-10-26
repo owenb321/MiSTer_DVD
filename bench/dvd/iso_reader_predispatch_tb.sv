@@ -78,6 +78,7 @@ module iso_reader_predispatch_tb;
     wire        ptt_upd_w;
     wire [10:0] ptt_cur_w;
     dvd_iso_reader dut (
+        .cc_btns(1'b0),   // issue #176 hold off: a new input floats Z unless tied
         .ptt_upd(ptt_upd_w), .ptt_cur(ptt_cur_w),
         // new reader inputs tied off: a floating input is X, and X on
         // agl_vm_en would poison the angle resolve (see the port comments).

@@ -304,17 +304,12 @@ worse maintenance burden than targeted in-place edits. So:
 
 ## Toolchain
 
-- **Quartus:** 17.0.2 exactly — newer versions break MiSTer project compatibility.
-  Can be a native install **or** the pinned Docker image `raetro/quartus:mister`
-  (Quartus 17.0.2 Build 602 Lite — the exact pinned version). Prefix any build command
-  with `USE_DOCKER=1` and it re-execs inside that container (`tools/docker_reexec.sh`,
-  wired into `build_release.sh` + `tools/seed_sweep.sh`): repo bind-mounted at its real
-  host path, host UID/GID (artifacts stay host-owned), memory unbounded. E.g.
-  `USE_DOCKER=1 ./build_release.sh --compile`. Override the image with
-  `QUARTUS_DOCKER_IMAGE=...`. NOTE: fitter SEEDs are tied to the EXACT synth/map netlist
-  produced by a given Quartus version — the Docker image is the same 17.0.2 Build 602 as
-  the canonical native install, so seeds/fmax reproduce; a *different* Quartus version
-  would require a seed re-sweep.
+- **Quartus:** 17.0.2 exactly — newer versions break MiSTer project compatibility. A native
+  install, or the pinned Docker image `raetro/quartus:mister` (17.0.2 Build 602): prefix any
+  build command with `USE_DOCKER=1` (`tools/docker_reexec.sh` documents the mounts and
+  `QUARTUS_DOCKER_IMAGE`). Fitter SEEDs are tied to the exact Quartus version's netlist: the
+  image is the same build as the native install, so seeds reproduce; another version would
+  need a seed re-sweep.
 - **Device:** Intel Cyclone V (5CSEBA6U23I7) — the DE10-Nano FPGA
 - **HDL:** SystemVerilog (`.sv`) for new modules; upstream uses a mix of Verilog + VHDL
 - **Simulation:** Icarus Verilog (`iverilog -g2012`) for module-level testbenches
@@ -382,7 +377,8 @@ otherwise; `--red` runs its mutation arms).
 | Library sweep vs libdvdnav found SPRM6/7 frozen + no-FP-PGC boot: both fixed (+ 0xFF still holds before a non-loop cell command) | ✅ HW, MERGED PR #169 | `nav_engine.md` §5a | `run_sprm67.sh --red` |
 | Every 0xFF still holds before its cell command (the pre-VM "loop first" exception had a false MiB/Matrix premise; 40 images change) | ✅ HW A/B vs `main` (Muppets, Marley & Me, Tomb Raider; MiB unchanged) + by ear, MERGED PR #174 | `dvd_nav.md` "An indefinite still and its cell command" | `run_still_off.sh --red`, `run_sprm67.sh --red` |
 | Title key on a disc with no Title menu is a no-op (audit 10b): mount-time VMGM probe, `emu.sv` key gate | ✅ HW A/B vs `main` (SPIDER-MAN_2, PANIC_ROOM; T2 positive control), MERGED PR #173 | `dvd_vm.md` "Title key on a disc with no Title menu" | `run_title_probe.sh --red`, `check_title_key_wiring.py` |
-| HIL play harness + regression gate: nav event FIFO (`dvd/nav_trace.sv`), disc profiles, VM-judged answers/moves, `hil_suite` build-vs-control table | 🔧 HW-proven (#176 hold7–13; 5 games, each with a control arm); ⏳ not merged | `hil_play_harness.md` | `run_nav_trace.sh --red`, `check_nav_trace_wiring.py`, `tools/hil_suite.py` |
+| A title cell command with buttons up runs at the displayed cell end (issue #176), angle blocks included; windows arm at their authored start; in-title menus hide expired SPU units (purple blip) | ✅ HIL suite vs `main` (10 fixed, 0 regressions) + maintainer's play-test, MERGED PR #179 | `dvd_nav.md` "A cell command with buttons up", `subpicture.md` | `run_cmd_hold.sh --red`, `run_spu_window.sh --red`, `check_cmd_hold_wiring.py`, `check_spu_title_menu_wiring.py` |
+| HIL play harness + `hil_suite` regression gate (nav event FIFO `dvd/nav_trace.sv` MERGED PR #179) | 🔧 HW-proven (5 games, control arms); ⏳ host tools | `hil_play_harness.md` | `run_nav_trace.sh --red`, `tools/hil_suite.py` |
 
 ### Transport, HUD and input
 

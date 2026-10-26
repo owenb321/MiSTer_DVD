@@ -676,8 +676,10 @@ Design decisions:
 - **Runs are never wrapped in an outer timeout.** `hil_play`'s step timeouts bound them,
   and an outer `timeout` killed the alignment twice on 2026-10-24, leaving runs with no
   verdict.
-- **The control build must carry the nav FIFO** (`main` + FIFO = `DVD_playharness_*`).
-  Most checks read NODATA without it, and NODATA is never counted as a pass.
+- **The control build must carry the nav FIFO.** `main` has since PR #179 (which merged
+  `dvd/nav_trace.sv`); before it the control was a `main` + FIFO build
+  (`DVD_playharness_*`). Without it most checks read NODATA, and NODATA is never counted
+  as a pass.
 - **The wrong-move/wrong-answer arms are not in the suite.** They test the instrument,
   not the build. Re-run them when a check or a key changes.
 
@@ -779,13 +781,23 @@ Code = priority index + 1. Lower codes are drained first when events coincide.
 | 11 | FLUSH | `{20'd0, rise[5:0]}`: [0] load_flush [1] aud_flush [2] aud_resync [3] seek_flush [4] mount_flush [5] soft_flush (rising edges) | `flush_ctl` outputs |
 | 12 | AUD_LOW | `{9'd0, low, frames[15:0]}`: emu's `aud_ring_low` hysteresis flag (<6 frames low, ≥12 ok) changed | `aud_ring_low`, `aud_frames_avail` |
 | 13 | STATE | `{18'd0, chg[3:0], now[3:0]}`: [0] pause [1] still [2] video_live [3] menu_active | `pause_q`, `still_active`, `video_live_s2`, `menu_active` |
-| 14–16 | X0–X2 | `x_pl[k*26 +: 26]` | **tied off on main.** Hooks for issue #176 |
+| 14–16 | X0–X2 | `x_pl[k*26 +: 26]` | tied off on main; the issue #176 hooks (below) |
 
-**Issue #176 hooks.** The signals `h_so`, `nxt_early` and `cc_aud_low` exist only on the
-issue #176 branch, which has its own `nav_pci`. On that branch, wire them to `x_ev[2:0]` /
-`x_pl` of `nav_trace_inst` as X0..X2 (codes 14..16). Main's `dvd_ctl.cpp` logs them as
-`"raw"`, and the host decodes them. Main has no `cc_aud_low`. Its nearest equivalent,
-`aud_ring_low`, is logged as AUD_LOW.
+**Issue #176 hooks.** The issue #176 branch (`fix/cell-cmd-display`) wires three signals
+that exist only there as X0..X2 (codes 14..16): nav_pci's re-judge and fallback
+promotions (pulses), and `cc_aud_low` (an event on EITHER edge, the new level in payload
+bit 0). Until `dev-cellcmdhold7` X0/X1 carried `h_so` / `nxt_early` edges of the retired
+scoring lead:
+
+| Code | Name | Payload | Meaning |
+|---|---|---|---|
+| 14 | X0 | `{nxt_sptm[24:0], ok}` | nav_pci re-judged its pending window at a content re-anchor (a pulse); `ok` = taken onto the new timeline; its `hli_s_ptm` |
+| 15 | X1 | `{nxt_sptm[24:0], 1}` | nav_pci promoted a pending through the ~1 s FALLBACK (a pulse); its `hli_s_ptm` |
+| 16 | X2 | — | tied off again from `dev-cellcmdhold10` (it logged the cell-command hold's `cc_aud_low` release, removed there; AUD_LOW, code 12, still logs the ring's low flag) |
+
+`tools/check_cmd_hold_wiring.py --red` gates that wiring. Main's `dvd_ctl.cpp` logs them
+as `"raw"`, and the host decodes them. On main they are tied off; main has no
+`cc_aud_low`, and its nearest equivalent, `aud_ring_low`, is logged as AUD_LOW.
 
 After a reset the edge detectors start at 0, so the state at reset release is logged once
 (CELL, PGC, ARMED, STATE...). That is deliberate: it is the log's baseline.
@@ -913,4 +925,4 @@ trc_drive`, `ext_bus[15:0] = trc_drive ? trc_dout : telem_dout`) never sees both
 2. HIL: arm `/tmp/dvd_telem_fast`, play a menu disc, and check that `/tmp/dvd_navtrace.jsonl`
    shows HLI_ARM / ARMED / BTN_ACT / CELL_CMD / GPRM in the expected order. Measure a uinput
    key's `t_ev − send time`.
-3. On the #176 branch: wire `h_so` / `nxt_early` / `cc_aud_low` into X0..X2.
+3. ✅ On the #176 branch: X0..X2 wired (`dev-cellcmdhold6`: `h_so` / `nxt_early` / `cc_aud_low`; from `dev-cellcmdhold7`: re-judge / fallback / `cc_aud_low`).

@@ -178,8 +178,19 @@ if [ -f /media/fat/config/@CFG@.hilbak ]; then
   mv -f /media/fat/config/@CFG@.hilbak /media/fat/config/@CFG@
   echo "  restored the saved settings the harness had overwritten"
 fi
-echo "  NOTE: config/@CFG@ is back to the user's own settings,"
-echo "        and the running Main stays until the next core load."
+echo "  NOTE: config/@CFG@ is back to the user's own settings."
+# Only Main's own re-exec on a core with a `[X] main=` line (the DVD core, after the
+# re-point above) or a reboot replaces the running Main: a harness Main started by
+# `deploy --main` keeps running across MENU and every other core's load. Say so, so the next user of a
+# shared rig is not left on a harness binary (2026-10-13, reported by a peer session).
+for pid in $(ls /proc | grep -E '^[0-9]+$'); do
+  case "$(readlink /proc/$pid/exe 2>/dev/null)" in
+    /media/fat/MiSTer_DVDcss_hil_*)
+      echo "  WARNING: a harness Main is still RUNNING (pid $pid). Loading the DVD core"
+      echo "           re-execs into [DVD] main=; MENU and other cores keep it until a"
+      echo "           reboot. On a shared rig, leave it on the DVD core or reboot." ;;
+  esac
+done
 """
 
 

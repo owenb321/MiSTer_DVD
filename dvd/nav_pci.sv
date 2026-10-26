@@ -82,7 +82,11 @@ module nav_pci #(
     // as "simply early" rather than "never coming due" -- 4 s of 90 kHz STC,
     // comfortably above any real VBUF parse lead (~2 s) and far below the stuck
     // compares the fallback exists to rescue. See nxt_future below.
-    parameter [31:0] FUTURE_HORIZON  = 32'd360_000
+    parameter [31:0] FUTURE_HORIZON  = 32'd360_000,
+    // RE-JUDGE TOLERANCE (issue #176): at a content re-anchor, a pending window
+    // whose s_ptm sits at most this far BEHIND the new clock still belongs to the
+    // new timeline (its window opens with the cell's first picture). 0.1 s.
+    parameter [31:0] RJ_TOL          = 32'd9_000
 ) (
     input  wire        clk,           // clk_sys
     input  wire        rst_n,         // pipe_rst_n: a load/seek/jump clears nav state
@@ -222,7 +226,14 @@ module nav_pci #(
     // DVD-FORK DEBUG (nav_trace, docs/hil_play_harness.md): the promoted HLI's
     // authored start PTS (hli_s_ptm), valid from the hli_arm pulse on, so the
     // event log can say how late a menu's buttons went live against the STC.
-    output wire [31:0] dbg_h_sptm
+    output wire [31:0] dbg_h_sptm,
+    // DVD-FORK DEBUG (nav_trace X0/X1, issue #176): a re-judge at a content
+    // re-anchor (pulse; dbg_rj_ok = the pending window was taken onto the new
+    // timeline) and a FALLBACK promotion (pulse), with the head pending's s_ptm.
+    output wire        dbg_rj,
+    output wire        dbg_rj_ok,
+    output wire        dbg_fb_promo,
+    output wire [31:0] dbg_nxt_sptm
 );
 
 // =========================================================================
@@ -365,6 +376,7 @@ assign btns_armed = armed && (h_btn_ns != 6'd0);
 assign btns_pend  = (nxt_v && (nxt_btn_ns != 6'd0)) || (nx2_v && (nx2_btn_ns != 6'd0));
 assign dbg_btn_ns = h_btn_ns;
 assign dbg_h_sptm = h_sptm;
+assign dbg_nxt_sptm  = nxt_sptm;
 // early multi-button-menu detect: pending (parsed, pre-promote) OR committed.
 assign hli_seen   = (nxt_v && (nxt_btn_ns > 6'd1)) || (armed && (h_btn_ns > 6'd1));
 
@@ -410,10 +422,45 @@ always @(posedge clk)
 reg hli_commit_p;                       // one clk: a PTM was committed
 wire hli_commit = hli_commit_p;
 reg hli_coherent;
+// ★ RE-JUDGE AT A CONTENT RE-ANCHOR (issue #176, 2026-10-23). A cell whose PTS
+// RESTARTS sends its HLI while the clock still reads the previous cell's timeline
+// (the reader leads the display), so the commit cannot be scheduled, and the clock's
+// re-anchor at the new cell's first picture then declared it incoherent: only the
+// ~1 s fallback was left, timed from the commit, not from the picture. Mad Dog VTS 15
+// cell 2 is a 0.93 s window that armed 0.81 s late that way. So, shortly after a
+// re-anchor (once the new clock value has landed in av_sync), a pending window whose s_ptm
+// is no more than RJ_TOL BEHIND the NEW clock is taken onto the new timeline:
+// coherent, and nxt_pre = 1, so it promotes at its own s_ptm (at once if it opens with
+// the cell's first picture). A pending further behind is from some other timeline and
+// is left untrusted, exactly as before, for the fallback. One far AHEAD waits for its
+// s_ptm, and past FUTURE_HORIZON the fallback still rescues it (nxt_future). This replaces dev-cellcmdhold5's
+// "a scoring window committed past its start arms at once", which armed on the
+// commit, up to a reader lead before the picture.
+// ⚠ The clock and the re-anchor pulse cross from clk_dec on SEPARATE paths, and the
+// clock's path (emu pts_cdc_stc -> av_sync's mirror) only delivers a new value on
+// each 90 kHz STC tick, i.e. every ~300 clk_sys cycles. dev-cellcmdhold7..9 waited
+// 255 cycles -- less than one mirror period -- and so sometimes judged against the OLD
+// timeline (HIL, hold9: X0 ok=0 logged at STC 4.074, just before the jump to 0.108;
+// VTS 15 cell 2 then armed by the fallback, after its verdict). The re-judge now
+// waits 4095 cycles (~152 us at 27 MHz, ~13 mirror updates; nothing at a frame's
+// scale), so it always reads the NEW clock.
+reg [11:0] rj_cnt;
 always @(posedge clk)
-    if (!rst_n)           hli_coherent <= 1'b0;
+    if (!rst_n)               rj_cnt <= 12'd0;
+    else if (stc_reanchor)    rj_cnt <= 12'd4095;
+    else if (rj_cnt != 12'd0) rj_cnt <= rj_cnt - 12'd1;
+wire               rj_go  = (rj_cnt == 12'd1);
+wire signed [31:0] rj_d   = nxt_sptm - stc[31:0];
+wire signed [31:0] rj_d2  = nx2_sptm - stc[31:0];
+wire rj_ok  = nxt_v && (nxt_btn_ns != 6'd0) && (rj_d  >= -$signed(RJ_TOL));
+wire rj_ok2 = nx2_v && (nx2_btn_ns != 6'd0) && (rj_d2 >= -$signed(RJ_TOL));
+always @(posedge clk)
+    if (!rst_n)            hli_coherent <= 1'b0;
     else if (stc_reanchor) hli_coherent <= 1'b0;   // the clock left this timeline
     else if (hli_commit)   hli_coherent <= 1'b1;   // a PTM arrived on the current one
+    else if (rj_go && rj_ok) hli_coherent <= 1'b1; // the pending belongs to the new one
+assign dbg_rj    = rj_go && nxt_v;
+assign dbg_rj_ok = rj_ok;
 
 wire stc_trusted = (stc_fresh || settled_seen) && hli_coherent;
 wire nxt_sched = nxt_v && nxt_pre && !nxt_dist[31] && stc_trusted;
@@ -461,6 +508,7 @@ wire nxt_due = nxt_sched || nxt_fallback;
 wire off_due = off_v && !off_dist[31] && stc_trusted &&
                (!nxt_due || $signed(off_sptm - nxt_sptm) <= 0) &&
                !(armed && h_forever);
+assign dbg_fb_promo = nxt_fallback && !nxt_sched && !off_due;   // nav_trace X1
 // timeline restart: a new arm >0.7 s (63000 ticks) behind the parked one
 wire arm_restart = nxt_v && $signed(f_sptm - nxt_sptm) < -32'sd63000;
 
@@ -622,6 +670,12 @@ always @(posedge clk or negedge rst_n) begin
             if (pend_age != 27'h7FFFFFF) pend_age <= pend_age + 27'd1;
         end else
             pend_age <= 27'd0;
+
+        // RE-JUDGE (see rj_go): a pending taken onto the new timeline is a
+        // commit made BEFORE its window. Placed ahead of FILL so a commit in the
+        // same cycle (which sets nxt_pre itself) wins.
+        if (rj_go && rj_ok)  nxt_pre <= 1'b1;
+        if (rj_go && rj_ok2) nx2_pre <= 1'b1;
 
         // ------------------------------------------------------------
         // FILL: capture header fields + store the HLI window. Commit at

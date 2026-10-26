@@ -77,6 +77,7 @@ module iso_reader_tmap_tb;
     always @(posedge clk) if (seek_ack) ack_seen <= 1'b1;
 
     dvd_iso_reader #(.NAV_CAP(1)) dut (
+        .cc_btns(1'b0),   // issue #176 hold off: a new input floats Z unless tied
         // new reader inputs tied off: a floating input is X, and X on
         // agl_vm_en would poison the angle resolve (see the port comments).
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
