@@ -22,6 +22,203 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ✅ **A TITLE CELL COMMAND WITH BUTTONS UP RUNS AT THE DISPLAYED CELL END (issue #176,
+  2026-10-12; ✅ MERGED PR #179; ✅ HIL suite vs `main` + maintainer's play-test).**
+  - **Field report:** in Mad Dog McCree a shot never registers. HW sweep 2026-10-11 on the
+    first shootout (VTS 1 PGC 1 cell 2): Select at 36.2 s PTS hit twice; at 36.35, 36.5,
+    36.8 and 37.3 s it missed. The HLI window is 35.55–37.52 s.
+  - **Root cause:** the shot is scored by a CELL COMMAND,
+    `if (g[0] != 21) LinkPTT 5`, which reads the register the button sets. The reader ran
+    it on reading the cell's last sector, a VBUF (~1.1 MB, ~1.2 s) before the display
+    reached it. The authored-duration hold could not help: its clock starts at the
+    reader's cell load and over-counts by the same buffer depth.
+  - **Fix:** with buttons up (`cc_btns` = nav_pci `btns_armed | btns_pend`), a title cell
+    command waits for the PGC-end drain (`tail_wait`: cache empty, `vbuf_empty`,
+    `DRAIN_WD`). Commands whose verdict cannot depend on a press (`fx_mem`: unconditional
+    Nop / fixed-target links and jumps) are not held.
+  - **Why the filter.** The library sweep (`tools/cell_cmd_btn_scan.py`, 1,556 images)
+    found the defect class on every American Laser Games / Digital Leisure title: 4,058
+    conditional cells on 15 images. It also found that a blanket hold would have paused
+    1,924 gapless in-title loops on 40 images, plus 83 `Nop` cells inside the target games
+    (Space Pirates, Crime Patrol, Mad Dog II, Last Bounty Hunter). 5,600 cells on 44 images
+    are held.
+  - **Rejected:** a release at ~1 VBV (192 KB). Bytes are not display time, and that
+    release fails most on the low-bitrate aiming shots the fix is for.
+  - **Cost, expected, then measured as none on Mad Dog:** a held command whose verdict
+    continues (Mad Dog's hit) restarts the reader from a drained VBUF. The decoder's
+    decoded-picture lead covers it: the hit junction ran at the nominal rate, with no
+    stall longer than the 20 ms telemetry grain and no lates.
+  - **HW (rig, Mad Dog, Select taps timed from fast telemetry, A/B):** v0.9.1 hit at 36.1
+    s and missed at 36.6 and 37.3 s. This branch hits at 36.6, 37.0 and 37.3 s, and misses
+    at 37.45 s and 37.7 s. The window now closes between 37.3 and 37.45 s of the authored
+    37.52 s (the rest is the decoded-picture lead). Method and table: `docs/dvd_nav.md`;
+    re-run it with `tools/hil_shot_sweep.py`.
+  - **Gates:** `bench/dvd/run_cmd_hold.sh --red` (10 arms, 11 mutations);
+    `tools/check_cmd_hold_wiring.py --red`; `run_reader_regress.sh` vs `main`, identical
+    with the hold tied off.
+  - **Second half: a scoring window arms 1 s early (2026-10-13; ✅ HW-CONFIRMED,
+    `dev-cellcmdhold2`: Rights from 34.6 s hit, from 34.3 s miss, 37.3 s still hits).** With the end fixed, a gameplay video of the same DVD still shot
+    ~1 s earlier than this core allowed. The cause: libdvdnav answers buttons from the
+    moment it READS their NAV pack (`highlight.c` `get_current_button` tests `hli_ss`
+    only), while this core armed on the display clock at `hli_s_ptm` (HW: Rights from
+    35.45 s miss, from 35.56 s hit). Now a scoring window arms `EARLY_LEAD` = 1.0 s
+    before `hli_s_ptm`. A window is scoring when the reader's cell command can see a press
+    (`cc_scoring`) and every button is Set-or-nothing with at least one Set. A later
+    window on the same timeline as an armed one gets no lead, because Bambi D2 and the
+    Harry Potter games author 7–15 windows per cell. Gates: `nav_pci_early_tb`
+    a–f + N1–N6 in `run_cmd_hold.sh --red`; `run_hli_window.sh --red` unchanged.
+  - **Regression found in play-test, fixed (`dev-cellcmdhold3`):** sheriff's office (VTS 7
+    cell 1), no reticle drawn but shots scored. The lead armed a window at a jump-entered
+    title's first picture at its PCI commit, before the same NAV pack's DSI raised
+    `new_cell`. `hl_mask` then masked the highlight for good. Fix: `hl_mask` `ARM_GRACE`
+    (an arm just before `new_cell` is the new cell's); gate `run_spu_newcell.sh --red`
+    K5/M6. ⏳ HW: the maintainer's check in the sheriff's office.
+  - **Regression 2, from the maintainer's saloon recording (`dev-cellcmdhold4`):** a hit's
+    gunshot went silent for 2 s of exact zero on back-to-back short scoring cells
+    (VTS 3 cells 4–7). The hold drained the audio ring at every join. Fix: the hold also
+    releases on `cc_aud_low` (ring < 6 frames and the title has audio); about 0.2 s off
+    the window end. HW (second rig): first shootout 34.9/37.0 s hit, 37.3 s miss; the
+    ring bottoms at 4 frames at the join, where it used to hit 0. ⏳ The saloon by ear
+    (maintainer).
+  - **Regression 3, maintainer play-test on VTS 15 (`dev-cellcmdhold5`):** a 0.93 s
+    window after a PTS restart armed 0.81 s late (the ~1 s fallback; the hold had removed
+    the parse lead that hid it). Fix: a scoring window committed with the clock past its
+    start arms at once. Gate: `nav_pci_early_tb` g + N7. (Superseded in `dev-cellcmdhold7`,
+    below.)
+  - **The HIL play harness takes over the play-testing (2026-10-23).** The maintainer
+    could not keep play-testing every build; the harness session
+    (`feature/hil-play-harness`, `docs/hil_play_harness.md`) drives .236 with capture,
+    timed inputs and the nav event FIFO, merged here (X0..X2 wired) for
+    `dev-cellcmdhold6`. Its findings, all capture-scored:
+    - The ladder at Select 37.3 s (first shootout): v0.9.1 miss, hold1/2 hit, hold4/5
+      miss. The `cc_aud_low` release costs ~0.2 s of the window's end.
+    - EARLY_LEAD is visible on screen (buttons live ~1.1 s before `hli_s_ptm`), and on the
+      continue-screen duel (VTS 4 PGC 1 cells 4/6/8) it arms at the commit after the jump's
+      flush: a Select 0.417 s before `hli_s_ptm` scored on `dev-cellcmdhold6`. The
+      maintainer reports a set-top player gets every window right, so the reference is
+      the authored window.
+    - Pre-existing, every build including v0.9.1: at every PTS-restart junction the old
+      cell's last 5 pictures and the new cell's first are never shown (0.167 s; the seamless
+      junction loses nothing). ⏳ Not investigated: suspects are the vld skip/realign drops,
+      the seek/field realign, and the audio re-time.
+    - Without the lead (v0.9.1, hold1) the duel arms on time: within 1–2 frames of
+      `hli_s_ptm` on cells 6/8, measured by elapsed time from the duel's first captured
+      frame (~0.1 s of apparent earliness is the instrument: the display trails the STC by
+      ~0.067 s, and the junction loses the first picture). An early "0.25–0.7 s" reading
+      was a picture-matching artifact on the static standoff. The FIFO on main's nav
+      settles it: cells 4 and 8 arm with `late_ticks` 0, exactly at `hli_s_ptm` (STC
+      0.862 / 0.910), and nothing is left armed from the continue screen. Cell 4's
+      extra on-screen earliness is the junction picture loss again (its first 4 pictures
+      are never shown at that cut).
+  - **`dev-cellcmdhold7` (2026-10-23):** EARLY_LEAD retired, with build 5's arm-at-once
+    rule; a window committed on the old timeline is re-judged at the clock's re-anchor
+    and promotes at its own `s_ptm` (VTS 15 cell 2 arms 3 ms after its first picture in
+    the NAV replay). Gate: `nav_pci_rejudge_tb` a–e + N1–N7 in `run_cmd_hold.sh --red`.
+    nav_trace X0/X1 now log re-judges and fallback promotions.
+  - **HIL on `dev-cellcmdhold7` (2026-10-23):** VTS 15 both shots hit (cell 1 armed at
+    0.188, cell 2 re-judged and armed at 0.108, `late_ticks` 0; `main` takes cell 2's
+    verdict at STC 0.520, before its arm at 1.032: the maintainer's "unhittable"); the duel
+    misses before the draw and hits after; the first shootout is live at its authored start
+    and hits at 37.0 s. No fallback promotion in any scoring cell. NEW: a 0.95 s freeze +
+    silence at VTS 15 cell 1 → 2 (also on `main`), and the saloon gunshots silent for
+    ~1.1 s on hold7 while `main` is clean: both the authored-duration still overrunning
+    video cells (`docs/dvd_nav.md` "A fourth").
+  - **`dev-cellcmdhold8`:** with the cell-command hold in force, the drain comes before the
+    authored-duration still, and only authored time still unspent after it is served
+    (bench G/H, R13/R14). `cc_aud_low` kept for this build (one change per flash); if
+    hold8's saloon is clean, hold9 removes it to win back ~0.2 s of window.
+  - **HIL on `dev-cellcmdhold8` (2026-10-23): passes.** Saloon route 2: every shot hit, no
+    still at any VTS 3 join, no freeze/silence >= 0.3 s, the gunshots audible. VTS 15: all
+    three shots hit, the cell 1 -> 2 junction a 0.017 s gap (hold7: 0.95 s freeze). The duel
+    and the first shootout as on hold7 (37.0 hit, 37.3 miss: the `cc_aud_low` cost).
+    ⏳ Left as a follow-up, not this branch: 2.000 s authored-duration stills still park
+    at video cells whose command is FIXED (VTS 1 cells 4/5 before CallSS, VTS 4 death/intro
+    cells), the same whole-second overshoot without the #176 drain; pre-existing on `main`,
+    and a fix would change cell timing on every disc.
+  - **`dev-cellcmdhold9` (experiment):** the `cc_aud_low` release off, nothing else (arm F
+    inverted, R12 now restores it).
+  - **HIL on `dev-cellcmdhold9`:** no silence anywhere without the release (saloon joins'
+    CELL_CMD ~0.12 s after the ring's low flag, at vbuf_empty; the ring never reached 0);
+    37.3 s now HITS on the first shootout; VTS 15 cell 2's verdict moved 0.812 -> 0.926.
+    It also caught a RE-JUDGE RACE: av_stc reaches clk_sys only on each 90 kHz tick (~300
+    clk_sys cycles) and the re-judge waited 255, so ~1 junction in 5 it judged against
+    the OLD clock (X0 ok=0; VTS 15 cell 2 then armed by the fallback after its verdict).
+  - **`dev-cellcmdhold10`:** the re-judge waits 4095 cycles (bench: the clock lands 600
+    cycles after the pulse; N7 restores 255); the `cc_aud_low` release removed for good
+    (the reader port, emu's `cc_aud_live`, bench arm F and every tie-off; nav_trace X2
+    tied off).
+  - **HIL on `dev-cellcmdhold10` (2026-10-23): passes.** VTS 15 x3: every PTS-restart cell
+    (2, 3, 4) re-judged ok=1 against the NEW clock (9/9, no fallback), armed at `s_ptm`
+    (`late_ticks` 12-13), all shots hit, cell 2's verdict at the drain (0.926 of 1.009).
+    Saloon: every shot hit, no still, no ring-empty, audio gaps <= 0.09 s. Duel: hit after
+    the draw, miss before. First shootout: 37.0 and 37.3 both HIT (37.3 missed on hold4-8).
+    The only fallback arm is the VTS 2 menu (not a scoring cell).
+  - **`dev-cellcmdhold11`: the "purple blip" (pre-existing, `main` too).** One picture of
+    the whole 35-reticle grid under the intro's wash just before the first shootout
+    (maintainer's HDMI screenshot; ~half the harness captures). The shootout's subpicture
+    decoded early (the display-order hold's 700 ms bound expired) into the single bitmap
+    under the intro unit's still-visible params. Fix: an EARLY decode (not due, not
+    contiguous) hides the title-domain layer until COMMIT (`spu_decode` `bm_dirty`;
+    `docs/subpicture.md` "An early decode shows nothing until it commits"; gate
+    `run_spu_window.sh --red` arm [E], red-dirty / red-always).
+  - **HIL on `dev-cellcmdhold11`: the blip NOT fixed** (4 in 9 junction passes), always the
+    same picture (PTS 33.81-33.85, after the wash's stop at 33.18). The real mechanism: the
+    shootout's 35-button HLI raises `sp_menu_early` -> `spu_decode.menu_mode` (windowless,
+    no hold, guard excluded), the expired wash comes back and the grid decodes under it.
+  - **`dev-cellcmdhold12`:** `spu_decode.title_menu` (in-title menu only): an expired unit
+    stays hidden and the early-decode guard applies; the windowless start is kept
+    (`docs/subpicture.md`, arm [F], `check_spu_title_menu_wiring.py`).
+  - **HIL on `dev-cellcmdhold12` (2026-10-23): passes.** The blip: 0 purple frames in 9
+    natural cell 1 -> 2 junctions (hold11: 4/9). The shootout's reticle highlight still draws
+    on the selected button and the shot hits; VTS 15's three shots hit. Scene It's 6-button
+    in-title main menu (VTS 3 PGC 18): art and highlight identical to hold10 (arm at
+    `late_ticks` 0, Select activates).
+  - **`dev-cellcmdhold13` (2026-10-24): angle blocks.** The harness found Time Traveler
+    unwinnable (its game is in angle blocks, which the hold excluded; the verdict ran ~0.2 s
+    before its window armed, `main` too). The hold now applies in angle blocks, and a
+    continue verdict inside one advances past the block instead of into the sibling angle
+    (pre-existing). `docs/dvd_nav.md` "A fifth"; bench arm I, R15/R16.
+  - **HIL on `dev-cellcmdhold13` (2026-10-24): passes.** Time Traveler: the verdict now
+    lands +0.65 to +0.91 s after the window arms (hold12 and `main`: 0.18 s BEFORE it), 5/5
+    correct moves pass (the wrong-move control fails 5/5), and after a hit play continues
+    past the angle block (3 -> 5, 25 -> 27, 29 -> 31, 31 -> 33), never into the sibling
+    angle. Controls: Mad Dog's first shootout and VTS 15 (6/6), Dragon's Lair II 206/206.
+    Castle in the Sky's angle-block ends (played in angle 2): no hitch, as on hold12.
+  - **HIL regression suite (2026-10-24), `dev-cellcmdhold13` vs `main` + the nav FIFO,
+    14 checks: 0 FAIL, 0 regressions, 10 fixed.** Fixed: Mad Dog's first-shootout screen
+    sequence (`main` takes the miss branch) and all six VTS 15 checks (`main`: cell 2 arms
+    0.90 s late, a 2.000 s still, a 0.95 s freeze/silence); Dragon's Lair 20th 37/37
+    (`main` 1 right / 11 wrong); Dragon's Lair II 72/72 (`main` dies at TT 1 PTT 6/5);
+    Time Traveler 7/7 (`main` 0/5). Unchanged PASS on both: Thayer's Quest's route into
+    VTS 2, Weakest Link's answers, Mad Dog's first-shootout arm timing. The suite is
+    `tools/hil_suite.py` on `feature/hil-play-harness` (quick tier ~23 min per build).
+  - **Merged (PR #179)** after the maintainer's play-test of `dev-cellcmdhold13` and a
+    release-style smoke (T2 menus/film, PAL Progressive/Interlaced, every audio codec,
+    subtitles, transport, a 15-min Men in Black soak: 0 lates/drops, 0 findings). Not yet
+    run on HW: a loop disc such as Fairytopia, which is unchanged by construction because
+    a fixed command is never held (bench P2), and Mad Dog II / Crime Patrol by hand. Design notes: `docs/dvd_nav.md` "A
+    cell command with buttons up" and "A window committed on the old timeline is
+    re-judged at the re-anchor".
+
+- ✅ **HIL PLAY HARNESS, SLICE B: NAV EVENT FIFO (2026-10-22; fitted and HIL-proven on every
+  #176 build, MERGED with PR #179; the harness's host tools stay on `feature/hil-play-harness`).** `dvd/nav_trace.sv` is a 256 × 80-bit clk_sys FIFO of
+  timestamped navigation events. There are 16 sources: GPRM writes, STC jumps, key presses,
+  button activation, HLI promotion, cell/PGC changes, flushes, audio-ring-low,
+  pause/still/live/menu, and 3 spare hooks for issue #176's branch-only signals. Each entry
+  carries the STC and a free-running 90 kHz tick. Main drains it over EXT_BUS command 0x7C
+  into `/tmp/dvd_navtrace.jsonl`, but only under the fast-telemetry arm.
+  - **Deviation from the brief:** the entry is 80 bits, not 64. The STC stops, zeroes and
+    jumps, so a free tick was needed as well, and 256 × 80 is still 2 M10K.
+  - **Never silent:** FIFO-full drops and same-source merges are counted in the drain header
+    and logged as `LOST` lines.
+  - **Gates:** `bench/dvd/run_nav_trace.sh --red` (8 arms, 13 mutations, each failing
+    exactly its arm, plus 10 wiring mutations) and `main/tests/run_tests.sh --red`
+    (`dvd_ctl_test`, 4 RED cases).
+  - **Not verified:** no Quartus fit (estimated ~200–250 ALM + 2 M10K) and no board run.
+  - **Next:** fit, then a HIL drain on a menu disc.
+  - Design, event table, protocol and limits: `docs/hil_play_harness.md` "Nav event FIFO
+    (fabric)".
+
 - ✅ **DRIVE COMPATIBILITY: NO TRAY LOCK, EJECT FALLBACK, DRIVE IDENTITY LINE (2026-10-13/14,
   ✅ MERGED PR #177; ✅ HW A/B on two rigs vs the v0.9.1 Main; ✅ reporter confirmed).**
   - **Field report:** a slot-loading IDE drive on a USB adapter could not be ejected once the

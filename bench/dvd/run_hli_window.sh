@@ -35,11 +35,12 @@
 #   M1  arm_is_cont disabled (the continuation re-park is back)   -> F
 #   M2  arm_is_cont ignores WHICH window is on screen             -> E2
 #   M3  hli_ss=3 suppressed as well                               -> F
-#   M4  sched_outranks disabled                                   -> A B F
+#   M4  sched_outranks disabled (and the re-judge off)            -> A B F
 #   M5  sched_outranks without its !nxt_pre guard                 -> J
 #   M6  the second pending stage never filled                     -> A
 #   M7  the future-pending guard disabled (early promotion)       -> D
-#   M8  a window may sit in both the head and the queue           -> F
+#   M8  a window may sit in both the head and the queue (and the  -> F
+#       re-judge off)
 #   M9  the future guard unbounded (waits for ever)               -> nav_pci_tb
 # ⚠ Several mutations land on [F]. That is measured, not tuned: [F] presses late
 # in a long window, which is where a lost or duplicated commit shows up, and the
@@ -129,11 +130,14 @@ if [ "${1:-}" = "--red" ]; then
     red M1 's/wire arm_is_cont = armed/wire arm_is_cont = 1'"'"'b0 \&\& armed/' "F"
     red M2 's/wire arm_is_cont = armed \&\& (f_ss == 2'"'"'d2) \&\& (f_sptm == h_sptm);/wire arm_is_cont = armed \&\& (f_ss == 2'"'"'d2);/' "E2"
     red M3 's/wire arm_is_cont = armed \&\& (f_ss == 2'"'"'d2) \&\& (f_sptm == h_sptm);/wire arm_is_cont = armed \&\& (f_ss != 2'"'"'d1) \&\& (f_sptm == h_sptm);/' "F"
-    red M4 's/wire sched_outranks = nxt_v/wire sched_outranks = 1'"'"'b0 \&\& nxt_v/' "A B F"
+    # M4/M8 run with nav_pci's re-judge at a re-anchor (issue #176) OFF: since
+    # dev-cellcmdhold7 it also takes a round start's pending onto the new timeline, so
+    # either mechanism alone keeps these arms green.
+    red M4 's/wire sched_outranks = nxt_v/wire sched_outranks = 1'"'"'b0 \&\& nxt_v/;s/wire rj_ok  = nxt_v/wire rj_ok  = 1'"'"'b0 \&\& nxt_v/;s/wire rj_ok2 = nx2_v/wire rj_ok2 = 1'"'"'b0 \&\& nx2_v/' "A B F"
     red M5 's/wire sched_outranks = nxt_v \&\& !nxt_pre/wire sched_outranks = nxt_v/' "J"
     red M6 's/end else if (!arm_is_cont \&\& nxt_v \&\&/end else if (1'"'"'b0 \&\& !arm_is_cont \&\& nxt_v \&\&/' "A"
     red M7 's/wire nxt_future   = stc_trusted/wire nxt_future   = 1'"'"'b0 \&\& stc_trusted/' "D"
-    red M8 's/if (nx2_v \&\& f_sptm == nx2_sptm) nx2_v <= 1'"'"'b0;/\/\/ M8 dedupe removed/' "F"
+    red M8 's/if (nx2_v \&\& f_sptm == nx2_sptm) nx2_v <= 1'"'"'b0;/\/\/ M8 dedupe removed/;s/wire rj_ok  = nxt_v/wire rj_ok  = 1'"'"'b0 \&\& nxt_v/;s/wire rj_ok2 = nx2_v/wire rj_ok2 = 1'"'"'b0 \&\& nx2_v/' "F"
     red M9 's/(nxt_ahead < FUTURE_HORIZON);/(1'"'"'b1);/' "menu"
 fi
 

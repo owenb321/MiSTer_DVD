@@ -70,6 +70,7 @@ module iso_reader_titleprobe_tb;
     reg  [7:0]  img [0:IMG_BYTES-1];
 
     dvd_iso_reader #(.NAV_CAP(1)) dut (
+        .cc_btns(1'b0),   // issue #176 hold off: a new input floats Z unless tied
         // every input driven: a floating input is X, and `!=` against X passes
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size),
         .lu_lang_pref(16'h656E), .title_sel(7'd0),

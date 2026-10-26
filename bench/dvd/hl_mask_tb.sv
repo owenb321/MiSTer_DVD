@@ -8,6 +8,11 @@
 //        NEVER masked (masking here would hide the right highlight for good).
 //   [K3] a pipe reset clears a pending mask.
 //   [K4] a commit with no cell change (an ordinary unit) never masks.
+//   [K5] THE SAME-PACK RACE (issue #176): the new cell's HLI arms from its NAV pack's
+//        PCI a few hundred cycles BEFORE that pack's DSI raises new_cell, then the
+//        unit commits -> NEVER masked. Mad Dog's sheriff's office lost its reticle.
+// Arms that model a PREVIOUS cell's HLI leave a realistic gap (`gap`, longer than
+// hl_mask's ARM_GRACE) before the cell change: that arm is from another VOBU.
 `timescale 1ns/1ps
 `default_nettype none
 module hl_mask_tb;
@@ -21,10 +26,11 @@ module hl_mask_tb;
     task p_nc;  begin @(negedge clk); new_cell = 1;       @(negedge clk); new_cell = 0;       repeat (3) @(negedge clk); end endtask
     task p_cm;  begin @(negedge clk); newcell_load = 1; @(negedge clk); newcell_load = 0; repeat (3) @(negedge clk); end endtask
     task p_arm; begin @(negedge clk); hli_arm = 1;        @(negedge clk); hli_arm = 0;        repeat (3) @(negedge clk); end endtask
+    task gap;   begin repeat (20000) @(negedge clk); end endtask   // > ARM_GRACE
     task rst;   begin rst_n = 0; repeat (3) @(negedge clk); rst_n = 1; repeat (2) @(negedge clk); end endtask
     initial begin
         rst;
-        p_arm;                      // the intro's HLI is armed
+        p_arm; gap;                 // the intro's HLI is armed (a VOBU or more ago)
         p_nc; p_cm;                 // cell 2's unit loads at the parse front
         if (!mask) fail("[K1] the intro's highlight was left to recolour cell 2's graphic");
         p_arm;                      // cell 2's HLI promotes
@@ -32,12 +38,12 @@ module hl_mask_tb;
         else $display("   [K1] masked from the new unit's commit to the new HLI  ok");
 
         rst;
-        p_arm; p_nc; p_arm; p_cm;   // the new cell's HLI arms before its unit commits
+        p_arm; gap; p_nc; p_arm; p_cm;   // the new cell's HLI arms before its unit commits
         if (mask) fail("[K2] the new cell's own highlight was hidden (commit after its HLI)");
         else $display("   [K2] HLI first, then the unit: never masked  ok");
 
         rst;
-        p_arm; p_nc; p_cm; rst;
+        p_arm; gap; p_nc; p_cm; rst;
         if (mask) fail("[K3] a pipe reset left the mask set");
         else $display("   [K3] a flush clears the mask  ok");
 
@@ -46,6 +52,15 @@ module hl_mask_tb;
         p_arm;                      // but a lone pulse after an arm with no new_cell
         if (mask) fail("[K4] mask left set after an HLI armed");
         else $display("   [K4] an HLI arm always clears it  ok");
+
+        rst;
+        p_arm; gap;                 // a previous cell's HLI, long ago
+        p_arm;                      // the new cell's HLI promotes at its PCI commit...
+        repeat (300) @(negedge clk);
+        p_nc;                       // ...and the same pack's DSI changes the cell
+        p_cm;                       // then the new cell's unit commits
+        if (mask) fail("[K5] new cell HLI armed from its own PCI before new_cell was hidden");
+        else $display("   [K5] arm from the same NAV pack, before new_cell: never masked  ok");
 
         if (errors == 0) $display("RESULT: PASS");
         else begin $display("RESULT: FAIL (%0d)", errors); $fatal(1, "hl_mask_tb failed"); end

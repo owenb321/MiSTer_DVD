@@ -5212,6 +5212,394 @@ PGC-end hold). T1–T7 unchanged and green.
 questions still hold ~18 s and stay answerable; MiB/Matrix/T2 menus, Thayer's timed
 choices and a normal movie unchanged.
 
+### A cell command with buttons up runs at the displayed cell end (issue #176, 2026-10-12) — ✅ HW-CONFIRMED, MERGED PR #179
+
+**The defect.** In *Mad Dog McCree* a shot never registered. The first shootout is VTS 1
+PGC 1 cell 2 (4.27 s). Its HLI (35.55–37.52 s PTS) is a 7×5 grid of aim buttons, and only
+button 21 has a command, `g[0] = 21`. The CELL COMMAND scores the shot:
+`if (g[0] != 21) LinkPTT 5`, where PTT 5 is the scene in which the player is shot. The
+reader ran that command when it had READ the cell's last sector. The VBUF held ~1.1 MB
+(~1.2 s) at that point, so the command ran at ~36.3 s of display time, and any shot after
+that was scored as a miss. HW sweep (2026-10-11): Select at 36.2 s hit twice; at
+36.35/36.5/36.8/37.3 s it missed. The 2 s window was effectively ~0.7 s.
+
+**Why the authored-duration hold above did not cover it.** `cell_secs` starts when the
+reader LOADS the cell, which is already a VBUF ahead of the display, so it over-counts the
+elapsed time by the buffer depth. For a 4.27 s video cell the residual comes out at 0, and
+`RESID_MIN` never comes into it. Lowering `RESID_MIN` cannot fix this.
+
+**The fix.** At a title-domain cell end whose cell command can see a press
+(`cmd_hold_w`), the reader sets `vmw_cmd_pend` instead of dispatching. The dispatch then
+waits for the same drain as a PGC end: `tail_wait` (cache empty, `vbuf_empty`, bounded by
+`DRAIN_WD`). After that, the settle block pulses `vm_cell_cmd`. Conditions:
+
+- `cc_btns`: emu feeds `hl_btns_armed | hl_btns_pend`. The pending half matters because
+  the reader reaches the cell end a VBUF ahead, so a window that opens in the cell's last
+  second is still parsed-but-not-promoted at that moment
+  (`tools/check_cmd_hold_wiring.py` gates the seam).
+- not the menu domain (`keep_vbuf` and the menu cap own that timing), and not inside an
+  angle or seamless-branch block (a drain would break the seamless join).
+- the authored-duration hold (`dur_hold_w`) still comes first, so Weakest Link's path is
+  unchanged.
+
+**Why `vbuf_empty` and not a byte threshold.** A release at ~1 VBV (~192 KB) was
+considered, so that a continuing verdict would refill before the decoder starves. It was
+rejected because bytes are not display time. 192 KB is ~0.2 s at Mad Dog's ~7 Mbit/s, but
+~0.8 s at 2 Mbit/s, and the low-motion aiming shots these games are made of are exactly
+the low-bitrate case. A time-referenced release (STC against the cell's last
+`vobu_e_ptm`) would be exact, but it is a bigger change. Leave it unbuilt unless the pause
+below turns out to matter.
+
+**The expected cost, and what HW measured.** A verdict that CONTINUES (`vm_adv`: Mad Dog's
+hit; `vm_replay`: a loop) restarts the reader from a drained VBUF, which was expected to
+freeze the picture briefly at the junction. On Mad Dog it does not: the decoder still
+holds a few decoded pictures when `vbuf_empty` fires, and they cover the restart. The
+junction ran at the nominal picture rate, with no stall longer than the 20 ms telemetry
+grain and no lates (table below). A verdict that jumps or seeks already waited for the
+full drain before this change (Phase B, `jnat_l`/`snat_l`), so it looks the same.
+
+**Library sweep** (`tools/cell_cmd_btn_scan.py $DVD_ISO_DIR`, the local library of 1,556
+images, a 3 s lookback from each cell's last VOBU; the class summary is the tool's own
+output, classified from the command bytes). 11,362 title cells on 87 images have a cell
+command, no still, and buttons up at the end:
+
+| Class | Cells | Images | Held? | Effect |
+|---|---|---|---|---|
+| conditional (`if (...) …`) | 4,058 | 15 | held | **the fix**: every American Laser Games / Digital Leisure title (Mad Dog I/II, Crime Patrol, Space Pirates, Who Shot Johnny Rock, Drug Wars, Last Bounty Hunter, Dragon's Lair I/II, Time Traveler) plus Thayer's Quest and Scene It |
+| `NextC`/`NextPG`/`TailPGC`/`RSM` | 913 | 30 | held | POST or a resume runs at the displayed end (POST usually jumps) |
+| carries a Set (types 2–6) | 629 | 12 | held | the Set reads registers a press may have changed |
+| fixed loop (`LinkTopC`, `LinkTopPG`, `LinkCN` self) | 1,924 | 40 | **not held** | a hold would pause every loop of a gapless in-title game screen (Fairytopia, Bee Movie, Cinderella III, Tom and Jerry, …) |
+| fixed, no link (`Nop`/`Goto`/`Break`) | 83 | 6 | **not held** | a hold would pause mid-sequence **in the target games themselves** (Space Pirates 26, Crime Patrol 20, Mad Dog II 15, Last Bounty Hunter 13) |
+| fixed link/jump elsewhere | 3,755 | 48 | not held | none either way (drained before executing) |
+
+The loop and `Nop` rows decided the second half of the fix: a command whose verdict cannot
+depend on a press gains nothing from the hold, so it is not held.
+
+**Fixed commands are not held (`fx_mem`).** As the P_CMD walk streams each cell command
+to the VM, it classifies the command and writes one bit per command number into
+`fx_mem` (256×1). The bit is read back for the playing cell as `fx_rd`. A command is
+FIXED when it is unconditional (compare op `byte1[6:4]` = 0) and is one of:
+
+- type 0: `Nop`, `Goto`, `Break` or `SetTmpPML`;
+- a type 1 jump: `Exit`, `JumpTT`, `JumpVTS_*`, `JumpSS` or `CallSS`;
+- a type 1 link with a fixed target: `LinkPGCN`/`PTTN`/`PGN`/`CN`, or `LinkSIns` with any
+  sub-instruction except `NextC`, `NextPG`, `TailPGC` and `RSM`. Those four can land in
+  POST or a resume, which read registers.
+
+Types 2–6 all carry a Set, so they are held. `cmd_hold_w` also requires
+`cmd_nr <= cmd_nr_cell`, so a stale bit, or an invalid `cmd_nr` (which the VM answers
+with an advance), never decides anything. `tools/cell_cmd_btn_scan.py cmd_fixed()` is the
+same predicate. `--selfcheck` compares it with the vmcmd.c decoder's text on every title
+cell command in the library (1,556 images) and finds 0 disagreements.
+
+With the filter, the first three rows are held (**5,600 cells on 44 images**; `--held`
+lists exactly them), and the loops, `Nop`s and fixed links play as they did before.
+(The first draft of this table came from a scan that had not finished; these are the
+complete library figures.)
+
+**Gate:** `bench/dvd/run_cmd_hold.sh --red`. `iso_reader_cmdhold_tb` reproduces Mad Dog's
+shape, `if (g[0] != 21) LinkCN 3`. It checks:
+
+- A1: the hold, and the miss with no press;
+- A2: a press made after the reader's cache has emptied is scored;
+- B: no buttons means no hold;
+- C: the hold waits for the cache;
+- D: a jump clears the latch;
+- E: `DRAIN_WD` releases the hold;
+- P1–P4: `Nop` and `LinkTopC` are not held, `LinkTailPGC` is held, and an invalid
+  `cmd_nr` is not held.
+
+Eleven mutations each fail exactly their own arms. The seam is gated by
+`tools/check_cmd_hold_wiring.py --red`. With `cc_btns` tied off, every other reader bench is
+bit-identical to `main` (`run_reader_regress.sh`).
+
+**HW result (2026-10-12, rig, Mad Dog McCree, Deputy, first shootout).** The sweep
+(`tools/hil_shot_sweep.py`; its docstring has the Mad Dog command line) selects Deputy from
+the difficulty menu and maps displayed pictures to PTS: telemetry `pickups` + `drops` from the title flush, PTS = 0.181 s + (k − 1)/29.97,
+with the press time solved on the board's monotonic clock from fast (20 ms) telemetry. It
+then taps Right ×3 from 35.75 s and Select at the target, and scores the result from
+telemetry. A miss is the `LinkPTT 5` seek, whose flush drops `video_live` at cell 2's end
+(picture 1118). A hit plays on into cell 3 with no drop. The sweep below was taken with
+the scratch prototype, which fired within about ±0.09 s of plan. The committed tool fires
+within ~10 ms (re-checked: 36.6 s hit, 37.7 s miss).
+
+| Select at (PTS) | v0.9.1 (control) | this branch |
+|---|---|---|
+| 36.1 s | hit | — |
+| 36.6 s | **miss** | **hit** |
+| 37.0 s | — | **hit** |
+| 37.3 s | **miss** | **hit** |
+| 37.45 s | — | miss |
+| 37.7 s (past the window) | — | miss |
+
+The effective window now closes between 37.3 s (a hit) and 37.45 s (a miss), against the
+authored 37.52 s, so a player gets ~1.8 s of the 2 s (was ~0.75 s, closing near 36.3 s).
+The rest is the decoder's decoded-picture lead: `vbuf_empty` fires while those pictures
+are still to be shown. ⚠ Harness
+trap, found on the way: the key daemon's `keys` command costs 170 ms per key and queues
+anything written behind it. Three `keys` Rights pushed a Select written at 36.2 s out to
+~36.3 s, so the first control runs scored the harness, not the core. The tool uses single
+`key <code> 30` taps, and the trap is in the hil-testing skill.
+
+**A third: a sub-second window after a PTS restart could not be hit (2026-10-18).** In
+VTS 15 (the sheriff's office on another path), cell 1's window (target 19) is followed by
+cell 2, a 0.93 s cell whose window covers the whole cell (target 20) and whose PTS
+restarts. Cell 2's HLI commits while the clock still reads cell 1's timeline, so it is
+not schedulable (`nxt_pre` = 0) and only `nav_pci`'s ~1 s fallback was left. Before the
+hold, a ~1.2 s parse lead made that fallback fire just before cell 2 appeared, by
+accident. With the hold the reader reaches cell 2 only ~0.2 s ahead, so the window armed
+0.81 s into its 0.93 s life. That figure comes from replaying the disc's real NAV
+packets through `nav_pci`, with a scratch session model of the display clock and parse
+lead. First fix (`dev-cellcmdhold5`): a scoring window committed with the clock already past
+its start (`nxt_early && !nxt_pre`) arms at once, libdvdnav's read-time behaviour; cell 2
+then armed ~0.19 s before it appeared. ⛔ SUPERSEDED in `dev-cellcmdhold7` by the
+re-judge at the re-anchor (below), which arms cell 2 with its first picture: arming at
+the commit put cell 2's buttons over the last ~0.2 s of cell 1.
+
+**A second regression the hold caused: the gunshot after a hit went silent (2026-10-13).**
+The maintainer reported missing gunshots in the saloon, and their recording made it
+measurable: 2 s of exact digital zero after most hits, with the picture playing on (VTS 3
+cells 4–7). Those are back-to-back short scoring cells, 1.9–3.9 s each, with a PTS
+restart at every join. Draining to `vbuf_empty` also empties the audio ring, so the audio
+underran at every join and the AC-3 resync stayed silent for about 2 s. (A first capture
+on the first shootout, a single long cell, showed no gap at the hit; its 0.84 s silence
+was a miss's jump transition, the same in v0.9.1.) Simulation could not reproduce the
+mute: `aud_retime_tb` S13, head-after-underrun with LPCM frames, plays the head on time.
+So the fix stops the starvation itself rather than tuning the audio path.
+
+⛔ **REMOVED in `dev-cellcmdhold10`:** this paragraph's diagnosis was wrong. The silence was the
+authored-duration still overrunning video cells ("A fourth" below), and `dev-cellcmdhold9`
+ran the saloon clean without the release (no join's ring reached 0; 37.3 s then hits on the
+first shootout). Kept for the record:
+
+The fix: the hold also releases on `cc_aud_low`, emu's ring-low hysteresis (< 6 frames,
+~0.2 s of AC-3) AND `cc_aud_live` (the ring reached 12 frames within 3 s, so a title
+without audio keeps the plain `vbuf_empty` release). The reader then resumes while the
+old cell's audio still plays, which is the ordering the pre-hold build always had. The
+cost is ~0.2 s off the window end. HW on `dev-cellcmdhold4` (second rig, Mad Dog's first
+shootout): 34.9 s and 37.0 s hit, and 37.3 s now misses, so the window is ~34.55 s to
+37.0–37.3 s. The audio ring bottoms out at 4 frames at the hit's join (it reached 0
+before). Gates:
+`run_cmd_hold.sh` arm F + R12; `check_cmd_hold_wiring.py` checks the seam.
+
+**A fourth: the authored-duration still overran video cells (2026-10-23, HIL).** The HIL
+play harness measured a 0.95 s freeze + silence at Mad Dog VTS 15's cell 1 → 2 junction,
+and up to 1.1 s of silence exactly at the gunshots in the saloon (VTS 3 cells 4–7, every
+hit). Both are the reader's AUTHORED-DURATION hold (`dur_hold_w`, Weakest Link's fix):
+`cell_secs` counts WHOLE display seconds from the reader's LOAD of the cell and C_PBTM rounds
+UP, so at the cell end a residual ≥ `RESID_MIN` (2 s) parked a 2 s timed still that ran up
+to ~1 s past the cell's last picture, with the audio ring drained to 0 (the gunshot at the
+next cell's head). VTS 15 cell 1 does it on `main` too (jump-entered); in the saloon the
+#176 hold made it reachable, because the reader now reaches each short cell's end later
+(`main`: no silence over 0.07 s; `dev-cellcmdhold7`: 1.13 s / 1.14 s at cells 5/6).
+
+The fix (`dev-cellcmdhold8`): when the cell-command hold applies (`cmd_hold_w`: buttons up,
+a press-reading command), the display-referenced DRAIN comes first; `dur_hold` no longer
+takes that cell end. At the settle, if the authored duration is STILL ≥ `RESID_MIN`
+unspent (a genuine still: one frame authored to hold), the residual is served as the same
+timed still (`STILL_CMD`) and then the command runs; a video cell has none left by then.
+Cell ends without the hold (no buttons, or a fixed command) keep `dur_hold` exactly as
+before. Gate: `iso_reader_cmdhold_tb` G (a 4 s video cell read before any of it displayed:
+no still, the command at the drain) and H (a 6 s still cell: drain, then a 6 s still, then
+the command); mutations R13 (`dur_hold` first) and R14 (no residual still). The `cc_aud_low`
+release built for the gunshot silence is gone (hold10): the silence was this.
+
+**A fifth: angle blocks (2026-10-24, Time Traveler, HIL play harness).** Time Traveler
+plays its game inside 2-angle blocks (VTS 2 PGC 1; 463 angle cells, category 0x57 / 0xD7:
+interleaved, an STC break and a seamless angle change, but no seamless-play flag on the
+join). Its cell commands (`if (g[0] < g[1]) LinkPTT 1`) score windows that run to the
+cell's end (e.g. 3.34–4.30 s of a 4.33 s cell). The hold excluded angle blocks
+(`!angle_active`, grouped with the seamless branches "where a drain would break the
+seamless join"), so the command ran at the READER's end, ~0.2 s BEFORE its own window
+armed: 5/5 windows unwinnable on `dev-cellcmdhold12` and on `main` alike. Dragon's Lair
+II (plain cells) was correct, its verdicts at the window's close. The hold now applies in
+angle blocks too: it engages only with buttons up and a press-reading command, which a
+film's angle block does not author. Seamless-branch blocks stay excluded.
+
+Holding exposed a second, pre-existing defect: after a cell command's CONTINUE verdict the
+reader advanced to `cell_i + 1` even inside an angle block, i.e. into the SIBLING angle's
+copy of the segment, where the angle cell-finished path always skipped to the cell after
+the block. `cell_after` (`block_last + 1` while `angle_active`) now drives both the
+verdict's advance and `vmw_last`, and leaving the block clears the angle state as the
+cell-finished path does. Gate: `iso_reader_cmdhold_tb` arm I (a 2-angle block with
+buttons up: held to the drain, then angle 1 → the common cell, never angle 2; the bench
+now wires `dvd_vm.pre_done` as emu does, which an angle block needs to resolve);
+mutations R15 (angle blocks excluded) and R16 (the verdict plays the sibling). ✅ HIL on
+`dev-cellcmdhold13`: Time Traveler's verdicts land after the press (5/5 correct moves pass,
+the wrong-move control fails 5/5), play continues past each block, and Castle in the Sky's
+angle-block ends play without a hitch.
+
+**Known limits.**
+
+- A pause during the hold counts toward `DRAIN_WD` (60 s), the same as the PGC-end
+  drain. A pause longer than that lets the command run before the display reaches the
+  end of the cell.
+- An HLI left armed by an earlier cell (nav_pci keeps a highlight past `hli_e_ptm` until a
+  successor or a disarm) counts as buttons up. A held command in a later, button-less cell
+  then waits for the drain. That cell's command still runs correctly; the cost is the
+  pause.
+- The pause on a continuing verdict (Mad Dog's hit) is the price of exactness. If it ever
+  matters, the fix is a time-referenced release, not a byte threshold (see above).
+
+### A window committed on the old timeline is re-judged at the re-anchor (issue #176, 2026-10-23) — ✅ HIL (`dev-cellcmdhold7`..`13`), MERGED PR #179
+
+**The reference changed.** The maintainer can hit every Mad Dog window on a SET-TOP player,
+consistently, and the HIL play harness (`docs/hil_play_harness.md`) measured what this core
+does against the authored windows. That retired the 1 s lead below and the build-5
+arm-at-once rule: both answered a window before it was on screen. On `dev-cellcmdhold6`
+the continue-screen duel (VTS 4 PGC 1 cells 4/6/8, entered by a jump, window +0.50 to
++0.80 s into the cell, where the gunman draws) armed at the HLI's commit with the
+flushed clock at 0, and a Select at STC 0.445 scored a hit 0.417 s before `hli_s_ptm`.
+The reference is now the authored window: buttons answer from `hli_s_ptm` on the display
+clock, as `nav_pci` always scheduled them before issue #176.
+
+**What still needed fixing: a window whose PTS restarts.** The reader leads the display, so
+a cell whose PTS restarts (Mad Dog's back-to-back shootout cells; VTS 15 cell 2, a 0.93 s
+window at s_ptm 0.108) sends its HLI while the clock still reads the PREVIOUS cell's
+timeline. The commit is not schedulable (`nxt_pre` = 0), and the clock's re-anchor at the
+new cell's first picture then marks it incoherent, so only the ~1 s fallback, timed from the
+commit, was left. On `main` that armed VTS 15 cell 2 0.81 s into its 0.93 s life.
+
+**The rule.** 255 clk_sys cycles after a content re-anchor (`stc_reanchor`, i.e. emu's
+`rephase_req`; the wait covers the clock and the pulse crossing from clk_dec on separate
+paths), a pending window whose `s_ptm` is no more than `RJ_TOL` (0.1 s) BEHIND the new
+clock is taken onto the new timeline: `hli_coherent` = 1 and `nxt_pre` = 1, so it promotes
+at its own `s_ptm` (at once when it opens with the cell's first picture). The same holds for
+the queued slot (`nx2_pre`). A pending further behind belongs to some other timeline and
+stays untrusted for the fallback, exactly as before; one far ahead waits for its `s_ptm`,
+and past `FUTURE_HORIZON` the fallback still rescues it. The session replay of VTS 15's
+real NAV packets arms cell 2 3 ms after its first picture, and cell 1 keeps answering until
+then.
+
+**Removed with the lead:** `nav_pci`'s set-only button scan, `nxt_early`/`h_so`/`lead_blk_h`,
+the `early_ok` input and the reader's `cc_scoring` output. `fx_mem` stays (the hold uses it).
+
+**Gates.** `bench/dvd/nav_pci_rejudge_tb.sv` (in `run_cmd_hold.sh --red`), scored on which
+command a press at a display time fires:
+
+- (a) a scoring-shaped window arms at its start, not before;
+- (b) VTS 15: before the re-anchor cell 1 still answers; at it, cell 2 answers at once;
+- (c) the duel: a window 0.86 s in after a flush arms at 0.86 s, with or without a
+  re-anchor in between;
+- (d) a pending 2 s behind the new clock is not taken;
+- (e) one 50 ms behind (inside `RJ_TOL`) is.
+
+Mutations N1–N7 each fail exactly their arms (no coherence → b c e; no `nxt_pre` → b e; no
+tolerance guard → d; `RJ_TOL` = 0 → e; the lead back → a c d; build 5's arm-at-once → b;
+re-judged one cycle after the pulse → b d e). `run_hli_window.sh --red` stays green, but its M4 (`sched_outranks` off) and M8 (no
+head/queue dedupe) now run with the re-judge OFF too: the re-judge also takes a
+whack-a-mole round start's pending onto the new timeline, so either mechanism alone
+keeps those arms green (verified: each fails exactly its old arms only with both off).
+The nav_trace hooks X0/X1 now
+log each re-judge (with its verdict) and each fallback promotion, so the harness can see
+which path armed a window.
+
+### ⛔ RETIRED (2026-10-23): a scoring window arms 1 s before its start time (issue #176, 2026-10-13; `dev-cellcmdhold2`..`6`)
+
+Retired by the section above: it let the continue-screen duel be won before the gunman
+drew. Kept for the record of why it was built.
+
+**The report.** With the end of the window fixed, the maintainer still found the shootouts
+far tighter than a gameplay video of the same DVD, where the player shoots about a second
+earlier and still hits. On this core a shot can only land from 35.55 s, the HLI's
+`hli_s_ptm` (HW-measured: Rights from 35.45 s miss, from 35.56 s hit). So the gap is at the
+*start* of the window: the end was already as late as the disc allows.
+
+**Why a libdvdnav player opens earlier.** `libdvdnav/src/highlight.c`
+`get_current_button()` gates button navigation and activation on `hli_ss != 0` alone,
+against the PCI of the last NAV pack the player READ. `hli_s_ptm` is only copied into the
+highlight's `pts`, which is when the player DRAWS it. So the buttons answer from the
+moment the reader passes the NAV pack carrying them. On Mad Dog that pack begins the
+VOBU at 35.15 s, 0.4 s before `hli_s_ptm`, and a player reads it a buffer ahead of the
+picture. That is about 1 s of lead, which is what the video shows. libdvdnav also runs the
+cell command at the read end, so its window is about as long as this core's now is, only
+shifted earlier.
+
+**The rule.** A SCORING window arms `EARLY_LEAD` (`nav_pci` parameter, 90,000 ticks =
+1.0 s, a player model and not an OSD option) before its `hli_s_ptm`. A window is scoring
+when both hold:
+
+- the reader's current title cell has a command that can see a press. That is the new
+  reader output `cc_scoring`: the command is valid and not FIXED (`fx_mem`). It describes
+  the cell the READER is on, which can lead the cell being parsed by one cache (16 KB) at
+  a boundary.
+- every button in the HLI is Set-or-nothing, with at least one Set. `nav_pci` scans the
+  button commands as the PCI streams past (`fb_set`/`fb_link`; `cell_cmd_btn_scan.py`
+  `btn_kind`/`hli_setonly` is the same test). Buttons like these do nothing by
+  themselves; a later command reads what they set. Highlights whose buttons link (menus,
+  the white rabbit, commentary toggles, every film's in-title buttons) are untouched.
+
+**Rejected: arming at parse time** (libdvdnav's literal behaviour). This core reads
+~1.2 s ahead, so that would be more lead than libdvdnav gives. Worse, it would arm each
+window of a multi-window cell while the previous one is still on screen.
+
+Across the library, `cell_cmd_btn_scan.py` counts **3,971 scoring cells on 18 images**
+(the FMV games, a few kids' DVD games, and three bonus-feature cells on films).
+
+**The guard.** The shooting games author ONE scoring window per cell: 3,923 cells on 12
+images. Bambi disc 2 (15 cells × 11 windows) and the two Harry Potter games (33 cells ×
+7–15 windows, some 2 s apart) author SEQUENCES, where a 1 s lead would hand the last
+second of each window to the next (the `hli_window_tb` [D] failure). So a commit whose
+`s_ptm` is LATER, on the same timeline, than an armed scoring window (`h_so`), or that is
+queued behind a parked one (`nx2`), gets no lead and waits for its own start. The
+compare is signed: the next shootout cell restarts the PTS timeline, so its window reads
+EARLIER and still leads. The counts come from `tools/cell_cmd_btn_scan.py --windows`.
+
+**Timing gates kept.** `nxt_pre` (a commit before its window) is still computed against
+the UNSHIFTED `s_ptm`. A commit that lands inside the lead promotes at once, which is the
+libdvdnav behaviour being modelled. A commit after `s_ptm` still takes only the fallback,
+so `stc_trusted` and the crossing-only rule cover the stale-timeline cases exactly as
+before.
+
+**Gates.** `bench/dvd/run_cmd_hold.sh --red` now includes `nav_pci_early_tb`, scored on
+which command a press at a display time fires:
+
+- (a) a scoring window arms at `s_ptm` − 1 s, and not 50 ms before that;
+- (b) not a scoring cell: arms at `s_ptm`;
+- (c) a linking button: arms at `s_ptm`;
+- (d) an all-Nop highlight: arms at `s_ptm`;
+- (e) a later window of the same cell waits for its own start;
+- (f) the next cell's window gets the lead after PTS restarts;
+- (g) a restarted-PTS window committed on the old clock arms at once (regression 3 below).
+
+Seven mutations, N1–N7, each fail exactly their own arms (N6, the unsigned guard, also
+fails g, which commits a restarted PTS over an armed window). `run_hli_window.sh --red`
+(Scooby-Doo whack-a-mole + `nav_pci_tb`, all mutations) is unchanged and green with the
+lead tied off. `check_cmd_hold_wiring.py --red` gates `nav_pci .early_ok` = reader
+`.cc_scoring`.
+
+**HW (2026-10-13, second rig, `tools/hil_shot_sweep.py`, timed prep):**
+
+| Rights from | Select at | `dev-cellcmdhold` (no lead) | `dev-cellcmdhold2` |
+|---|---|---|---|
+| 34.30 s | 34.60 s | — | miss (the first Right is before 34.55 s) |
+| 34.60 s | 34.90 s | miss (window opens at 35.55 s) | **hit** |
+| 35.45 s | 35.75 s | miss | — |
+| 35.56 s | 35.85 s | hit | — |
+| 35.75 s | 37.30 s | hit | **hit** (the end is unchanged) |
+
+Mad Dog's first scoring window now runs ~34.55–37.35 s (about 2.8 s) against the
+authored 35.55–37.52 s. It was ~0.75 s on v0.9.1.
+
+**A regression the lead caused, and its fix (2026-10-13, `dvd/hl_mask.sv`).** In the
+sheriff's office (VTS 7 PGC 1 cell 1) the reticle was never drawn, although the buttons
+armed and a correctly aimed shot still scored (maintainer, with Debug Overlay: blocks
+1–4 green, the magenta outline on the gunman).
+
+The cause: that window starts at the title's FIRST picture (`hli_s_ptm` 0.179 s, never
+timing out), and the title is entered by a jump. After the flush the display clock reads 0
+until its first anchor, so with the 1 s lead the HLI is due the moment its PCI commits.
+A NAV pack carries the PCI ~224 bytes BEFORE the DSI cell IDs that raise `new_cell`, so
+the arm landed just ahead of its own cell change. `new_cell` then cleared `hl_mask`'s
+`armed_since`, the cell's subpicture unit raised the mask, and nothing re-armed to clear
+it: the window never times out, and its continuations (`hli_ss`=2) never re-promote.
+Without the lead the arm waited for the clock's first anchor, which comes after the DSI.
+
+The fix: an arm within `ARM_GRACE` (16,384 clk_sys cycles, ~0.6 ms) of `new_cell`
+counts as the new cell's. A previous cell's HLI promotes on the display schedule, so it
+falls in that sliver only by coincidence, and the cost then is the old one-frame blip.
+Gate: `run_spu_newcell.sh --red`, new arm K5 + mutation M6.
+
 ---
 
 ## ⏳ OPEN: two presses to activate a menu button (WAKE_UP_WITH_ELMO, 2026-09-13)

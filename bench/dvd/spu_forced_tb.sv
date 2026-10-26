@@ -46,7 +46,7 @@ module spu_forced_tb;
 
     spu_decode dut (
         .clk(clk), .rst_n(rst_n), .enable(1'b1), .forced_only(forced_only),
-        .interlaced(1'b0), .menu_mode(1'b0), .new_cell(1'b0), .newcell_load(),
+        .interlaced(1'b0), .menu_mode(1'b0), .title_menu(1'b0), .new_cell(1'b0), .newcell_load(),
         .sp_byte(sp_byte), .sp_valid(sp_valid), .sp_frame_start(sp_frame_start),
         .sp_pts(sp_pts), .sp_pts_valid(sp_pts_valid),
         .stc(stc), .q_x(q_x), .q_y(q_y), .q_idx(q_idx), .q_inside(q_inside),

@@ -762,6 +762,30 @@ if [ "$RED" -eq 1 ]; then
     red_case dvd_ir.cpp dvd_ir_test.cpp \
         "KEY_RED -> KEY_F2 (B12 Title)" \
         "s/{ KEY_RED, *KEY_F2,/{ KEY_RED, KEY_F1,/" ir-colour-wrong
+
+    # ---- dvd_ctl: the nav event FIFO drain (0x7C, dvd/nav_trace.sv) -------
+    # An absent core re-probed on every sample: dead SPI traffic on the poll
+    # thread for the life of the arm, and a fresh "absent" line each time.
+    red_case dvd_ctl.cpp dvd_ctl_test.cpp \
+        "absent probed once, then never again" \
+        "s/^\t\tnt_state = -1;$/\t\tnt_state = 0;/" ctl-nt-absent-reprobed
+
+    # Losses folded away: an overflow leaves a gap nobody can see.
+    red_case dvd_ctl.cpp dvd_ctl_test.cpp \
+        "ovf 5 -> 8: 3 dropped" \
+        "s/^\tif (d_ovf || d_mrg)$/\tif (0)/" ctl-nt-loss-silent
+
+    # The 16-bit free stamp taken without its wrap: 23 s into a run every event
+    # lands an hour away.
+    red_case dvd_ctl.cpp dvd_ctl_test.cpp \
+        "free = 0x2FFF0 << 5, not a wrap away" \
+        "s/unsigned ago32 = (uint16_t)(now32 - x\[4\]);/unsigned ago32 = now32 - x[4];/" ctl-nt-no-unwrap
+
+    # The per-drain cap off by one: the 64th entry of a full reply is never read
+    # and its 5 words are left on the bus.
+    red_case dvd_ctl.cpp dvd_ctl_test.cpp \
+        "reads exactly 64 entries" \
+        "s/? DVD_NAVTRACE_MAXN : h\[1\];/? DVD_NAVTRACE_MAXN - 1 : h[1];/" ctl-nt-cap-short
     echo
 fi
 

@@ -26,6 +26,18 @@
 //       below that.)
 //   [D] CONTROL: an authored gap that is genuinely long must still go dark. A fix
 //       that simply never blanks would pass [A] and [B] and be wrong.
+//   [E] MAD DOG McCREE'S PURPLE BLIP (2026-10-23): the intro's unit A (a visible
+//       full-screen wash, class 0 and class 3 opaque) is up; the shootout's unit B
+//       (its reticles in class 3, authored contrast 0) arrives 1.5 s before its show
+//       time, so the hold's bound expires while A is still in its window and B
+//       decodes into the one bitmap under A's committed params. A probe pixel must
+//       never show B's class-3 pixels in A's opaque contrast before B is due.
+//   [F] THE SAME, IN AN IN-TITLE MENU (menu_mode + title_menu: emu's sp_menu_early,
+//       which is what Mad Dog's 35-button shootout HLI actually raises):
+//       F1 an expired unit (A past its STP_DSP) must not come back when the mode rises;
+//       F2 an early decode must not show the new pixels in A's colours (no hold here);
+//       F3 the windowless START is kept: a unit committed before its show time shows
+//          at once (Scene It's in-title menus rely on it).
 //
 // 1 STC tick per clock here (the real ratio is clk_sys/300) so a 1 s VBUF lead is
 // 90k cycles rather than 27 M; HOLD_CYCLES is scaled to match (700 ms in ticks).
@@ -52,7 +64,7 @@ module spu_window_tb;
     logic        sp_valid=0, sp_frame_start=0, sp_pts_valid=0;
     logic [32:0] sp_pts = 0;
     logic [32:0] stc = 0;
-    logic        enable = 1'b1, menu_mode = 1'b0;
+    logic        enable = 1'b1, menu_mode = 1'b0, title_menu = 1'b0;
     logic [11:0] q_x=0, q_y=0;
     wire  [1:0]  q_idx;  wire q_inside, sp_active;
     wire [3:0]   alpha0, alpha1, alpha2, alpha3, col0, col1, col2, col3;
@@ -60,7 +72,7 @@ module spu_window_tb;
     spu_decode #(.HOLD_CYCLES(TICK_HOLD)) dut (
         .new_cell(1'b0),   // 2026-09-18: menu re-send guard opener (no NAV here)
         .clk(clk), .rst_n(rst_n), .enable(enable), .forced_only(1'b0), .interlaced(1'b0),
-        .menu_mode(menu_mode),
+        .menu_mode(menu_mode), .title_menu(title_menu),
         .sp_byte(sp_byte), .sp_valid(sp_valid), .sp_frame_start(sp_frame_start),
         .sp_pts(sp_pts), .sp_pts_valid(sp_pts_valid),
         .stc(stc), .q_x(q_x), .q_y(q_y), .q_idx(q_idx), .q_inside(q_inside),
@@ -115,6 +127,44 @@ module spu_window_tb;
             end
             spu_len = p;
             spu[0]=spu_len[15:8]; spu[1]=spu_len[7:0];             // SPDSZ
+        end
+    endtask
+
+    // [E]'s units: every line filled with `col`, contrast nibbles {k3,k2,k1,k0}
+    task automatic mk_spu_cc(input bit has_stp, input int stp_delay,
+                             input [1:0] col, input [15:0] contr);
+        int p, dcsq0, dcsq1;
+        begin
+            spu[4]=8'h00; spu[5]={6'd0, col};      // top-field RLE:    fill line, col
+            spu[6]=8'h00; spu[7]={6'd0, col};      // bottom-field RLE: fill line, col
+            dcsq0 = 8;
+            spu[2]=dcsq0[15:8]; spu[3]=dcsq0[7:0];
+            p = dcsq0 + 4;
+            spu[p]=8'h01; p++;                                     // STA_DSP
+            spu[p]=8'h04; p++; spu[p]=contr[15:8]; p++; spu[p]=contr[7:0]; p++; // SET_CONTR
+            spu[p]=8'h05; p++;                                     // SET_DAREA 0..15 x 0..1
+            spu[p]=8'h00; p++; spu[p]=8'h00; p++; spu[p]=8'h0F; p++;
+            spu[p]=8'h00; p++; spu[p]=8'h00; p++; spu[p]=8'h01; p++;
+            spu[p]=8'h06; p++;                                     // SET_DSPXA top=4 bot=6
+            spu[p]=8'h00; p++; spu[p]=8'h04; p++;
+            spu[p]=8'h00; p++; spu[p]=8'h06; p++;
+            spu[p]=8'hFF; p++;
+            if (!has_stp) begin
+                spu[dcsq0]=8'h00; spu[dcsq0+1]=8'h00;
+                spu[dcsq0+2]=dcsq0[15:8]; spu[dcsq0+3]=dcsq0[7:0];
+            end else begin
+                dcsq1 = p;
+                spu[dcsq0]=8'h00; spu[dcsq0+1]=8'h00;
+                spu[dcsq0+2]=dcsq1[15:8]; spu[dcsq0+3]=dcsq1[7:0];
+                spu[dcsq1]   = (stp_delay >> 8) & 8'hFF;
+                spu[dcsq1+1] =  stp_delay       & 8'hFF;
+                spu[dcsq1+2] = dcsq1[15:8]; spu[dcsq1+3] = dcsq1[7:0];
+                p = dcsq1 + 4;
+                spu[p]=8'h02; p++;                                 // STP_DSP
+                spu[p]=8'hFF; p++;
+            end
+            spu_len = p;
+            spu[0]=spu_len[15:8]; spu[1]=spu_len[7:0];
         end
     endtask
 
@@ -240,6 +290,102 @@ module spu_window_tb;
                 $display("  FAIL [C] the second unit was LOST (c_pts=%0d, expected %0d)", dut.c_pts, pd); errors++;
             end else
                 $display("  [C] a unit arriving past the hold bound is not lost");
+        end
+
+        // =====================================================================
+        // [E] Mad Dog's purple blip: B decodes under A's params while A is up
+        // =====================================================================
+        rst_n = 0; repeat (4) @(posedge clk); rst_n = 1;
+        stc_run = 1'b0; stc = 33'd3_000_000;
+        begin : arm_e
+            logic [32:0] pa, pb; int garbage, a_seen;
+            pa = 33'd3_010_000;
+            pb = pa + 33'd400_000;                         // B shows ~4.4 s after A
+            q_x = 12'd5; q_y = 12'd0;                      // a probe pixel inside DAREA
+            mk_spu_cc(1'b1, 360, 2'd0, 16'hF00F);          // A: class 0, k3=F k0=F, ~4.1 s
+            feed(pa);
+            run_to(pa + 33'd10);
+            a_seen = (sp_active && q_inside && q_idx == 2'd0 && alpha0 != 4'd0);
+            if (!a_seen) begin $display("  FAIL [E] unit A (the wash) never showed"); errors++; end
+            run_to(pb - 33'd135_000);                      // B arrives 1.5 s early, A still up
+            garbage = 0;
+            fork
+                begin
+                    mk_spu_cc(1'b1, 173, 2'd3, 16'h0000);  // B: class 3, contrast 0
+                    feed(pb);
+                end
+                begin
+                    // until B is due: B's class-3 pixel must never be drawn opaque
+                    while (stc < pb - 33'd10) begin
+                        @(posedge clk);
+                        if (sp_active && q_inside && q_idx == 2'd3 && alpha3 != 4'd0) garbage++;
+                    end
+                end
+            join
+            if (garbage != 0) begin
+                $display("  FAIL [E] B's graphic shown in A's colours for %0d cycles before B was due", garbage); errors++;
+            end else
+                $display("  [E] a unit decoding under the previous unit's window is never shown in its colours");
+            run_to(pb + 33'd10);
+            if (dut.c_pts !== pb) begin
+                $display("  FAIL [E] unit B never committed (c_pts=%0d)", dut.c_pts); errors++;
+            end
+        end
+
+        // =====================================================================
+        // [F] in an in-title menu (menu_mode + title_menu)
+        // =====================================================================
+        rst_n = 0; repeat (4) @(posedge clk); rst_n = 1;
+        stc_run = 1'b0; stc = 33'd4_000_000; menu_mode = 1'b0; title_menu = 1'b0;
+        q_x = 12'd5; q_y = 12'd0;
+        begin : arm_f
+            logic [32:0] pa, pb; int bad;
+            // F1: A shows, expires, then the in-title menu mode rises
+            pa = 33'd4_010_000;
+            mk_spu_cc(1'b1, 40, 2'd0, 16'hF00F);           // A: ~0.46 s, class 0 opaque
+            feed(pa);
+            run_to(pa + 33'd10);
+            if (!(sp_active && q_idx == 2'd0)) begin $display("  FAIL [F1] unit A never showed"); errors++; end
+            run_to(pa + 33'd50_000);                       // past A's STP_DSP
+            menu_mode = 1'b1; title_menu = 1'b1;           // the shootout's HLI is parsed
+            bad = 0;
+            repeat (2000) begin @(posedge clk); if (sp_active && q_inside && alpha0 != 4'd0) bad++; end
+            if (bad != 0) begin $display("  FAIL [F1] an expired unit came back for %0d cycles in an in-title menu", bad); errors++; end
+            else $display("  [F1] an expired unit stays hidden when an in-title menu begins");
+
+            // F2: A (in its window) up, B (class 3, contrast 0) arrives early: no hold here
+            rst_n = 0; repeat (4) @(posedge clk); rst_n = 1;
+            menu_mode = 1'b1; title_menu = 1'b1;
+            stc_run = 1'b0; stc = 33'd5_000_000;
+            pa = 33'd5_010_000; pb = pa + 33'd400_000;
+            mk_spu_cc(1'b1, 360, 2'd0, 16'hF00F);          // A: ~4.1 s, class 0 and 3 opaque
+            feed(pa);
+            run_to(pa + 33'd10);
+            run_to(pb - 33'd135_000);                      // B arrives inside A's window
+            bad = 0;
+            fork
+                begin mk_spu_cc(1'b1, 173, 2'd3, 16'h0000); feed(pb); end
+                begin
+                    repeat (3000) begin
+                        @(posedge clk);
+                        if (sp_active && q_inside && q_idx == 2'd3 && alpha3 != 4'd0) bad++;
+                    end
+                end
+            join
+            if (bad != 0) begin $display("  FAIL [F2] B's graphic shown in A's colours for %0d cycles in an in-title menu", bad); errors++; end
+            else $display("  [F2] an early decode in an in-title menu is never shown in the old colours");
+
+            // F3: windowless start kept: C committed 1 s before its show time shows now
+            rst_n = 0; repeat (4) @(posedge clk); rst_n = 1;
+            menu_mode = 1'b1; title_menu = 1'b1;
+            stc_run = 1'b0; stc = 33'd6_000_000;
+            mk_spu_cc(1'b0, 0, 2'd0, 16'h000F);            // C: persistent, class 0 opaque
+            feed(33'd6_090_000);
+            repeat (3000) @(posedge clk);
+            if (!(sp_active && q_inside && q_idx == 2'd0 && alpha0 != 4'd0)) begin
+                $display("  FAIL [F3] an in-title menu unit did not show at commit (windowless start lost)"); errors++;
+            end else $display("  [F3] an in-title menu unit still shows at commit");
+            menu_mode = 1'b0; title_menu = 1'b0;
         end
 
         if (errors==0) $display("RESULT: PASS (spu_window)");

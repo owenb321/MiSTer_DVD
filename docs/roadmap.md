@@ -623,6 +623,20 @@ in `CONF_STR`. Design: `docs/cdda.md` "`.cue` sheets". ⛔ CHD still not support
 > **top gap confirmed = exact chapters/PTT (7/7 discs); interactive GPRM-counter/NVTMR promoted
 > above parental on measured prevalence (3/7 game discs).** Phase 3 = close gaps in that order.
 
+### ✅ Issue #176: cell commands with buttons up run at the displayed cell end (MERGED PR #179)
+
+Shipped and HIL-confirmed: the HIL regression suite vs `main` (14 checks, 0 regressions,
+10 fixed: Mad Dog's first shootout and VTS 15, Dragon's Lair 20th, Dragon's Lair II,
+Time Traveler) and the maintainer's play-test. The record is `docs/status_log.md`.
+Follow-ups, all pre-existing and outside #176:
+- the 5+1 pictures skipped at every PTS-restart junction;
+- 2 s authored-duration stills on video cells whose command is fixed (the same whole-second
+  overshoot, without the #176 drain; a fix changes cell timing on every disc);
+- issue #178 (in-title HLI forces the subpicture layer on: Dinosaur's SDH);
+- Thayer's Quest after an early Menu press in the boot chain (maintainer, not yet diffed
+  against libdvdnav);
+- still unchecked by hand: a gapless in-title loop (Fairytopia), Mad Dog II, Crime Patrol.
+
 ### ⏳ 2026-10-01 spec-audit: DVD Demystified 3rd-edition follow-ups (items 1–8 and 10b ✅; the rest re-ranked 2026-10-06, PR #165)
 
 The audit, with evidence and the user's decisions, is in

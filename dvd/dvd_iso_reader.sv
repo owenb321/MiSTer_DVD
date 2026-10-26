@@ -319,6 +319,12 @@ module dvd_iso_reader #(
     // key escapes the loop. No flush: cells start on clean GOPs and av_sync
     // re-anchors on the PTS jump.
     input             menu_btns_armed,
+    // CELL COMMAND AT THE DISPLAYED CELL END (issue #176). Level: an HLI with
+    // buttons is on screen or parsed and on its way (emu: nav_pci btns_armed |
+    // btns_pend, Disc Menus on). A title cell command reached while it is high
+    // waits until the display has caught up with the cell's end before it runs,
+    // so a button pressed in the cell's last second still counts. See vmw_cmd_pend.
+    input             cc_btns,
 
     // ---------------------------------------------------------------------
     // Phase-4 DVD-VM coupling. vm_mode (= O[1] Disc Menus) hands navigation
@@ -937,6 +943,11 @@ reg [31:0] ilvu_target;                      // next-ILVU RBN for the current an
 reg        ilvu_from_agli;
 reg [7:0]  cell_count;                // number of cells parsed
 reg [7:0]  cell_i;                    // streaming cell cursor
+// The cell after this one in PLAY order: past the whole block when playing an angle
+// cell (the sibling angles are alternatives, not successors). The angle cell-finished
+// path always skipped them; a cell command's continue verdict did not, and played the
+// next angle's copy of the segment (found with issue #176's angle hold, 2026-10-24).
+wire [7:0] cell_after = angle_active ? (block_last + 8'd1) : (cell_i + 8'd1);
 reg        cell_mode;                 // 1 = stream by cell list, 0 = linear extents
 
 // Transport seek: a request is LATCHED here and executed only when no sd block
@@ -1388,7 +1399,41 @@ wire       pmap_go_w = (prog_map_off16 != 16'd0) && (cmd_nr_pgm != 8'd0) && (dom
 reg        vmw_pgc;                   // 1 = waiting on POST (else a cell cmd)
 reg        vmw_last;                  // the waited cell was the PGC's last
 reg        vmw_pgc_pend;              // PGC ended (vm_mode): drain, then wait
+reg        vmw_cmd_pend;              // title cell command with buttons up: drain, then dispatch
 reg [23:0] vmw_tmr;                   // verdict watchdog (~0.62 s)
+
+// FIXED CELL COMMANDS (issue #176). The hold below exists so a cell command sees
+// the viewer's last presses. A command whose verdict cannot depend on a press gains
+// nothing from it and would only pause: the library sweep found 1,924 gapless
+// in-title loops (LinkTopPG / LinkTopC / LinkCN-self, 40 images) and 83 Nop cells in
+// the target games themselves (Space Pirates, Crime Patrol, Mad Dog II). So the
+// P_CMD walk classifies every cell command as it streams past, one bit per command
+// number, and those are dispatched at once as before. FIXED = unconditional
+// (compare op byte1[6:4] = 0) AND
+//   - type 0 (byte0[7:5]): Nop / Goto / Break / SetTmpPML, or
+//   - type 1 jump (byte0[4]): Exit, JumpTT, JumpVTS_*, JumpSS, CallSS, or
+//   - type 1 link with a fixed target: op (byte1[3:0]) 0, 4 LinkPGCN, 5 LinkPTTN,
+//     6 LinkPGN, 7 LinkCN, or 1 LinkSIns with any sub-instruction (byte7[4:0]) but
+//     NextC 2, NextPG 6, TailPGC 13 and RSM 16 - those can land in POST or a
+//     resume, which read registers.
+// Types 2-6 all carry a Set and are held. tools/cell_cmd_btn_scan.py cmd_fixed()
+// is the same predicate, cross-checked against the vmcmd.c decoder on every title
+// cell command in the library (--selfcheck: 0 disagreements).
+// fx_mem is written only for this PGC's cell commands; cmd_hold_w also requires
+// cmd_nr <= cmd_nr_cell, so a stale entry (or an invalid cmd_nr, which the VM
+// answers with an advance) never decides anything.
+reg        fx_we;
+reg  [7:0] fx_waddr;                  // the 1-based cell command number
+reg        fx_wdata;
+reg  [9:0] cc_first;                  // nr_pre + nr_post: command index of cell command 1
+reg        fx_mem [0:255];
+reg        fx_rd;                     // the playing cell's command is fixed
+integer    fx_i;
+initial for (fx_i = 0; fx_i < 256; fx_i = fx_i + 1) fx_mem[fx_i] = 1'b0;
+always @(posedge clk) begin
+    if (fx_we) fx_mem[fx_waddr] <= fx_wdata;
+    fx_rd <= fx_mem[cm_rd[7:0]];      // cm_rd settles at the cell load: a cycle is free
+end
 
 // NATURAL-TRANSITION TAIL DRAIN (docs/dvd_nav.md "Tail drain"). A natural
 // title-domain PGC end (First Play logo chains, end-of-title -> menu) must
@@ -1408,14 +1453,53 @@ reg [23:0] vmw_tmr;                   // verdict watchdog (~0.62 s)
 // decoder is not (rtl/mpeg2/watchdog.v decoder_active <= ~busy).
 reg [30:0] drain_tmr;   // 31 bits: DRAIN_WD is now 60 s @ 27 MHz
 wire       drain_wd_hit = (drain_tmr >= DRAIN_WD);
-wire       tail_wait = vmw_pgc_pend && ~menu_dom && ~vbuf_empty && ~drain_wd_hit;
+// ⛔ No audio-low release (issue #176). dev-cellcmdhold4..8 also released the cell-
+// command hold when the audio ring ran low (cc_aud_low), for the saloon's silent
+// gunshots; it cost ~0.2 s of every scoring window. The HIL harness traced that
+// silence to the authored-duration still overrunning video cells (fixed in hold8),
+// and hold9 ran the saloon clean without the release (no join's ring reached 0), so
+// it was removed. Do not bring it back for an audio gap without re-measuring.
+wire       tail_wait = ((vmw_pgc_pend && ~vbuf_empty) ||
+                        (vmw_cmd_pend && ~vbuf_empty)) &&
+                       ~menu_dom && ~drain_wd_hit;
+
+// CELL COMMAND AT THE DISPLAYED CELL END (issue #176, docs/dvd_nav.md "A cell
+// command with buttons up"). A cell command runs at the end of the cell's
+// PRESENTATION. The reader reaches the end of the cell's SECTORS a whole VBUF
+// earlier (~1.1 MB = ~1.2 s on Mad Dog McCree), and dispatching there evaluated
+// the command against registers the viewer could still change: Mad Dog's buttons
+// set g[0] and the cell command `if (g[0] != 21) LinkPTT 5` scores the shot, so
+// a shot in the window's last ~1.2 s never counted. When an HLI with buttons is up
+// (cc_btns) at a title cell command, vmw_cmd_pend holds the dispatch through the
+// same drain as a PGC end (tail_wait: cache empty, VBUF at its low-water mark,
+// DRAIN_WD bound) - a measurement of "the display has reached the parse front"
+// that needs no bitrate, unlike a byte threshold, which would fail most on the
+// low-motion aiming shots these games are made of.
+// Cost: a verdict that CONTINUES (vm_adv: Mad Dog's hit; vm_replay: a looping
+// in-title screen) restarts the decoder from an empty buffer, a short freeze at
+// the junction. A verdict that jumps or seeks already waited for the full drain
+// before this change (Phase B below), so it looks the same as before.
+// Not held: menus (keep_vbuf, the menu cap), and seamless-branch blocks, where a
+// drain would break the seamless join.
+// ★ ANGLE BLOCKS ARE HELD (2026-10-24). They were excluded with the seamless
+// branches, but the hold only engages with buttons up and a press-reading command,
+// which a film's angle block does not author; FMV games do. Time Traveler plays its
+// game in angle blocks (463 cells), its cell commands score windows that run to the
+// cell's end, and without the hold the command ran at the READER's end, ~0.2 s
+// BEFORE its own window armed: every window unwinnable (HIL play harness, 5/5, on
+// main too). The angle cell's command dispatches through this same branch; the
+// verdict's advance still skips the sibling angles (bench arm I).
+wire       cmd_hold_w = vm_mode && !menu_dom && cc_btns && !seamless_active &&
+                        !fx_rd && (cm_rd[7:0] <= cmd_nr_cell);
 
 // PHASE B (tail-drain for CELL-COMMAND verdicts, docs/dvd_nav.md). A natural
 // cell command (Thayer's Quest FMV branch cells: LinkTailPGC / LinkPGCN at a
 // choice cell) delivers its verdict as a JUMP or SEEK, which executed
 // immediately and cut the stream the decoder had not finished receiving -
-// the same cut PR #149 fixed for PGC ends. The DISPATCH must stay ungated
-// (a mid-title GPRM cell command's vm_adv verdict would hitch playback);
+// the same cut PR #149 fixed for PGC ends. The DISPATCH stays ungated
+// (a mid-title GPRM cell command's vm_adv verdict would hitch playback) -
+// except with buttons up, where the command must see the viewer's last
+// presses (vmw_cmd_pend above, issue #176);
 // instead the resulting jump/seek EXECUTION is gated: jnat_l/snat_l latch the
 // VM's provenance (vm_from_wait) with the request, and jump_go/seek_jump
 // additionally wait until the stream really has been delivered - bounded by
@@ -1485,7 +1569,7 @@ assign     nat_wait_o    = nat_jump_wait || nat_seek_wait;
 // AFTER a watchdog-released dispatch re-arms the bound (worst case 2x
 // DRAIN_WD on a wedged decoder - still strictly bounded, never a deadlock).
 always @(posedge clk) begin
-    if (!rst_n || !(vmw_pgc_pend || (jump_pending && jnat_l) ||
+    if (!rst_n || !(vmw_pgc_pend || vmw_cmd_pend || (jump_pending && jnat_l) ||
                     (seek_pending && snat_l)))
         drain_tmr <= 31'd0;
     else if (tail_wait || nat_jump_wait || nat_seek_wait)
@@ -1503,6 +1587,17 @@ reg [31:0] lv_c;                      // cell last_vobu_start_sector @16 (RBN)
 reg [15:0] pb_c;                      // playback_time in seconds, clamped to the
                                       // C_PBTM spec max 9:59:59 = 35,999 (Phase 6)
 reg [7:0]  cmd_b0, cmd_b1, cmd_b6;    // command bytes 0/1/6 (LinkPGCN detect)
+// The FIXED predicate (see fx_mem), evaluated with byte 7 on pb_rdata.
+wire       cmd_fixed_w = (cmd_b1[6:4] == 3'd0) &&
+                         ((cmd_b0[7:5] == 3'd0) ||
+                          ((cmd_b0[7:5] == 3'd1) &&
+                           (cmd_b0[4] ||
+                            cmd_b1[3:0] == 4'd0 || cmd_b1[3:0] == 4'd4 ||
+                            cmd_b1[3:0] == 4'd5 || cmd_b1[3:0] == 4'd6 ||
+                            cmd_b1[3:0] == 4'd7 ||
+                            (cmd_b1[3:0] == 4'd1 &&
+                             pb_rdata[4:0] != 5'd2  && pb_rdata[4:0] != 5'd6 &&
+                             pb_rdata[4:0] != 5'd13 && pb_rdata[4:0] != 5'd16))));
 reg        pb_skip;                   // next S_SECREAD completion skips the rbuf fetch
 
 // Cell-streaming position (concatenated title-VOB 2048-sector domain = the DVD
@@ -2661,6 +2756,10 @@ always @(posedge clk or negedge rst_n) begin
         pgc_loaded   <= 1'b0;
         pgc_error    <= 1'b0;
         cmd_we       <= 1'b0;
+        fx_we        <= 1'b0;
+        fx_waddr     <= 8'd0;
+        fx_wdata     <= 1'b0;
+        cc_first     <= 10'd0;
         ext_w_en     <= 1'b0;
         still_timed  <= 1'b0;
         still_secs   <= 16'd0;
@@ -2700,6 +2799,7 @@ always @(posedge clk or negedge rst_n) begin
         vmw_pgc      <= 1'b0;
         vmw_last     <= 1'b0;
         vmw_pgc_pend <= 1'b0;
+        vmw_cmd_pend <= 1'b0;
         vmw_tmr      <= 24'd0;
         pm_we        <= 1'b0;
         pm_waddr     <= 7'd0;
@@ -2752,6 +2852,7 @@ always @(posedge clk or negedge rst_n) begin
             pgc_dom_tt    <= (dom == DOM_TT);
         end
         cmd_we   <= 1'b0;
+        fx_we    <= 1'b0;
         pm_we    <= 1'b0;
         ptt_we   <= 1'b0;
         ext_w_en <= 1'b0;                   // one-cycle write strobe (see ext_mem)
@@ -3196,6 +3297,7 @@ always @(posedge clk or negedge rst_n) begin
             jpgn_l          <= 8'd0;
             jptt_l          <= 11'd0;
             vmw_pgc_pend    <= 1'b0;
+            vmw_cmd_pend    <= 1'b0;
             pb_sec          <= 32'hFFFFFFFF;   // parse_buf holds no valid sector
         end else if (jump_go) begin
             // VM JUMP (executes at a block boundary, like the transport seek).
@@ -3210,6 +3312,7 @@ always @(posedge clk or negedge rst_n) begin
             still_act    <= 1'b0;
             adv_pend     <= 1'b0;
             vmw_pgc_pend <= 1'b0;
+            vmw_cmd_pend <= 1'b0;
             jump_ack     <= 1'b1;
             // menu->menu jump (transition between menu PGCs): hold the VBUF so
             // the buffered transition tail plays out. `menu_dom` here is the
@@ -3352,6 +3455,7 @@ always @(posedge clk or negedge rst_n) begin
             still_act    <= 1'b0;
             adv_pend     <= 1'b0;
             vmw_pgc_pend <= 1'b0;
+            vmw_cmd_pend <= 1'b0;
             wr_ptr       <= 0;
             // a transport seek re-scans any angle/interleaved block it lands in
             angle_resolved <= 1'b0;
@@ -4696,6 +4800,7 @@ always @(posedge clk or negedge rst_n) begin
                         cmd_nr_pre  <= (nr_pre16   > 16'd255) ? 8'd255 : nr_pre16[7:0];
                         cmd_nr_post <= (nr_post16  > 16'd255) ? 8'd255 : nr_post16[7:0];
                         cmd_nr_cell <= (nr_cellc16 > 16'd255) ? 8'd255 : nr_cellc16[7:0];
+                        cc_first    <= nr_pre16[9:0] + nr_post16[9:0];
                         if (nr_pre16 + nr_post16 + nr_cellc16 == 16'd0 ||
                             nr_pre16 + nr_post16 + nr_cellc16 > 16'd511) begin
                             // empty or absurd -> skip to the program map / cells
@@ -4736,6 +4841,13 @@ always @(posedge clk or negedge rst_n) begin
                         cmd_b0 == 8'h20 && cmd_b1[3:0] == 4'h4) begin
                         if (cmd_b1[6:4] == 3'd0) link_pgcn_u <= {1'b0, cmd_b6[6:0], pb_rdata};
                         else                     link_pgcn_c <= {1'b0, cmd_b6[6:0], pb_rdata};
+                    end
+                    // Byte 7 of a CELL command: classify it (fx_mem, issue #176).
+                    if (walk_idx[2:0] == 3'd7 && walk_idx[12:3] >= cc_first &&
+                        walk_idx[12:3] - cc_first < 10'd255) begin
+                        fx_we    <= 1'b1;
+                        fx_waddr <= walk_idx[10:3] - cc_first[7:0] + 8'd1;
+                        fx_wdata <= cmd_fixed_w;
                     end
                     if (walk_left == 13'd1) begin
                         if (pmap_go_w) begin
@@ -5625,7 +5737,21 @@ always @(posedge clk or negedge rst_n) begin
                                     strm_done   <= 1'b1;
                                     still_pend  <= 1'b1;   // drain, then S_STILL
                                 end else if (vm_mode && cm_rd[7:0] != 8'd0) begin
-                                    if (dur_hold_w) begin
+                                    // ★ BUTTONS UP: THE DRAIN COMES FIRST (issue #176,
+                                    // 2026-10-23). dur_hold measures the cell in WHOLE
+                                    // seconds from the reader's LOAD and rounds C_PBTM
+                                    // up, so on an ordinary video cell it can overshoot
+                                    // the displayed end by up to ~1 s: Mad Dog VTS 15
+                                    // cell 1 (3.87 s, jump-entered) parked a 2 s timed
+                                    // still from 2.87 s, freezing the picture 0.85 s
+                                    // past its last frame with the audio run dry (HIL:
+                                    // main and dev-cellcmdhold7 alike). With buttons up
+                                    // the display-referenced drain (cmd_hold_w) runs
+                                    // first; the settle block then serves whatever
+                                    // authored time is STILL unspent (a genuine still:
+                                    // Weakest Link's one-I-frame 17 s answer window)
+                                    // before the command. A video cell has none left.
+                                    if (dur_hold_w && !cmd_hold_w) begin
                                         // AUTHORED CELL DURATION: the cell's
                                         // sectors are delivered but its C_PBTM
                                         // has not elapsed on the display (the
@@ -5647,6 +5773,16 @@ always @(posedge clk or negedge rst_n) begin
                                         still_next  <= STILL_CMD;
                                         strm_done   <= 1'b1;
                                         still_pend  <= 1'b1;   // drain, then S_STILL
+                                    end else if (cmd_hold_w) begin
+                                        // Buttons are up (issue #176): the
+                                        // display is ~a VBUF behind this
+                                        // point, and a press still to come can
+                                        // change what the command decides.
+                                        // Drain first (tail_wait), then the
+                                        // settle block below dispatches.
+                                        vmw_cmd_pend <= 1'b1;
+                                        vmw_last     <= (cell_after >= cell_count);
+                                        strm_done    <= 1'b1;
                                     end else begin
                                     // Phase-4: the cell has a CELL COMMAND -
                                     // hand it to the VM and wait for the
@@ -5655,7 +5791,7 @@ always @(posedge clk or negedge rst_n) begin
                                     // (the branch above holds it first).
                                     vm_cell_cmd <= 1'b1;
                                     vmw_pgc     <= 1'b0;
-                                    vmw_last    <= (cell_i + 8'd1 >= cell_count);
+                                    vmw_last    <= (cell_after >= cell_count);
                                     vmw_tmr     <= 24'd0;
                                     state       <= S_VM_WAIT;
                                     end
@@ -5801,6 +5937,30 @@ always @(posedge clk or negedge rst_n) begin
                         vmw_pgc_pend <= 1'b0;
                         vm_pgc_end   <= 1'b1;
                         vmw_pgc      <= 1'b1;
+                        vmw_tmr      <= 24'd0;
+                        state        <= S_VM_WAIT;
+                    end else if (vmw_cmd_pend && dur_hold_w) begin
+                        // Issue #176: drained, and the cell's authored duration is
+                        // still >= RESID_MIN unspent: a genuine still (one frame
+                        // authored to hold). Serve the residual as the timed still
+                        // the cell end would have (STILL_CMD), then the command.
+                        // cm_rd / cell_secs still describe this cell (cell_i has not
+                        // moved since the cell end).
+                        vmw_cmd_pend <= 1'b0;
+                        still_secs   <= dur_resid_w;
+                        still_timed  <= 1'b1;
+                        still_act    <= 1'b1;
+                        still_last   <= vmw_last;
+                        still_next   <= STILL_CMD;
+                        still_pend   <= 1'b1;
+                        state        <= S_STILL;
+                    end else if (vmw_cmd_pend) begin
+                        // Issue #176: the cell has been displayed to its end
+                        // -> its cell command's turn (vmw_last was set at the
+                        // cell end; cell_i has not moved since).
+                        vmw_cmd_pend <= 1'b0;
+                        vm_cell_cmd  <= 1'b1;
+                        vmw_pgc      <= 1'b0;
                         vmw_tmr      <= 24'd0;
                         state        <= S_VM_WAIT;
                     end else if (adv_pend) begin
@@ -5968,10 +6128,17 @@ always @(posedge clk or negedge rst_n) begin
                         vmw_pgc_pend  <= 1'b1;
                         state         <= S_STREAM;   // drain, then vm_pgc_end
                     end else begin
-                        cell_i     <= cell_i + 8'd1;
-                        cell_raddr <= cell_i + 8'd1;
+                        cell_i     <= cell_after;
+                        cell_raddr <= cell_after;
                         strm_done  <= 1'b0;
                         state      <= S_CELL_LOAD;
+                        if (angle_active) begin
+                            // leaving the angle block: as the cell-finished path does
+                            angle_active   <= 1'b0;
+                            angle_resolved <= 1'b0;
+                            angle_count    <= 4'd0;
+                            ilvu_armed     <= 1'b0;
+                        end
                     end
                 end
             end

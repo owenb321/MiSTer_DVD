@@ -120,6 +120,19 @@ frames. Sequence the key press and the burst on the target (one ssh session), re
 missing frame as missing, and pair a burst with a settled shot. For a defect that is a
 FLASH the instrument is the burst; for one that HOLDS the settled shot is enough.
 
+**★ `restore` does not stop a harness Main that is already running.** Loading the DVD
+core re-execs into `[DVD] main=` (which `restore` re-points), but MENU and every other
+core keep the running Main until a reboot. `restore` now warns when one is still
+running. On a SHARED rig, reboot it (check `mister.py state` says MENU first) so the next
+user is back on stock Main.
+
+**★ For a press timed to the picture, use `key <code> 30` taps, never `keys`.** The key
+daemon's `keys` command holds each key 50 ms, then sleeps 120 ms, and anything written
+to the FIFO meanwhile QUEUES behind it. Three `keys` Rights pushed a Select written at a
+planned PTS ~0.3 s late, and a whole control sweep measured the harness instead of the
+core (issue #176). `tools/hil_shot_sweep.py` times presses against display PTS from
+fast telemetry and fires within ~10 ms of plan.
+
 **★ Run the OLD core through the same script as the control arm when the defect is
 intermittent.** The fried-still rate was ~1 onset in 8 re-entries; a clean fix arm alone
 would have proved nothing. The control is what shows the instrument can see the defect.

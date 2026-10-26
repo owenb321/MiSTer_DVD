@@ -248,6 +248,67 @@ re-sends carry *increasing* PTS — so "just reuse the menu skip" is not a fix.
 Gate: `bench/dvd/run_spu_window.sh` (+ `--red`); design history in `docs/stc_freerun.md`
 §12.1.
 
+### An early decode shows nothing until it commits (2026-10-23, issue #176 follow-up) — ✅ HIL (`dev-cellcmdhold12`: 0/9 blips, Mad Dog and Scene It highlights intact), MERGED PR #179
+
+**The report.** A one-picture "purple blip" just before Mad Dog McCree's first shootout: the
+whole 7×5 reticle grid visible under a blue-purple wash, ~1 s before the shootout's window
+(maintainer's HDMI screenshot at 0:00:34; the HIL harness found it in ~half its HDMI
+captures, on `main`'s nav too, so it predates issue #176).
+
+**The cause, from the disc.** Cell 1's unit (the intro) is a full-screen wash: palette
+[11, 15, 0, 8], contrast [0, 0, 7, 7], every pixel non-zero, shown 0.181–33.18 s. Cell 2's
+unit (the shootout) is the reticle grid with contrast [0, 0, 0, 0] (fully transparent: only
+the HLI's selected-button colours ever show a reticle), shown from 35.549 s. The reader
+delivers cell 2's unit ~1.2 s ahead of the picture, at STC ~32.1, while the wash is still in
+its window. The display-order hold waits for it to be due, but its HOLD_CYCLES bound (~700
+ms) expires at ~32.8, still inside the wash's window, so the reticle grid RLE-decodes into
+the ONE bitmap under the wash's committed params (the COMMIT contract above: the decode is
+the destructive step). For the ~10 ms of the decode every reticle is drawn in the wash's
+contrast; COMMIT then installs contrast 0 and they vanish. It is intermittent because both
+the hold's expiry and the frame scan-out have to fall inside that window.
+
+**The fix (`spu_decode.sv`, `bm_dirty`).** At the decode's first line, if the incoming unit
+is NOT due and NOT contiguous with the outgoing one (an authored gap: the hold was cut short
+by its bound), the layer is hidden until COMMIT, in the title domain only. The outgoing
+graphic is being destroyed at that moment anyway, so hiding it is the honest picture. A due
+or contiguous decode keeps showing: the outgoing window is ending on schedule, and a
+persistent re-send redraws the same graphic (The Matrix's white rabbit; blanking every
+decode made it blink at each re-send, arm [A]). `menu_mode` is untouched (bit-identical):
+its highlight case is `hl_mask`'s, and a menu decode lands at a transition that is meant to
+replace the old graphic.
+
+**Gate.** `bench/dvd/run_spu_window.sh --red`, arm [E]: unit A visible (class 0 and 3
+opaque), unit B (class 3, contrast 0) arrives 1.5 s before its show time; a probe pixel
+must never show B's class-3 pixels opaque before B is due. `red-dirty` (no guard) fails
+[E] (42 cycles of B in A's colours); `red-always` (every decode blanks) fails [A]. The
+other subpicture gates (`run_spu_newcell`, `run_forced_subs`, `run_subpic`,
+`run_flashlight`) are unchanged.
+
+**⚠ HIL REFUTED THE FIRST VERSION (`dev-cellcmdhold11`: 4 blips in 9 junction passes).**
+The harness pinned every blip to the SAME picture, cell 2 PTS 33.81–33.85: ~0.65 s AFTER
+the wash's authored stop (33.18), so the wash was not inside its window and the hold-expiry
+story above cannot be the mechanism. The grid's subpicture sits in the VOBU starting at
+35.149 s, so it ARRIVES at ~33.8 display time, a few sectors after that VOBU's NAV pack,
+which carries the shootout's 35-button HLI. Parsing a multi-button in-title HLI raises
+emu's `sp_menu_early`, which drives `spu_decode.menu_mode`: WINDOWLESS display (show the
+committed unit regardless of its window; set when the clock still led the picture, before
+PR #63), no display-order hold, and the guard above excluded. So at ~33.8 the expired wash
+came back (windowless), the grid decoded at once into the bitmap under the wash's params,
+and the whole grid showed in the wash's colours until COMMIT installed contrast 0.
+
+**The fix (`dev-cellcmdhold12`): a `title_menu` input** (emu: `sp_menu_early &&
+!force_43_subp`; `tools/check_spu_title_menu_wiring.py --red`). With it, an in-title menu
+keeps the windowless START (a unit shows at commit: Scene It, Harry Potter's Player Mode),
+the re-send guard and the hold exclusion, but (1) a unit past its STP_DSP stays hidden, and
+(2) the early-decode guard applies. Menu-domain menus and Force 4:3 Subpics are untouched.
+Gate: `run_spu_window.sh --red` arm [F]: F1 an expired unit stays hidden when the mode
+rises (`red-tm-expired`), F2 no early decode in old colours (`red-tm-dirty`; `red-dirty`
+now fails E and F2), F3 the windowless start is kept (`red-tm-window`).
+
+**Known limit.** The outgoing unit still loses the rest of its window from the decode on
+(single bitmap; a second one costs ~102 M10K, see the COMMIT contract). That was already
+true before: the commit replaced its window. Only the garbage frame is gone.
+
 ## Highlight colours replace every class (2026-09-18)
 
 ✅ **Branch `fix/spu-flashlight`: sim-proven, mutation-checked, HW-CONFIRMED 2026-09-18**
