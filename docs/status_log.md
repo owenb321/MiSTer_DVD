@@ -23,7 +23,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 ## Hardware status (THIS fork, verified 2026-06-21)
 
 - 🔧 **VM STATE SNAPSHOT — save states, step 2 (2026-10-26, branch `feature/vm-snapshot`;
-  sim-proven and fitted, ⏳ HW).** `tools/mister.py snap` reads the DVD VM's whole state out
+  sim-proven, fitted, ✅ HW-checked on the rig).** `tools/mister.py snap` reads the DVD VM's whole state out
   of the running core, consistently: data RAM (GPRMs, counter modes, RSM, fallback chain),
   all 24 SPRMs as a command reads them, the wrapper's state, the reader's read-backs, and
   the playhead (LBN, has-a-picture, `prev_video`, cell time). Read-only.
@@ -42,8 +42,11 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
   - **Cost, measured** (full fit, SEED 7, `DVD_vmsnap_20261026_1540.rbf`): `vm_snap` 125 ALM /
     220 regs / 1 M10K, `dvd_vm` +17 ALM: ~142 ALM + 1 M10K. Timing passes; `clk_dec`'s cold
     corner is thin (86.81 against 86.0). Detail: `docs/nav_engine.md` §8.
-  - **Next:** HW: snapshot Scooby-Doo 2 / Thayer's Quest at known parks against the nav
-    FIFO's GPRM writes. Then step 3 (`docs/roadmap.md` "Save states").
+  - **HW (rig):** Scooby-Doo 2 at the main menu and in the HQ minigame: all 16 GPRMs equal
+    the nav FIFO's last logged write each (46 / 62 writes); a log missing one write is
+    caught. ⚠ The latched position is the last NAV pack DEMUXED, which led the screen by a
+    cell in the minigame: step 3 must save the displayed picture's position.
+  - **Next:** step 3 (`docs/roadmap.md` "Save states").
 
 - ✅ **HIL PLAY HARNESS: ANSWERING AND TIMED MOVES (2026-10-24; HW-proven on the capture
   rig; ✅ MERGED PR #180).** The harness now plays two more game types

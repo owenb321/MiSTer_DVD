@@ -499,7 +499,8 @@ cannot be compared, because libdvdnav itself fails on them.
 
 ## 8. State snapshot (save states, step 2)
 
-**Status (2026-10-26): 🔧 built, sim-proven and fitted on `feature/vm-snapshot`; ⏳ HW.** Read-only:
+**Status (2026-10-26): ✅ HW-checked on the rig (below); built, sim-proven and fitted on
+`feature/vm-snapshot`.** Read-only:
 it changes nothing the VM does. It is the first of the save-state steps agreed with the
 maintainer (full save states only, no resume-only feature): (1) the Scooby-Doo 2 freeze
 diagnosed (the restore's seek lands in an audio-only VOBU; `docs/roadmap.md` "Save
@@ -510,7 +511,7 @@ feature.
 `tools/mister.py snap` prints it by name. That is the data RAM (GPRMs, counter modes, the
 fallback chain, RSM, the dead-end latch), all 24 SPRMs as a command would read them, the
 wrapper's own state (domain, VTS, last menu, LFSR, ...), the reader's read-backs, and the
-playhead's position. Uses now: `nav_diff` can compare the whole state at a park (SPRM8 is a
+position of the last NAV pack parsed (see the HW check below: it leads the screen). Uses now: `nav_diff` can compare the whole state at a park (SPRM8 is a
 blind spot of §5 today); a bug report can carry it. Step 3 reads the same words back.
 
 **How.**
@@ -546,6 +547,22 @@ run_vm_snap.sh --red`, `main/tests/run_tests.sh --red` (`dvd_ctl_test` [6]–[11
 again). A request while a jump waits for its verdict waits for the VM's give-up timer
 (~0.62 s). The snapshot leaves out `sprm8_frozen`, `ptt_pend` and the sequencer's registers:
 none matters at rest, and the format is versioned, so one can be added if step 3 needs it.
+
+**HW check (2026-10-26, rig, `DVD_vmsnap_20261026_1540.rbf` + the branch's Main).**
+Scooby-Doo 2 with the nav event FIFO draining from boot; `mister.py snap` at the main
+menu and inside the Mystery Inc. HQ minigame (VTS 2 PGC 4). Both snapshots decode to the
+expected place (VTSM menu with RSM = title-set 1 PGC 2, the boot chain; then TT, SPRM4 =
+10, SPRM6 = 4) and **all 16 GPRMs equal the last value the FIFO logged for each** (46 and
+62 writes; in the game g8 = g15 = `0x3e7`, as the PGC's PRE writes). The check can fail:
+dropping the single write g15 = `0x3e7` from the log is reported as a g15 mismatch.
+
+⚠ **The position is the last NAV pack the DEMUX parsed, not the picture on screen.** In
+the minigame the screen was 5 s into cell 1 while `nv_pck_lbn` was already in cell 2's
+sectors: in a low-bitrate cell the decoder's buffers hold seconds of stream. The old
+save-state note called `dsi_nv_pck_lbn` "the playhead"; it leads it. A restore landing on it
+skips ahead by that lead (the old branch's film bookmarks landed ~1-3 s late, which fits).
+Step 3 should save the position of the displayed picture (e.g. the NAV pack whose VOBU
+holds the displayed PTS), or step back by the buffered lead.
 
 **Cost, measured** (full fit `DVD_vmsnap_20261026_1540.rbf`, SEED 7, against the
 `DVD_playharness_20261025_0214` fit of `main`'s code): `vm_snap` **125 ALM, 220 registers,
