@@ -17,7 +17,7 @@ model comparable without a cycle model of the wrapper:
     pm  <index> <value>            a program-map byte
     pulse <name>[=<value>] ...     one-cycle pulses, together in one cycle:
         loaded error cellcmd=<nr> pgcend btn=<16 hex> menu title return cmenu
-        chedge=<dir> start tick stir=<value> agl=<value>
+        chedge=<dir> start tick stir=<value> agl=<value> snap
     timeout                        the wait timer expires (only while waiting)
     # ...                          a comment
 
@@ -25,6 +25,7 @@ After each line the model runs to quiescence and appends to its log:
     P <step> <pulse> <fields>      an output pulse, in order
     L <step> <reg> <value>         a change of SPRM1/2/3/8 (each register in order)
     S <step> <name>=<hex> ...      the state at quiescence (after pulse/timeout/settle)
+    N <step> <hex> ...             a completed state snapshot, its words in order
 The A/B (tools/vm_ab.py) compares these against the same script run on the RTL.
 """
 import os
@@ -44,7 +45,7 @@ INPUTS = {   # name: (width, reset value). The cfg defaults are libdvdnav's cons
     'btn_sel': (6, 0), 'btns_armed': (1, 0), 'wait_hold': (1, 0),
 }
 PULSES = ['loaded', 'error', 'cellcmd', 'pgcend', 'btn', 'menu', 'title', 'return',
-          'cmenu', 'chedge', 'start', 'tick', 'stir', 'agl', 'ptt']
+          'cmenu', 'chedge', 'start', 'tick', 'stir', 'agl', 'ptt', 'snap']
 DOM_VMGM, DOM_VTSM, DOM_TT = 1, 2, 3
 EVB = N.EV
 
@@ -107,6 +108,8 @@ class Shell:
         self.btnf_val = 1
         self.lf_pgcn = 0
         self.pre_armed = False
+        self.snap_pend = False
+        self.snap_buf = []
         self.cc_nr = 0
         self.btn_cmd = 0
         self.chedge_dir = 0
@@ -231,6 +234,8 @@ class Shell:
             self.events &= ~v
         elif name == 'EVSET':
             self.events |= v & ((1 << len(N.EVENTS)) - 1)
+        elif name == 'SNAP':
+            self.snap_buf.append(v & 0xFFFF)
         elif name == 'PULSE':
             if v & N.PB['BTNF']:
                 self._emit('BTNF', self.btnf_val)
@@ -254,6 +259,9 @@ class Shell:
                 self.timeout = False
             if v & N.PB['TICKDONE']:
                 self.tick_pending = False
+            if v & N.PB['SNAPDONE']:
+                self.log.append('N %d ' % self.step_no + ' '.join('%04x' % w for w in self.snap_buf))
+                self.snap_buf = []
         else:
             raise N.SeqError(f'output port {p}')
 
@@ -274,6 +282,9 @@ class Shell:
                 if self.events & EVB[n]:
                     self.events &= ~EVB[n]
                     return i + 2
+            if self.snap_pend and not self.ptt_pend:   # last: a VM at rest, its part landed
+                self.snap_pend = False
+                return N.WEV_IDLE.index('SNAP')
             return None
         if self.events & EVB['LOADED']:
             return 0
@@ -312,6 +323,8 @@ class Shell:
             self.ptt_pend, self.ptt_q = True, ps['ptt'] & 0x7FF
         if 'tick' in ps:
             self.tick_pending = True
+        if 'snap' in ps:
+            self.snap_pend = True
         if 'loaded' in ps:
             self.pre_armed = True
         if L['enable']:
@@ -347,6 +360,9 @@ class Shell:
     def run(self):
         self.m.run()
         self._ptt_apply()     # the RTL lands a held part once the VM is at rest
+        if self.snap_pend and not self.ptt_pend and self.m.waiting == 0:
+            self.m.run()      # a snapshot waits for that landing, then runs
+            self._ptt_apply()
         self._shadow()
 
     def dump(self):

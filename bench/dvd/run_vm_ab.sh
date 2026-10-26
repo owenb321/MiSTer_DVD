@@ -15,9 +15,14 @@
 # The generator biases a few commands (SetGPRMMD counters, JumpSS/CallSS VTSM) so
 # every ;MUT arm bites even at 60 x 80; the corpus is deterministic per seed.
 #
+# STATE SNAPSHOTS: every script also carries `pulse snap` steps (docs/nav_engine.md
+# "State snapshot"). The old FSM has no snapshot, so old = new proves a snapshot changes
+# nothing the VM does; the snapshot's words are compared py = new.
+#
 # RED: (a) every `;MUT` arm in dvd/nav/vm.uasm, run in the Python VM, diverges from
-# the old FSM somewhere in the corpus (BLIND = FAIL); (b) mutations of the wrapper's
-# RTL (the hardwired half, which no ;MUT reaches) diverge in the RTL A/B.
+# the old FSM somewhere in the corpus (BLIND = FAIL) -- a `snap*` arm, which the old
+# FSM cannot see, must change the snapshot's words instead; (b) mutations of the
+# wrapper's RTL (the hardwired half, which no ;MUT reaches) diverge in the RTL A/B.
 set -u
 cd "$(dirname "$0")/../.."
 SEEDS=${VM_AB_SEEDS:-300}
@@ -55,7 +60,7 @@ wrap() {   # $1 label, $2 sed expression on dvd/dvd_vm.sv
     if cmp -s dvd/dvd_vm.sv "$src"; then failed "$1: the mutation did not apply (anchor moved)"; return; fi
     if python3 tools/vm_ab.py --new --vm-src "$src" --seeds 40 --steps 80 > ".sim/vm_ab/$1.txt" 2>&1; then
         failed "$1: the A/B PASSED the mutant"
-    else pass "$1 -> $(grep -m1 -o '\[new vs old\]: step [0-9]* [A-Z][^:]*' ".sim/vm_ab/$1.txt" || echo diverged)"; fi
+    else pass "$1 -> $(grep -m1 -o '\[new vs [a-z]*[^]]*\]: step [0-9]* [A-Z][^:]*\|\[hang\]' ".sim/vm_ab/$1.txt" || echo diverged)"; fi
 }
 # the event priority: Return ahead of Menu
 wrap W1-priority "s/for (ei = UEV_N - 1; ei >= 0; ei = ei - 1)/for (ei = 0; ei < UEV_N; ei = ei + 1)/"
@@ -74,6 +79,12 @@ wrap W5-sprm6-load "s/        if (pgc_loaded \&\& vm_dom == DOM_TT) sprm6 <= cur
 wrap W6-ptt-dom "s/        if (ptt_upd \&\& vm_dom == DOM_TT) begin/        if (ptt_upd) begin/"
 # SPRM7 lands mid-PRE (libdvdnav's set_PGN runs after the PRE)
 wrap W7-ptt-pre "s/        end else if (ptt_pend \&\& !pre_armed \&\& !pgc_loaded \&\& vm_rest) begin/        end else if (ptt_pend) begin/"
+# the snapshot is offered with events still pending (it must wait for rest)
+wrap W8-snap-busy "s/if (!ev_valid \&\& snap_pend \&\& !ptt_pend) begin/if (snap_pend \&\& !ptt_pend) begin/"
+# the snapshot does not wait for a held SPRM7 part to land (a cycle race)
+wrap W9-snap-ptt "s/if (!ev_valid \&\& snap_pend \&\& !ptt_pend) begin/if (!ev_valid \&\& snap_pend) begin/"
+# taking the snapshot does not clear the request (it would run forever)
+wrap W10-snap-held "s/else if (wev_take \&\& !wev_mode \&\& ev_idx == UWEV_SNAP) snap_pend <= 1'b0;/else if (1'b0) snap_pend <= 1'b0;/"
 
 [ $rc -eq 0 ] && echo "run_vm_ab: ALL GREEN" || echo "run_vm_ab: FAILURES"
 exit $rc

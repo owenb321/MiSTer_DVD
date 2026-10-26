@@ -95,10 +95,11 @@ IN['SPRMW'] = 32                 # 32..63: the live-SPRM window (0 for RAM-resid
 OUT_PORTS = [
     'J_DE', 'J_VTS', 'J_PGCN', 'RSV3', 'J_TTN', 'J_PGN', 'J_PTT', 'J_CELL',
     'SEEK_CELL', 'PULSE', 'BTNF_VAL', 'LF_PGCN', 'SPRM1', 'SPRM2', 'SPRM3', 'SPRM8',
-    'VM_DOM', 'VM_VTS', 'FLAGS', 'EVCLR', 'EVSET', 'SPRM6', 'SPRM7']
+    'VM_DOM', 'VM_VTS', 'FLAGS', 'EVCLR', 'EVSET', 'SPRM6', 'SPRM7', 'SNAP']
 OUT = {n: i for i, n in enumerate(OUT_PORTS)}
 # PULSE bits
-PULSE_BITS = ['JUMP', 'SEEK', 'REPLAY', 'ADV', 'BTNF', 'LINKFAIL', 'LFSTEP', 'WARM', 'TICKDONE']
+PULSE_BITS = ['JUMP', 'SEEK', 'REPLAY', 'ADV', 'BTNF', 'LINKFAIL', 'LFSTEP', 'WARM', 'TICKDONE',
+              'SNAPDONE']
 PB = {n: 1 << i for i, n in enumerate(PULSE_BITS)}
 # FLAGS bits: blk[1:0], nat_src, usr_edge, walk (the tick walk counts as V_IDLE)
 FLAG_BITS = {'BLK': 0, 'NAT': 2, 'USR': 3, 'WALK': 4}     # bit positions; blk is 2 bits
@@ -106,8 +107,10 @@ FLAG_BITS = {'BLK': 0, 'NAT': 2, 'USR': 3, 'WALK': 4}     # bit positions; blk i
 EVENTS = ['BOOT', 'ERROR', 'LOADED', 'BTN', 'CELLCMD', 'PGCEND', 'CHEDGE',
           'MENU', 'TITLE', 'CMENU', 'RETURN']
 EV = {n: 1 << i for i, n in enumerate(EVENTS)}
-# WEV indices
-WEV_IDLE = ['TICK', 'DISABLED'] + EVENTS
+# WEV indices. SNAP is not an event latch: the wrapper keeps the request apart from
+# `ev` (E_DISABLED clears every latch) and offers it last, only when nothing else is
+# pending -- so a snapshot is always of a VM at rest.
+WEV_IDLE = ['TICK', 'DISABLED'] + EVENTS + ['SNAP']
 WEV_WAIT = ['LOADED', 'ERROR', 'TIMEOUT']
 
 # ------------------------------------------------------------------ the data RAM map
@@ -131,6 +134,46 @@ RAM_MAP = {
     'T0': 0x28,          # 0x28..0x2F handler scratch
     'SPRMI': 0x40,       # 0x40..0x5F the SPRM image: 4..7, 9, 10, 13 live here
 }
+# The VM state snapshot (vm.uasm E_SNAP; docs/nav_engine.md "State snapshot"): the
+# words the handler streams out through O_SNAP, in order. ★ This list IS the format --
+# the RTL handler, the Python model and every decoder (tools/vm_snap.py) read it from
+# here, and SNAP_FMT, a hash of it and of the maps it indexes, is what a reader checks
+# before trusting a word's name. Change the RAM map or the input ports and the hash
+# changes with them, so an old snapshot is refused rather than read against a new map.
+SNAP_RAM_END = 0x28                   # data RAM 0x00..0x27: everything below the scratch
+SNAP_SPRMS = 24                       # SPRM 0..23 as the VM reads them (RAM image | window)
+SNAP_INS = 32                         # input ports 0..31: the wrapper's state, the reader's
+
+
+def snap_layout():
+    """-> the snapshot's word names, in stream order."""
+    ram = {}
+    for k, a in RAM_MAP.items():
+        if k in ('MOUNT_CLR', 'T0', 'SPRMI'):
+            continue
+        ram.setdefault(a, k.lower())
+    names = []
+    for a in range(SNAP_RAM_END):
+        if a < 16:
+            names.append('g%d' % a)
+        else:
+            names.append(ram.get(a, 'ram%02x' % a))
+    names += ['sprm%d' % n for n in range(SNAP_SPRMS)]
+    names += ['in_' + n.lower() for n in IN_PORTS[:SNAP_INS]]
+    return names
+
+
+def snap_fmt():
+    """A 16-bit id of the snapshot format: CRC-16/CCITT of the layout and the maps."""
+    text = '|'.join(snap_layout()) + '|' + repr(sorted(RAM_MAP.items())) + '|' + ','.join(IN_PORTS)
+    crc = 0xFFFF
+    for ch in text.encode():
+        crc ^= ch << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc
+
+
 FB_CODES = {'FB_NONE': 0, 'FB_FP': 1, 'FB_VTSM': 2, 'FB_VTSM2': 3, 'FB_VMGM': 4,
             'FB_TITLE': 5, 'FB_GAVEUP': 6, 'FB_BOOTM': 7}
 DOM_CODES = {'DOM_FP': 0, 'DOM_VMGM': 1, 'DOM_VTSM': 2, 'DOM_TT': 3}
@@ -157,6 +200,9 @@ def base_equ():
     equ.update({'FBIT_' + k: v for k, v in FLAG_BITS.items() if k != 'BLK'})
     equ.update({'EV_' + k: v for k, v in EV.items()})
     equ['EV_ALL'] = (1 << len(EVENTS)) - 1
+    equ['SNAP_RAM_END'] = SNAP_RAM_END
+    equ['SNAP_SPRMS'] = SNAP_SPRMS
+    equ['SNAP_INS'] = SNAP_INS
     equ.update({'M_' + k: v for k, v in RAM_MAP.items()})
     equ.update(FB_CODES)
     equ.update(DOM_CODES)
@@ -489,6 +535,9 @@ def ucode_svh(words, labels):
     for i, n in enumerate(EVENTS):
         lines.append(f'localparam integer UEV_{n} = {i};')
     lines.append(f'localparam integer UEV_N = {len(EVENTS)};')
+    lines.append(f"localparam [3:0] UWEV_SNAP = 4'd{WEV_IDLE.index('SNAP')};")
+    lines.append(f'localparam integer USNAP_WORDS = {len(snap_layout())};')
+    lines.append(f"localparam [15:0] USNAP_FMT = 16'h{snap_fmt():04x};")
     for n, a in RAM_MAP.items():
         lines.append(f"localparam [7:0] UM_{n} = 8'h{a:02x};")
     for n, v in FB_CODES.items():

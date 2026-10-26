@@ -22,6 +22,13 @@ Usage:
     tools/vm_ab.py --seeds 200 --steps 120
     tools/vm_ab.py --script s.txt        # one script, full logs kept in .sim/vm_ab/
     tools/vm_ab.py --red                 # every ;MUT arm in dvd/nav/vm.uasm must diverge
+
+STATE SNAPSHOTS (docs/nav_engine.md "State snapshot"). The generator also drops `pulse
+snap` steps into every script, drawn from a SECOND random stream so each seed's other
+steps are exactly what they were before snapshots existed. The old FSM has no snapshot,
+so a snap step is a no-op there: old = new over the same script is the proof that taking
+a snapshot changes nothing the VM does. The snapshot's words (the N stream) are compared
+py vs new, and a ;MUT arm that corrupts them must make that comparison fail.
 """
 import argparse
 import concurrent.futures
@@ -142,6 +149,7 @@ def rand_table(rng):
 
 def gen_script(seed, steps):
     rng = random.Random(seed)
+    rsn = random.Random(seed ^ 0x5A5A5A)  # the snapshot steps: their own stream
     s = [f'# vm_ab seed {seed}']
     for name in ('cur_vts', 'best_menu_vts', 'auto_vts', 'cell_count', 'cur_pgcn'):
         s.append(f'set {name} {rng.randrange(1, 6)}')
@@ -188,6 +196,8 @@ def gen_script(seed, steps):
             s.append('set nav_ready 1')
         else:
             s.append('settle')
+        if rsn.random() < 0.08:
+            s.append('pulse snap')
     return s
 
 
@@ -291,7 +301,7 @@ def one(job):
             msgs.append(f'FAIL {name} [new]: did not run:\n{err}')
         else:
             if lp is not None:
-                d = compare(lp, ln, 'TC')
+                d = compare(lp, ln, 'TCN')
                 if d:
                     msgs.append(f'FAIL {name} [new vs py: trace/cycles]: {d}')
             if keep:
@@ -336,6 +346,7 @@ def main():
 
     if a.red:
         arms = re.findall(r';\s*MUT\s+(\w+)\s*:', open(N.UASM).read())
+        goods = {}
         for arm in arms:
             bit = None
             for name, lines in corpus:
@@ -343,6 +354,14 @@ def main():
                 if lp is None or compare(olds[name], lp):
                     bit = name
                     break
+                # a snapshot arm changes nothing the old FSM can see: it must change
+                # the snapshot's words against the unmutated model instead
+                if arm.startswith('snap'):
+                    if name not in goods:
+                        goods[name] = run_py(lines)[0]
+                    if compare(goods[name], lp, 'N'):
+                        bit = name
+                        break
             print(f'  RED {arm}: ' + (f'diverges ({bit})' if bit else 'BLIND -- never diverges'))
             if not bit:
                 fails += 1

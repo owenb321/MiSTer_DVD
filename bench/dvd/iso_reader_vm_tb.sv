@@ -200,7 +200,7 @@ module iso_reader_vm_tb;
         .cfg_sprm14(pr_sprm14), .cfg_sprm15(pr_sprm15), .cfg_sprm20(pr_sprm20),
         // new VM ports tied off (a floating input is X).
         .agl_set(1'b0), .agl_set_val(4'd1),
-        .ptt_upd(ptt_upd_w), .ptt_val(ptt_cur_w),
+        .ptt_upd(ptt_upd_w), .ptt_val(ptt_cur_w), .snap_req(1'b0),
         .clk(clk), .rst_n(rst_n), .enable(1'b1), .start(start), .cfg_lang(16'h656E),
         .rnd_seed(16'hACE1), .sec_tick(1'b0),
         .entropy_stir(1'b0), .entropy_val(16'd0),
