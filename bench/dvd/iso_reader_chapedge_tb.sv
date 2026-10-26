@@ -101,7 +101,7 @@ module iso_reader_chapedge_tb;
         .chap_pulse(chap_pulse), .chap_dir(chap_dir), .chap_mag(chap_mag),
         .chap_at_start(chap_at_start), .cur_pgm(cur_pgm_w), .nr_ptt_o(nr_ptt_w),
         .chap_edge(chap_edge), .chap_edge_dir(chap_edge_dir),
-        .jump_pulse(jump_pulse), .jump_natural(1'b0), .jump_domain(jump_domain), .jump_vts(jump_vts),
+        .jump_pulse(jump_pulse), .jump_natural(1'b0), .jump_ttn_hint(1'b0), .jump_domain(jump_domain), .jump_vts(jump_vts),
         .jump_pgcn(jump_pgcn), .jump_entry(jump_entry), .jump_cell(8'd0),
         .jump_ack(jump_ack), .pgc_loaded(pgc_loaded), .pgc_error(pgc_error),
         .menu_active(menu_active), .still_active(still_active), .cur_vts(),

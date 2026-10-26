@@ -161,7 +161,7 @@ module iso_reader_menudrain_tb;
         .cmd_nr_pgm(nr_pgm_w),
         .seek_pulse(vm_seek_pulse), .seek_cell(vm_seek_cell), .seek_ack(seek_ack),
         .seek_natural(vm_seek_pulse & vm_from_wait_w),
-        .jump_natural(vm_from_wait_w),
+        .jump_natural(vm_from_wait_w), .jump_ttn_hint(1'b0),
         .nat_wait_o(nat_wait_w),
         .cur_cell(cur_cell), .cell_ready(cell_ready),
         .jump_pulse(vm_jump_pulse), .jump_domain(vm_jump_domain),
@@ -191,7 +191,7 @@ module iso_reader_menudrain_tb;
         .cfg_sprm14(16'h0100), .cfg_sprm15(16'h7CFC), .cfg_sprm20(16'h0001),
         // new VM ports tied off (a floating input is X).
         .agl_set(1'b0), .agl_set_val(4'd1),
-        .ptt_upd(ptt_upd_w), .ptt_val(ptt_cur_w), .snap_req(1'b0),
+        .ptt_upd(ptt_upd_w), .ptt_val(ptt_cur_w), .snap_req(1'b0), .restore_req(1'b0), .rst_q(16'd0),
         .clk(clk), .rst_n(rst_n), .enable(1'b1), .start(start), .cfg_lang(16'h656E),
         .rnd_seed(16'hACE1), .sec_tick(1'b0),
         .entropy_stir(1'b0), .entropy_val(16'd0),

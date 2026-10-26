@@ -82,7 +82,7 @@ module iso_reader_titleprobe_tb;
         .vm_pre_done(1'b0),
         .jump_pulse(jump_pulse), .jump_domain(jump_domain), .jump_vts(8'd0),
         .jump_pgcn(16'd0), .jump_entry(jump_entry), .jump_cell(8'd0),
-        .jump_ttn(7'd0), .jump_pgn(8'd0), .jump_ptt(10'd0), .jump_natural(1'b0),
+        .jump_ttn(7'd0), .jump_pgn(8'd0), .jump_ptt(10'd0), .jump_natural(1'b0), .jump_ttn_hint(1'b0),
         .menu_btns_armed(1'b0),
         .vm_mode(vm_mode), .vm_adv(1'b0), .vm_replay(1'b0),
         .attr_a_sel(3'd0), .attr_s_sel(5'd0),

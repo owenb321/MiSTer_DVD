@@ -96,7 +96,7 @@ module iso_reader_stilloff_tb;
         .chap_pulse(1'b0), .chap_dir(1'b0), .chap_mag(5'd1),
         .chap_at_start(1'b1), .cur_pgm(), .nr_ptt_o(),
         .chap_edge(), .chap_edge_dir(),
-        .jump_pulse(jump_pulse), .jump_natural(1'b0), .jump_domain(jump_domain), .jump_vts(jump_vts),
+        .jump_pulse(jump_pulse), .jump_natural(1'b0), .jump_ttn_hint(1'b0), .jump_domain(jump_domain), .jump_vts(jump_vts),
         .jump_pgcn(jump_pgcn), .jump_entry(jump_entry), .jump_cell(8'd0),
         .jump_ack(jump_ack), .pgc_loaded(pgc_loaded), .pgc_error(pgc_error),
         .menu_active(menu_active), .still_active(still_active), .cur_vts(),

@@ -23,6 +23,16 @@
 //              seq unchanged, NO payload streamed; the verdict lets it complete
 //   [reread]   the same snapshot read twice gives the same words (the read-ahead)
 //
+// RESTORE (save states step 3, docs/nav_engine.md §9):
+//   [load]     a good blob (the snapshot read back) is checked, taken at rest, and the
+//              VM jumps to the saved PGCN / cell / domain; after the landing its GPRMs
+//              and RSM equal the blob's; verdict 1 then 2, the restore count moves, and
+//              the header no longer claims a snapshot (len 0)
+//   [refuse]   a wrong format, length or checksum: verdict 3 / 4 / 5, no restore, the
+//              VM's RAM untouched
+//   [pending]  a load while a restore is still pending (the VM is waiting on a jump):
+//              verdict 6, and the pending blob is not overwritten
+//
 // Run: iverilog -g2012 -I dvd -o /tmp/vs dvd/dvd_vm.sv dvd/vm_snap.sv bench/dvd/vm_snap_tb.sv && vvp /tmp/vs
 `timescale 1ns/1ps
 `default_nettype none
@@ -71,6 +81,9 @@ module vm_snap_tb;
     wire       drive; wire [15:0] dout;
 
     wire        snap_req, snap_we, snap_done; wire [15:0] snap_d, snap_fmt;
+    wire        restore_req, rst_done, jump_ttn_hint; wire [6:0] rst_ra; wire [15:0] rst_q;
+    wire        jump_pulse; wire [1:0] jump_domain; wire [15:0] jump_pgcn; wire [7:0] jump_cell;
+    wire [7:0]  jump_vts; wire [6:0] jump_ttn;
 
     dvd_vm vm (
         .clk(clk), .rst_n(rst_n), .enable(enable), .start(start), .cfg_lang(cfg_lang),
@@ -89,20 +102,23 @@ module vm_snap_tb;
         .key_cmenu(key_cmenu), .key_chedge(key_chedge), .key_chedge_dir(key_chedge_dir),
         .btn_cmd(btn_cmd), .btn_cmd_valid(btn_cmd_valid), .btn_sel(btn_sel),
         .btns_armed(btns_armed), .btn_force(), .btn_force_val(), .hl_btnn(),
-        .jump_pulse(), .jump_domain(), .jump_vts(), .jump_pgcn(), .jump_entry(),
-        .jump_ttn(), .jump_pgn(), .jump_ptt(), .jump_cell(),
+        .jump_pulse(jump_pulse), .jump_domain(jump_domain), .jump_vts(jump_vts),
+        .jump_pgcn(jump_pgcn), .jump_entry(), .jump_ttn(jump_ttn), .jump_pgn(), .jump_ptt(),
+        .jump_cell(jump_cell),
         .seek_pulse(), .seek_cell(), .vm_replay(), .vm_adv(), .vm_from_wait(),
         .wait_hold(wait_hold), .sprm_astn(), .sprm_spstn(), .sprm_agln(), .pre_done(),
         .agl_set(agl_set), .agl_set_val(agl_set_val), .ptt_upd(ptt_upd), .ptt_val(ptt_val),
         .dbg_state(), .dbg_g3(), .dbg_g14_9(), .dbg_rsm(), .dbg_deadend(),
         .link_fail(), .link_fail_pgcn(), .trc_gprm_we(), .trc_gprm_a(), .trc_gprm_d(),
         .snap_req(snap_req), .snap_we(snap_we), .snap_d(snap_d), .snap_done(snap_done),
-        .snap_fmt(snap_fmt));
+        .snap_fmt(snap_fmt), .restore_req(restore_req), .rst_ra(rst_ra), .rst_q(rst_q),
+        .rst_done(rst_done), .jump_ttn_hint(jump_ttn_hint));
 
     vm_snap dut (
         .clk(clk), .rst_n(rst_n), .io_enable(io_enable), .io_strobe(io_strobe), .io_din(io_din),
         .drive(drive), .dout(dout), .snap_req(snap_req), .snap_we(snap_we), .snap_d(snap_d),
-        .snap_done(snap_done), .snap_fmt(snap_fmt), .pos_clr(pos_clr), .pos_commit(pos_commit),
+        .snap_done(snap_done), .snap_fmt(snap_fmt), .restore_req(restore_req), .rst_ra(rst_ra),
+        .rst_q(rst_q), .rst_done(rst_done), .pos_clr(pos_clr), .pos_commit(pos_commit),
         .nv_pck_lbn(nv_pck_lbn), .first_ref_ea(first_ref_ea), .prev_video(prev_video),
         .c_eltm(c_eltm), .vob_idn(vob_idn), .c_idn(c_idn));
 
@@ -131,13 +147,15 @@ module vm_snap_tb;
     // ---- one transaction: the command, the control word at strobe 1, then `n` more
     //      words; strobes 3 cycles apart (the module needs >= 2) ----
     reg [15:0] w [0:255];
+    reg [15:0] tx [0:255];                 // the host's words from strobe 2 on (a load)
+    integer    ntx = 0;
     task txn(input [15:0] cmd, input [15:0] ctl, input integer n); integer k; begin
         @(negedge clk); io_enable = 1; drive_seen = 0; nclk(2);
         io_din = cmd; io_strobe = 1; @(negedge clk); io_strobe = 0; io_din = 0;
         w[0] = dout;
         for (k = 1; k < n; k = k + 1) begin
             nclk(2);
-            io_din = (k == 1) ? ctl : 16'd0;
+            io_din = (k == 1) ? ctl : (k - 2 < ntx) ? tx[k - 2] : 16'd0;
             io_strobe = 1; @(negedge clk); io_strobe = 0; io_din = 0;
             w[k] = dout;
         end
@@ -193,6 +211,31 @@ module vm_snap_tb;
 
     integer i, k, n_before, seq0;
     reg ok;
+    // ---- restores ----
+    reg  [15:0] blob [0:127];
+    reg  [15:0] tx2  [0:127];
+    reg  [15:0] sum, sum2;
+    integer     n_rreq = 0, n_jump = 0;
+    reg  [15:0] j_pgcn; reg [7:0] j_cell; reg [1:0] j_dom;
+    always @(posedge clk) begin
+        if (restore_req === 1'b1) n_rreq = n_rreq + 1;
+        if (jump_pulse === 1'b1) begin
+            n_jump = n_jump + 1; j_pgcn = jump_pgcn; j_cell = jump_cell; j_dom = jump_domain;
+        end
+    end
+    // a LOAD: control bit 1, then fmt, len, checksum and the first n words of `blob`
+    task load(input [15:0] fmt, input [15:0] ln, input [15:0] sm, input integer n); begin
+        tx[0] = fmt; tx[1] = ln; tx[2] = sm;
+        for (k = 0; k < n; k = k + 1) tx[3 + k] = blob[k];
+        ntx = 3 + n;
+        txn(CMD, 16'd2, 2 + ntx);
+        ntx = 0;
+    end endtask
+    task wait_rst(input integer limit); integer g; begin
+        g = 0;
+        while (dut.rbusy === 1'b1 && g < limit) begin @(negedge clk); g = g + 1; end
+        nclk(20);
+    end endtask
     initial begin
         repeat (4) @(posedge clk);
         @(negedge clk) rst_n = 1;
@@ -315,6 +358,75 @@ module vm_snap_tb;
         read_all;
         check(w[1] === seq0[15:0] + 16'd1, "the waiting snapshot did not complete at rest");
         check(w[2] === {8'd0, 8'd96}, "busy/len after the waiting snapshot");
+        end_arm;
+
+        // ------------------------------------------------------------ restores
+        // reach rest in a known place: the [busy] arm left the VM at rest after a load
+        nclk(200);
+        nav_ready = 0;
+        request; wait_done(4000); nclk(4);
+        read_all;                                   // the reference snapshot
+        for (i = 0; i < USNAP_WORDS; i = i + 1) blob[i] = w[HDR + i];
+        // then the VM goes elsewhere: different RAM, a different reader position
+        for (i = 0; i < 40; i = i + 1) vm.u_seq.dram[i] = 16'h7700 + i;
+        cur_pgcn = 16'd29; cur_cell = 8'd3; cur_vts = 8'd6;
+
+        // ------------------------------------------------------------ [refuse]
+        begin_arm("refuse");
+        sum = 0; for (i = 0; i < USNAP_WORDS; i = i + 1) sum = sum + blob[i];
+        load(USNAP_FMT ^ 16'h0100, 16'd96, sum, USNAP_WORDS); read_all;
+        check(w[4][15:13] === 3'd3, "a wrong format is not refused as one");
+        load(USNAP_FMT, 16'd95, sum, USNAP_WORDS); read_all;
+        check(w[4][15:13] === 3'd4, "a wrong length is not refused as one");
+        load(USNAP_FMT, 16'd96, sum, USNAP_WORDS - 1); read_all;
+        check(w[4][15:13] === 3'd4, "a short blob is not refused as a length");
+        load(USNAP_FMT, 16'd96, sum ^ 16'h0001, USNAP_WORDS); read_all;
+        check(w[4][15:13] === 3'd5, "a wrong checksum is not refused as one");
+        nclk(400);
+        ok = 1; for (i = 0; i < 40; i = i + 1) if (vm.u_seq.dram[i] !== 16'h7700 + i) ok = 0;
+        check(ok, "a refused blob changed the VM's RAM");
+        check(n_rreq == 0, "a refused blob raised restore_req");
+        end_arm;
+
+        // ------------------------------------------------------------ [load]
+        begin_arm("load");
+        n_jump = 0;
+        load(USNAP_FMT, 16'd96, sum, USNAP_WORDS);
+        read_all;
+        check(w[4][15:13] === 3'd1 || w[4][15:13] === 3'd2, "a good blob is not pending or applied");
+        check(w[2][7:0] === 8'd0, "the header still claims a snapshot after a load");
+        wait_rst(4000);
+        check(n_jump == 1, "the restore did not issue exactly one jump");
+        check(j_pgcn === blob[65] && j_cell === blob[66][7:0] && j_dom === blob[82][1:0],
+              "the jump is not the saved PGCN / cell / domain");
+        // the reader lands: the saved place loads
+        cur_pgcn = blob[65]; cur_cell = blob[66][7:0]; cur_vts = blob[64][7:0];
+        @(negedge clk) pgc_loaded = 1; @(negedge clk) pgc_loaded = 0;
+        nclk(400);
+        ok = 1; for (i = 0; i < 16; i = i + 1) if (vm.u_seq.dram[i] !== blob[i]) ok = 0;
+        check(ok, "the GPRMs are not the blob's after the landing");
+        ok = 1; for (i = UM_RSM_VTS; i <= UM_RSM_R8; i = i + 1)
+            if (i != UM_DE_SEEN && i != UM_DE_VTS && i != UM_DE_PGCN && vm.u_seq.dram[i] !== blob[i]) ok = 0;
+        check(ok, "RSM is not the blob's after the landing");
+        read_all;
+        check(w[4][15:13] === 3'd2 && w[4][12:8] === 5'd1, "verdict / restore count not {applied, 1}");
+        end_arm;
+
+        // ------------------------------------------------------------ [pending]
+        begin_arm("pending");
+        // a jump the VM waits on: boot again, no verdict -- the restore cannot run
+        @(negedge clk) nav_ready = 1;
+        nclk(200);
+        check(vm.u_seq.parked_wait === 1'b1, "precondition: the VM is not waiting on a verdict");
+        load(USNAP_FMT, 16'd96, sum, USNAP_WORDS); read_all;
+        check(w[4][15:13] === 3'd1, "the first load is not pending");
+        for (i = 0; i < USNAP_WORDS; i = i + 1) tx2[i] = blob[i];
+        for (i = 0; i < USNAP_WORDS; i = i + 1) blob[i] = 16'h5A00 + i;
+        sum2 = 0; for (i = 0; i < USNAP_WORDS; i = i + 1) sum2 = sum2 + blob[i];
+        load(USNAP_FMT, 16'd96, sum2, USNAP_WORDS); read_all;
+        check(w[4][15:13] === 3'd6, "a load over a pending restore is not refused");
+        ok = 1; for (i = 0; i < USNAP_WORDS; i = i + 1) if (dut.buf_m[i] !== tx2[i]) ok = 0;
+        check(ok, "the pending blob was overwritten");
         end_arm;
 
         if (any_fail) $display("RESULT: FAIL");

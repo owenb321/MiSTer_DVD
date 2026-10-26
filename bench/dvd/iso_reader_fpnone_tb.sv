@@ -100,7 +100,7 @@ module iso_reader_fpnone_tb;
         .chap_at_start(1'b1), .cur_pgm(cur_pgm_w), .nr_ptt_o(nr_ptt_w),
         .ptt_upd(ptt_upd_w), .ptt_cur(ptt_cur_w),
         .keep_vbuf(keep_vbuf), .jump_cross(jump_cross),
-        .jump_pulse(jump_pulse), .jump_natural(1'b0), .jump_domain(jump_domain),
+        .jump_pulse(jump_pulse), .jump_natural(1'b0), .jump_ttn_hint(1'b0), .jump_domain(jump_domain),
         .jump_vts(jump_vts), .jump_pgcn(jump_pgcn), .jump_entry(jump_entry),
         .jump_cell(8'd0),
         .jump_ack(jump_ack), .pgc_loaded(pgc_loaded), .pgc_error(pgc_error),
