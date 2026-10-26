@@ -23,7 +23,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 ## Hardware status (THIS fork, verified 2026-06-21)
 
 - ✅ **A TITLE CELL COMMAND WITH BUTTONS UP RUNS AT THE DISPLAYED CELL END (issue #176,
-  2026-10-12, branch `fix/cell-cmd-display`; sim-proven, ✅ HW-CONFIRMED A/B vs v0.9.1).**
+  2026-10-12; ✅ MERGED PR #179; ✅ HIL suite vs `main` + maintainer's play-test).**
   - **Field report:** in Mad Dog McCree a shot never registers. HW sweep 2026-10-11 on the
     first shootout (VTS 1 PGC 1 cell 2): Select at 36.2 s PTS hit twice; at 36.35, 36.5,
     36.8 and 37.3 s it missed. The HLI window is 35.55–37.52 s.
@@ -192,15 +192,16 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
     Time Traveler 7/7 (`main` 0/5). Unchanged PASS on both: Thayer's Quest's route into
     VTS 2, Weakest Link's answers, Mad Dog's first-shootout arm timing. The suite is
     `tools/hil_suite.py` on `feature/hil-play-harness` (quick tier ~23 min per build).
-  - **Next:** the maintainer's play-test of `dev-cellcmdhold13`,
-    then the maintainer's play-test, then the PR. Not yet run on HW: a loop disc such as
-    Fairytopia, which is unchanged by construction because a fixed command is never held
-    (bench P2), and Mad Dog II / Crime Patrol by hand. Design notes: `docs/dvd_nav.md` "A
+  - **Merged (PR #179)** after the maintainer's play-test of `dev-cellcmdhold13` and a
+    release-style smoke (T2 menus/film, PAL Progressive/Interlaced, every audio codec,
+    subtitles, transport, a 15-min Men in Black soak: 0 lates/drops, 0 findings). Not yet
+    run on HW: a loop disc such as Fairytopia, which is unchanged by construction because
+    a fixed command is never held (bench P2), and Mad Dog II / Crime Patrol by hand. Design notes: `docs/dvd_nav.md` "A
     cell command with buttons up" and "A window committed on the old timeline is
     re-judged at the re-anchor".
 
-- 🔧 **HIL PLAY HARNESS, SLICE B: NAV EVENT FIFO (2026-10-22, `feature/hil-play-harness`,
-  sim-proven; ⏳ fit, ⏳ HIL).** `dvd/nav_trace.sv` is a 256 × 80-bit clk_sys FIFO of
+- ✅ **HIL PLAY HARNESS, SLICE B: NAV EVENT FIFO (2026-10-22; fitted and HIL-proven on every
+  #176 build, MERGED with PR #179; the harness's host tools stay on `feature/hil-play-harness`).** `dvd/nav_trace.sv` is a 256 × 80-bit clk_sys FIFO of
   timestamped navigation events. There are 16 sources: GPRM writes, STC jumps, key presses,
   button activation, HLI promotion, cell/PGC changes, flushes, audio-ring-low,
   pause/still/live/menu, and 3 spare hooks for issue #176's branch-only signals. Each entry

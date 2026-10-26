@@ -5212,7 +5212,7 @@ PGC-end hold). T1–T7 unchanged and green.
 questions still hold ~18 s and stay answerable; MiB/Matrix/T2 menus, Thayer's timed
 choices and a normal movie unchanged.
 
-### A cell command with buttons up runs at the displayed cell end (issue #176, 2026-10-12) — ✅ HW-CONFIRMED A/B vs v0.9.1 (branch `fix/cell-cmd-display`)
+### A cell command with buttons up runs at the displayed cell end (issue #176, 2026-10-12) — ✅ HW-CONFIRMED, MERGED PR #179
 
 **The defect.** In *Mad Dog McCree* a shot never registered. The first shootout is VTS 1
 PGC 1 cell 2 (4.27 s). Its HLI (35.55–37.52 s PTS) is a 7×5 grid of aim buttons, and only
@@ -5441,7 +5441,7 @@ angle-block ends play without a hitch.
 - The pause on a continuing verdict (Mad Dog's hit) is the price of exactness. If it ever
   matters, the fix is a time-referenced release, not a byte threshold (see above).
 
-### A window committed on the old timeline is re-judged at the re-anchor (issue #176, 2026-10-23) — sim-proven, ⏳ HIL (`dev-cellcmdhold7`)
+### A window committed on the old timeline is re-judged at the re-anchor (issue #176, 2026-10-23) — ✅ HIL (`dev-cellcmdhold7`..`13`), MERGED PR #179
 
 **The reference changed.** The maintainer can hit every Mad Dog window on a SET-TOP player,
 consistently, and the HIL play harness (`docs/hil_play_harness.md`) measured what this core

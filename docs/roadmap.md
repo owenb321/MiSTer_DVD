@@ -623,25 +623,19 @@ in `CONF_STR`. Design: `docs/cdda.md` "`.cue` sheets". ⛔ CHD still not support
 > **top gap confirmed = exact chapters/PTT (7/7 discs); interactive GPRM-counter/NVTMR promoted
 > above parental on measured prevalence (3/7 game discs).** Phase 3 = close gaps in that order.
 
-### ⏳ Issue #176: cell commands with buttons up run at the displayed cell end (branch `fix/cell-cmd-display`)
+### ✅ Issue #176: cell commands with buttons up run at the displayed cell end (MERGED PR #179)
 
-Sim-proven (`bench/dvd/run_cmd_hold.sh --red`) and ✅ HW-confirmed A/B vs v0.9.1 (Mad Dog's
-first shootout: 36.6–37.3 s now hit, `main` misses them; no pause at the junction).
-The 1 s scoring-window lead (2026-10-13) is RETIRED (2026-10-23): it let the continue
-duel be won before the gunman drew; the reference is now the authored window, as a
-set-top player shows it. A window whose PTS restarts is re-judged at the clock's
-re-anchor instead (Mad Dog VTS 15 cell 2). Measured on the HIL play harness
-(`docs/hil_play_harness.md`). HIL on `dev-cellcmdhold7`: VTS 15, the duel and the first
-shootout behave as authored; the saloon gunshots and a VTS 15 freeze were the
-authored-duration still overrunning video cells, fixed in `dev-cellcmdhold8` (the drain
-first). Next step: the harness on `dev-cellcmdhold8`, then hold9 without the `cc_aud_low`
-release, then the maintainer's play-test, then the PR. Open: the
-5+1 pictures lost at every PTS-restart junction (pre-existing, every build), and the
-`cc_aud_low` release costing ~0.2 s of window. Still unchecked on HW: a loop disc
-(Fairytopia), unchanged by construction, and Mad Dog II / Crime Patrol by hand. Design and the library sweep
-behind it: `docs/dvd_nav.md` "A cell command with buttons up". Open follow-up, only if
-the pause on a continuing verdict matters on HW: a time-referenced release (STC against
-the cell's last `vobu_e_ptm`).
+Shipped and HIL-confirmed: the HIL regression suite vs `main` (14 checks, 0 regressions,
+10 fixed: Mad Dog's first shootout and VTS 15, Dragon's Lair 20th, Dragon's Lair II,
+Time Traveler) and the maintainer's play-test. The record is `docs/status_log.md`.
+Follow-ups, all pre-existing and outside #176:
+- the 5+1 pictures skipped at every PTS-restart junction;
+- 2 s authored-duration stills on video cells whose command is fixed (the same whole-second
+  overshoot, without the #176 drain; a fix changes cell timing on every disc);
+- issue #178 (in-title HLI forces the subpicture layer on: Dinosaur's SDH);
+- Thayer's Quest after an early Menu press in the boot chain (maintainer, not yet diffed
+  against libdvdnav);
+- still unchecked by hand: a gapless in-title loop (Fairytopia), Mad Dog II, Crime Patrol.
 
 ### ⏳ 2026-10-01 spec-audit: DVD Demystified 3rd-edition follow-ups (items 1–8 and 10b ✅; the rest re-ranked 2026-10-06, PR #165)
 
