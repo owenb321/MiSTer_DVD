@@ -22,6 +22,28 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ✅ **SAVE STATES FROM THE OSD (save states step 4, 2026-10-27, branch
+  `feature/vm-snapshot`; sim-proven, fitted, HW-checked on the rig; not merged).** OSD page 2:
+  `Slot`, `Save to Slot`, `Load Slot` (`O[54:53]`, `R[55]`, `R[56]`). `vm_snap` counts the
+  presses and latches the slot in header word 2 with `vm_en`; the Main
+  (`main/support/dvd/dvd_sstate.cpp`, transport `dvd_vmsnap.cpp`) writes
+  `savestates/DVD/<disc id>_N.ss` and loads it back. Rig: T2 menu and film (landing within
+  a second; tracks restored), Scooby-Doo 2 saved in a menu with GPRMs set and loaded from a
+  fresh boot, refusals named.
+  - **Found on the rig:** the Audio/Subtitle steps never wrote SPRM1/SPRM2 back to the VM
+    (only Angle did), so a save lost the user's track and disc commands read a stale
+    stream. Fixed: `ast_set` / `spst_set`, and a restore syncs the user side.
+  - **Not a bug:** a menu restore highlights the menu's forced-select button (T2's timeline
+    menu authors `fosl_btnn = 1`), as libdvdnav does.
+  - **Decided:** Disc Menus off → no save states (the restore is the VM); the RNG is
+    restored exactly but re-stirred by input timing, so outcomes after a load are not a
+    replay. `docs/nav_engine.md` §11.
+  - Cost: +17 ALUTs, 0 M10K; device 98 % (merge gate: a stacked logic reclaim).
+  - Gates: `run_vm_snap.sh --red` ([ui] [menusoff] [wb], S22-S27),
+    `check_vm_snap_wiring.py --red`, `main/tests/run_tests.sh --red` (`dvd_sstate_test`,
+    `ss-*`), `test_status_bits.py`, `docs_check.py`, `mkdocs build --strict`.
+    `run_track_show.sh`'s M10 arm had been stale since PR #152; its anchor is fixed.
+
 - ✅ **EXACT LANDING — a restore resumes a film at its picture (2026-10-26, branch
   `feature/vm-snapshot`; sim-proven, fitted, HW-measured).** Rig, Scooby-Doo 2's film,
   measured with the nav FIFO: landings +0.24, +0.17, +0.56, −0.80 s from the saved

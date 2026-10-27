@@ -749,3 +749,96 @@ plus "was any picture shown between the restore's two flushes", read from the na
 four trials it reports a picture 40 ms after the jump in every one. This build, four
 trials: **no picture between the flushes, which are 11-12 ms apart**; landings +0.22,
 −0.31, +0.57, −0.84 s. Timing: `clk_dec` 90.76 / 88.27 MHz.
+
+## 11. The OSD's save states (save states, step 4)
+
+**Status:** ✅ HW-checked on the rig (2026-10-27, below), on `feature/vm-snapshot` (unmerged; by
+the 2026-10-27 decision it merges only stacked with a logic reclaim, `docs/roadmap.md` "Save
+states"). ⏳ Not yet run: a physical disc, and the maintainer's own play-test.
+
+**What the user sees.** OSD page 2, **Save State**: `Slot` (1-4), `Save to Slot`, `Load Slot`.
+Four slots per DISC, in `savestates/DVD/<provider>-<16 hex>_N.ss`; messages from the Main's
+notice box. Manual: `site/content/playback/save-states.md`.
+
+**The chain.**
+1. `emu.sv` edge-detects `status[55]` / `status[56]` (`R` rows: Main holds the bit for many
+   cycles). `vm_snap` counts each press (2-bit, wrapping) and latches the Slot row
+   (`status[54:53]`) AT the press, so moving the row afterwards cannot redirect it. All of it
+   rides header word 2's spare bits with `vm_en` (= `menus_on` = `dvd_vm`'s enable):
+   `{busy, vm_en, slot, load_n, save_n, len}`. The Main polls three words every 20 ms.
+2. `main/support/dvd/dvd_sstate.cpp` latches a baseline from the first word it reads (a
+   core loaded with moved counters does nothing), then serves one request at a time,
+   never blocking the poll thread:
+   - **save:** ask for a snapshot (§8), fetch it over later ticks (3 s timeout), write the
+     slot file: a 64-byte header (`DVS2`, version, fmt, word count, the words' sum, the
+     disc's hash, the landing time and fallback sector the Main computes per §10, the HUD
+     clock and core version for tools) and the 96 words.
+   - **load:** check the file (magic, version, its sum, the disc hash), send it as a LOAD
+     (§9) with its landing, then name the core's verdict.
+3. The transport is `dvd_vmsnap.cpp`, shared with the HIL commands in `dvd_ctl.cpp`.
+
+**Disc identity** is the shelved `feature/save-states` branch's, HW-proven there: an FNV-1a
+64 hash of `VIDEO_TS.IFO`'s first sector (the VMGI_MAT), named by its provider field. A
+disc and any rip of it, raw or rebuilt, share slots; anything without `VIDEO_TS.IFO` gets
+no slots. `dvd_phys` now records the drive before the mount so the hook can read a
+physical disc (the shelved branch's HW finding).
+
+**Decisions.**
+- **Disc Menus off: no save states** (both rows say `Save states need Disc Menus on`; a LOAD
+  that reaches a disabled VM is refused as verdict 7 rather than left pending). The shelved
+  branch made a menus-off load a bookmark in the playing title; here the restore IS the VM
+  (`E_RST`), which is disabled then, and the reader plays the auto-picked title by itself.
+  A menus-off bookmark would need a reader-only landing (the auto title + a time seek); not
+  built until someone asks.
+- **The RNG.** The LFSR is in the snapshot and `RSTW` restores it exactly. But the VM
+  stirs it with user-input timing on every button edge while idle (`entropy_stir`, so a
+  quiz does not deal the same deck every boot), so outcomes after a load depend on WHEN
+  the player presses, as on the original play. A load is not a deterministic replay; the
+  dice are as they were, the throw is the player's.
+- **A save from another layout** is refused by the core (fmt, verdict 3): "another version
+  of the core". `snap_fmt()` changes only with the RAM map or the port list, not every build.
+- **2-bit counters.** More than three presses while one request runs fold into one; a
+  request runs at most ~3 s.
+- **No "SAVE UNAVAILABLE" on stock Main** (the shelved branch's same gap): nothing answers
+  the rows. It would need a Main→core acknowledgement that does not exist.
+
+**Gates:** `bench/dvd/run_vm_snap.sh --red` ([ui] [menusoff], S22-S25),
+`tools/check_vm_snap_wiring.py --red` (the rows' bits, the edges, `vm_en`, the Main's
+word-2 shifts against the RTL), `main/tests/run_tests.sh --red` (`dvd_sstate_test` [1]-[13],
+`ss-*` arms; `dvd_phys` [17]), `tools/tests/test_status_bits.py`, `tools/docs_check.py`.
+
+**The user's Audio / Subtitle choice in SPRM1 / SPRM2 (found by the HW round).** The first
+OSD save on T2, playing audio 2/4, stored SPRM1 = 0: only the Angle button wrote back to the
+VM (`agl_set` → SPRM3); the Audio and Subtitle steps changed `emu.sv`'s registers and left
+SPRM1/2 at what the disc last set. So the save lost the track, and any disc command
+reading SPRM1/2 read a stream that was not playing (a pre-existing conformance gap: a
+set-top player's stream change IS a write of SPRM1/2). `ast_set` / `spst_set` now write
+them back, one cycle after the step, from the EFFECTIVE selection; subtitles off keep
+SPRM2's stream and clear bit 6 (libdvdnav; the forced-subtitle fallback reads it). A
+restore (`vm_rst_done`) syncs `aud_cur` / `sub_on` / `sub_idx` from the restored SPRMs, so
+the saved track plays whether or not the write moved the VM's value.
+
+**The highlighted button.** A menu restore lands with SPRM8 restored, but a menu whose PCI
+authors a forced select (`fosl_btnn`) highlights that button on entry, as libdvdnav does.
+T2's timeline menu forces button 1 (read off the disc's PCI on the rig), so a save on
+"Special Edition" loads on "Theatrical". The manual says a disc's menu may start on its
+own button.
+
+### 11a. HW round (2026-10-27, rig)
+
+Builds `DVD_vmsnap_20261027_2112.rbf` (the rows) and `_2214.rbf` (+ the write-back), Main
+from this branch. Every message read from `/tmp/dvd_report.log` (the Main logs each one it
+raises; screenshots cannot see the OSD).
+- **T2 menu:** saved on the timeline menu, moved to the main menu, loaded: back on the
+  timeline menu (button 1, the PCI's forced select; above).
+- **T2 film, landing:** saved at 73 s, skipped to 36:30, loaded: 1:21 eight seconds later.
+- **T2 film, tracks (write-back build):** audio 2/4 + subtitles on saved; changed to audio
+  4/4 + subtitle stream 2; loaded: popups `AUDIO 2/4`, `SUB 1/2`, SPRM1 = 1, SPRM2 = 0x40,
+  landed at 53 s as saved.
+- **Scooby-Doo 2 across a boot:** saved in Special Features (GPRM 6 and 10 set), relaunched
+  the core, loaded during the boot logos: back in Special Features, GPRMs identical.
+- **Refusals:** empty slots say `Slot N is empty`; with Disc Menus switched off live, both
+  rows say `Save states need Disc Menus on`.
+- **Cost** (`_2214`, SEED 7): 61,776 ALUTs (+17 over the step-3 build), 533 / 553 M10K
+  (unchanged), 41,100 ALMs needed (98 %); `clk_dec` 89.24 / 90.24 MHz, `clk_mem` 95.68 /
+  96.15, timing PASS.

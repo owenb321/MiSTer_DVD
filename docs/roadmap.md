@@ -671,8 +671,13 @@ a cheap rebuild possible. Each step is useful on its own:
    (the seek fires at the landing's first NAV pack: no flash of the cell start, measured).
    `docs/nav_engine.md` §10. ⚠ The device is at 98 % ALM. Open for films: the displayed picture's position (step 2's finding)
    and the no-picture VOBU rule (step 1's).
-4. ⏳ **The user-facing feature:** the OSD rows, slot files and disc identity from
-   `feature/save-states`.
+4. ✅ **The user-facing feature** (`feature/vm-snapshot`: sim-proven, HW-checked on the rig
+   2026-10-27; not yet merged): OSD page 2 `Slot` / `Save to Slot` / `Load Slot`, slot files
+   `savestates/DVD/<disc id>_N.ss` keyed on `VIDEO_TS.IFO` (the shelved branch's identity),
+   `main/support/dvd/dvd_sstate.cpp`; Disc Menus off refuses both. The HW round found the
+   Audio/Subtitle steps never wrote SPRM1/2 back; they do now. `docs/nav_engine.md` §11.
+   ⏳ A physical disc; the maintainer's play-test. **Next: the logic reclaim stacked on
+   this branch (merge gate below).**
 
 **★ Merge gate (user decision, 2026-10-27): save states merge only together with a
 logic reclaim.** The device is at 98 % ALM on `feature/vm-snapshot`, against 92 % for v0.9.1.
