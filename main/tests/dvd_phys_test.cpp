@@ -113,9 +113,20 @@ int  dvd_launch_ui_busy(void) { return fake_launch_busy; }
 static int fake_ra_busy = 0;       // the read-ahead worker is mid-read
 int  dvd_ra_source_busy(void) { return fake_ra_busy; }
 
+// What a mount HOOK sees: user_io_file_mount() runs them inside itself, so
+// dvd_phys_device() must already name the drive by then (dvd_sstate keys a
+// physical disc's save slots on it). HW-found 2026-09-26 when it did not.
+const char *dvd_phys_device(void);
+static int  sentinel_mounts  = 0;
+static int  sentinel_no_dev  = 0;
 int user_io_file_mount(const char *name, unsigned char index = 0, char = 0, int = 0)
 {
     mount_calls++;
+    if (name && !strcmp(name, "*DVD_PHYS*")) {
+        sentinel_mounts++;
+        const char *d = dvd_phys_device();
+        if (!d || !*d) sentinel_no_dev++;
+    }
     if (name && name[0] == '*') clears_at_mount = clear_lock_calls;   // a drive sentinel
     snprintf(last_mount, sizeof(last_mount), "%s", name ? name : "");
     dvd_phys_note_mount(name, index);   // Main calls this at the top of the real one
@@ -440,6 +451,10 @@ int main(void)
     eject_errno = 0; sg_n = 0;
     dvd_phys_eject();
     check("[16] no SCSI fallback when CDROMEJECT works",   sg_n, 0);
+
+    printf("=== [17] the mount hooks can see the drive ===\n");
+    check("[17] sentinel mounts exercised (precondition)", sentinel_mounts > 0, 1);
+    check("[17] mounts whose hooks saw no device", sentinel_no_dev, 0);
 
     printf("\n=== dvd_phys tests: %d error(s) ===\n", errs);
     if (errs) { printf("FAILED\n"); return 1; }

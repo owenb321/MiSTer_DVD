@@ -75,6 +75,7 @@ static int  is_dvd(void)                            { return 1; }
 static void user_io_status_set(const char *, uint32_t) {}
 static void user_io_file_mount(const char *, int)   {}
 
+#include "dvd_vmsnap.cpp"
 #include "dvd_ctl.cpp"
 
 // ---------------------------------------------------------------- helpers
@@ -361,17 +362,17 @@ int main(void)
 
 	printf("[16] the displayed picture's time\n");
 	// 0:12:51 + 10 frames (30 fps) at the demux front, which is 0.8 s ahead: 770.53 s -> 771
-	check(vmsnap_disp_secs(0x001251D0, 162000, 90000, 1, 1) == 771, "front time minus the lead, to the nearest second");
-	check(vmsnap_disp_secs(0x001251D0, 90000 + 45000, 90000, 1, 1) == 771, "770.83 s rounds up, not down");
-	check(vmsnap_disp_secs(0x001251D0, 90000, 90000, 1, 1) == 771, "no lead: the front time");
-	check(vmsnap_disp_secs(0x00125150, 90000, 90000, 1, 1) == 771, "25 fps frames (rate bits 01)");
-	check(vmsnap_disp_secs(0x001251D0, 90000, 162000, 1, 1) == 772, "a small negative lead: the picture is into the front VOBU");
-	check(vmsnap_disp_secs(0x001251D0, 90000, 270000, 1, 1) == -1, "a lead below -1.5 s (a PTS discontinuity)");
-	check(vmsnap_disp_secs(0x001251D0, 90000 + 31 * 90000, 90000, 1, 1) == -1, "a lead over 30 s");
-	check(vmsnap_disp_secs(0x001251D0, 162000, 90000, 0, 1) == -1, "a stale position (no NAV since a flush)");
-	check(vmsnap_disp_secs(0x001251D0, 162000, 90000, 1, 0) == -1, "a VOBU without a picture");
-	check(vmsnap_disp_secs(0x00000000, 162000, 90000, 1, 1) == 0, "a lead past the clock clamps to 0");
-	check(vmsnap_disp_secs(0x001261D0, 90000, 90000, 1, 1) == -1, "a malformed clock (61 s)");
+	check(dvd_vmsnap_disp_secs(0x001251D0, 162000, 90000, 1, 1) == 771, "front time minus the lead, to the nearest second");
+	check(dvd_vmsnap_disp_secs(0x001251D0, 90000 + 45000, 90000, 1, 1) == 771, "770.83 s rounds up, not down");
+	check(dvd_vmsnap_disp_secs(0x001251D0, 90000, 90000, 1, 1) == 771, "no lead: the front time");
+	check(dvd_vmsnap_disp_secs(0x00125150, 90000, 90000, 1, 1) == 771, "25 fps frames (rate bits 01)");
+	check(dvd_vmsnap_disp_secs(0x001251D0, 90000, 162000, 1, 1) == 772, "a small negative lead: the picture is into the front VOBU");
+	check(dvd_vmsnap_disp_secs(0x001251D0, 90000, 270000, 1, 1) == -1, "a lead below -1.5 s (a PTS discontinuity)");
+	check(dvd_vmsnap_disp_secs(0x001251D0, 90000 + 31 * 90000, 90000, 1, 1) == -1, "a lead over 30 s");
+	check(dvd_vmsnap_disp_secs(0x001251D0, 162000, 90000, 0, 1) == -1, "a stale position (no NAV since a flush)");
+	check(dvd_vmsnap_disp_secs(0x001251D0, 162000, 90000, 1, 0) == -1, "a VOBU without a picture");
+	check(dvd_vmsnap_disp_secs(0x00000000, 162000, 90000, 1, 1) == 0, "a lead past the clock clamps to 0");
+	check(dvd_vmsnap_disp_secs(0x001261D0, 90000, 90000, 1, 1) == -1, "a malformed clock (61 s)");
 
 	unlink(vl_path);
 	unlink(vs_path);

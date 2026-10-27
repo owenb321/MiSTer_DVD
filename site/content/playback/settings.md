@@ -47,6 +47,20 @@ Settings are saved to `/media/fat/config/DVD_v3.CFG` and persist across core rel
 drops back to the bouncing-logo idle screen. Pick a new image from `Load Video` to play
 again. A custom `boot.rom` logo survives the reset.
 
+## Save State page
+
+Four numbered save slots per disc. The full explanation, including what is and is not
+kept, is on [Save states](save-states.md).
+
+| Setting | Options | What it does |
+|---|---|---|
+| **Slot** | **1** / 2 / 3 / 4 | Picks which slot **Save to Slot** and **Load Slot** act on. It is only a selector: moving it does nothing on its own. |
+| **Save to Slot** | (action) | Saves the disc's navigation state and your position to that slot, then closes the OSD. |
+| **Load Slot** | (action) | Restores them. Playback re-seeks, the way a chapter skip does, so there is a brief black moment before it resumes. |
+
+These need the **MiSTer_DVDcss** Main, because the save file is written to your SD card,
+and **Disc Menus** set to On. With the stock Main the rows do nothing.
+
 ## Debug page
 
 The second OSD page. These are tuning and diagnostic levers. The three with sections below

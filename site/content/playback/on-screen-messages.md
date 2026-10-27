@@ -75,3 +75,25 @@ Fast Fwd or Rewind, step chapters, or tap out a D-pad seek and the elapsed time 
 seek bar's cursor, so the two always agree; it returns to the live position once the seek
 lands. On a `.mpg`, `.VOB` or VCD/SVCD the whole clock is an estimate worked out from how
 fast the file is playing — see [VCD & SVCD](../formats/vcd-svcd.md).
+
+## Save states
+
+These come from the MiSTer Main rather than the core, so they appear in the usual grey
+notice box rather than over the picture.
+
+| Message | Meaning |
+|---|---|
+| `Saved to slot N` | The state was written. |
+| `Loaded slot N` | The state was restored; playback re-seeks. |
+| `Slot N is empty` | Nothing has been saved there for this disc yet. |
+| `That save is from a different disc` | The file was copied or renamed from another disc, and was refused. |
+| `This disc has no save slots` | Nothing is loaded, or the loaded item is not a DVD-Video disc (VCD, SVCD, a video file). |
+| `Save states need Disc Menus on` | Disc Menus is Off, so the disc's own program, which a save state holds, is not running. |
+| `That save file is damaged` | The save file is truncated or corrupted, and was not loaded. |
+| `That save is from another version of the core` | The save was made by a core whose internal state is laid out differently, and was refused. |
+| `Could not save: the player stayed busy. Try again` / `Could not load: the player stayed busy. Try again` | The disc was mid-jump for the three seconds the player waited. |
+| `Could not write the save file` / `Could not read the save file` | An SD card problem: full, read-only, or the file cannot be opened. |
+
+With the stock Main none of these appear: nothing answers the Save State rows.
+
+Full explanation: [Save states](save-states.md).

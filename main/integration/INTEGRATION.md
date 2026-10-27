@@ -14,6 +14,10 @@ Base pinned in `build_main.sh`: `MAIN_MISTER_REF` (a MiSTer-devel/Main_MiSTer co
 - `support/dvd/dvd_vcd_detect.cpp` / `dvd_vcd_detect.h` — ISO9660 VCD/SVCD probe
 - `support/dvd/dvd_phys.cpp` / `dvd_phys.h` — standalone auto-mount trigger
 - `support/dvd/dvd_remote.cpp` / `dvd_remote.h` — DVD-remote Eject + Volume buttons
+- `support/dvd/dvd_vmsnap.cpp` / `dvd_vmsnap.h` — the VM snapshot/restore transport
+  (EXT_BUS `0x7D`), shared by `dvd_ctl` (HIL) and `dvd_sstate`
+- `support/dvd/dvd_sstate.cpp` / `dvd_sstate.h` — OSD save states: disc identity, slot
+  files, the Save/Load Slot requests. Steps **57-59** below.
 - `Scripts/install_dvdcss.sh`               — user-run libdvdcss installer
 
 ## Makefile — one edit
@@ -696,3 +700,19 @@ Host tests: `main/tests/dvd_ir_test.cpp` (76 assertions), 17 RED mutations in
 `tools/check_ir_remap.py` — the derived-table gate, run from `build_main.sh`
 with `--require-stock` — and `tools/tests/test_check_ir_remap.py`, nine RED arms
 proving that checker can fail. Detail: `MiSTer_DVD/docs/ir_remote.md`.
+
+## Steps 57-59 — save states (`support/dvd/dvd_sstate.{h,cpp}`)
+
+`57` include `support/dvd/dvd_sstate.h` in `user_io.cpp`, after `dvd_remote.h`.
+
+`58` `dvd_sstate_note_mount(name)` beside `dvd_report_note_mount`: reads VIDEO_TS.IFO's
+first sector once and caches the disc identity that keys the slots. The mount PATH cannot
+name the file: every physical disc mounts as the same sentinel.
+
+`59` `dvd_sstate_tick()` after `dvd_remote_tick()`, i.e. last: remote can unmount, and a
+save must never be written against a slot being torn down in the same pass. Three SPI
+words per 20 ms unless a request counter moved, and it defers entirely while
+`dvd_launch_ui_busy()`, because raising UI during an MGL launch pins the menu FSM.
+
+All three anchors are lines the overlay itself inserts, so they add no stock anchor to
+re-verify on a `MAIN_MISTER_REF` bump.

@@ -547,15 +547,21 @@ void dvd_phys_tick(void)
 	// dvd_vcd_open() inside it re-scan for the drive; a CSS failure (no
 	// libdvdcss on an encrypted disc) surfaces the on-screen install prompt --
 	// VCD/SVCD and CD-DA have no such handshake to fail.
+	// ⚠ The device is recorded BEFORE the mount, not after. user_io_file_mount()
+	// runs the mount hooks (dvd_report, dvd_sstate) INSIDE itself, and they ask
+	// dvd_phys_device() which drive to read. Set afterwards, every hook saw no
+	// device (HW-found 2026-09-26 on the shelved save-state branch: a physical disc
+	// could never be saved). Cleared again if the mount fails.
+	snprintf(mounted_dev, sizeof(mounted_dev), "%s", dev);
 	if (user_io_file_mount(sentinel, 0))
 	{
 		mounted = 1;
-		snprintf(mounted_dev, sizeof(mounted_dev), "%s", dev);
 		// The track table goes AFTER the mount: the core clears any previous
 		// table on img_mounted, so an upload sent before this would be thrown
 		// away. Harmless on a DVD -- it no-ops unless the CD source is open.
 		dvd_cdda_toc_upload();
 	}
+	else mounted_dev[0] = 0;
 }
 
 const char *dvd_phys_device(void)

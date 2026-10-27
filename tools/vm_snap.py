@@ -8,8 +8,12 @@ the microcode's E_SNAP and the Python model stream in -- and are trusted only wh
 snapshot's `fmt` equals nav_isa.snap_fmt(): a snapshot taken by a core built from a
 different RAM map or port list is refused, never read against the wrong names.
 
+It also reads a save-state slot file (savestates/DVD/<disc id>_N.ss, written by the Main's
+dvd_sstate.cpp; docs/nav_engine.md §11): the same words behind a 64-byte header.
+
 Usage:
     tools/vm_snap.py snap.json            # print it by name
+    tools/vm_snap.py <disc id>_1.ss       # a slot file, the same way
     tools/vm_snap.py snap.json --json     # {name: value, ...} plus the position
     tools/mister.py snap                  # take one on the rig and print it
 
@@ -18,6 +22,7 @@ As a module: decode(obj) -> dict, or raises ValueError on a format mismatch.
 import argparse
 import json
 import os
+import struct
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -34,6 +39,20 @@ def bcd_time(v):
     return '%d:%02d:%02d' % (b((v >> 24) & 0xFF), b((v >> 16) & 0xFF), b((v >> 8) & 0xFF))
 
 
+def load_ss(path):
+    """A slot file (dvd_sstate.h's layout) -> the same dict the Main's JSON gives."""
+    b = open(path, 'rb').read()
+    if len(b) < 64 or b[:4] != b'DVS2':
+        raise ValueError('%s is not a DVS2 save-state file' % path)
+    ver, fmt, n, _sum = struct.unpack_from('<HHHH', b, 4)
+    disp, lbn, eltm = struct.unpack_from('<iII', b, 20)
+    if ver != 1 or len(b) < 64 + 2 * n:
+        raise ValueError('%s: version %d, %d words in %d bytes' % (path, ver, n, len(b)))
+    return {'seq': 0, 'fmt': fmt, 'words': list(struct.unpack_from('<%dH' % n, b, 64)),
+            'nv_pck_lbn': lbn, 'eltm': eltm, 'disp_secs': disp,
+            'core': b[32:64].split(b'\0')[0].decode('ascii', 'replace')}
+
+
 def decode(obj):
     """-> {'state': {name: value}, 'pos': {...}, 'seq': n} from the Main's JSON."""
     if obj.get('absent'):
@@ -48,8 +67,9 @@ def decode(obj):
     words = obj['words']
     if len(words) != len(names):
         raise ValueError('%d words, the layout has %d' % (len(words), len(names)))
-    pos = {k: obj[k] for k in ('pos_fresh', 'has_video', 'nv_pck_lbn', 'prev_video',
-                               'c_eltm', 'vob_idn', 'c_idn')}
+    # a slot file carries only the landing's fields; the rest read 0
+    pos = {k: obj.get(k, 0) for k in ('pos_fresh', 'has_video', 'nv_pck_lbn', 'prev_video',
+                                      'c_eltm', 'vob_idn', 'c_idn')}
     # the displayed picture's PGC time (docs/nav_engine.md §10); -1 = a load lands at
     # the saved cell's start. Absent in snapshots taken before the exact landing.
     for k in ('eltm', 'sptm', 'stc', 'disp_secs'):
@@ -94,7 +114,7 @@ def main():
     ap.add_argument('--json', action='store_true')
     a = ap.parse_args()
     try:
-        d = decode(json.load(open(a.file)))
+        d = decode(load_ss(a.file) if a.file.endswith('.ss') else json.load(open(a.file)))
     except ValueError as e:
         print('vm_snap: %s' % e, file=sys.stderr)
         return 1

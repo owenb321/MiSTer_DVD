@@ -120,6 +120,7 @@ nav:
   - Playback:
       - Controls: playback/controls.md
       - Settings: playback/settings.md
+      - Save states: playback/save-states.md
       - On-screen messages: playback/on-screen-messages.md
   - Video:
       - Film (24p): video/film-24p.md

@@ -14,6 +14,7 @@
 #include "../../spi.h"
 #include "../../hardware.h"
 #include "dvd_ctl.h"
+#include "dvd_vmsnap.h"
 
 // Presence of this file ARMS the channel. Absent -- the shipped default -- this
 // module does nothing at all: no SPI, no file writes, no FIFO.
@@ -87,12 +88,8 @@
 // on the command FIFO asks the core for one; the next ticks poll until it is complete
 // and write it to DVD_VMSNAP_FILE: the raw words plus the position, decoded on the
 // host by tools/vm_snap.py (the layout's names live there, keyed by `fmt`). Must match
-// dvd/vm_snap.sv. 0x7D is free (Main 0x00-0x44, 0x61-63, 0xF0-F9; 0x7A/0x7B
-// dvd_telem, 0x7C nav_trace). MAGIC has bit 15 clear: a core without it answers 0.
-#define UIO_DVD_VMSNAP      0x7D
-#define DVD_VMSNAP_MAGIC    0x5E02
-#define DVD_VMSNAP_HDR      19
-#define DVD_VMSNAP_MAXW     128
+// dvd/vm_snap.sv; the transport (one SPI transaction per call) is dvd_vmsnap.cpp,
+// shared with the OSD's save states (dvd_sstate.cpp).
 #define DVD_VMSNAP_TIMEOUT  3000
 #define DVD_VMSNAP_POLL_MS  20
 #ifndef DVD_VMSNAP_FILE
@@ -415,48 +412,14 @@ static void navtrace_drain(double t)
 // ---------------------------------------------------------------------------
 // VM state snapshot
 // ---------------------------------------------------------------------------
-// THE DISPLAYED PICTURE'S TIME (docs/nav_engine.md §10). The core's clock (eltm, BCD
-// dvd_time) is the PGC time of the VOBU the demux just parsed, which leads the picture
-// by the decoder's buffer -- seconds in a low-bitrate cell. sptm is that VOBU's start
-// PTS and stc the displayed picture's, so the lead is sptm - stc. -> whole PGC seconds of
-// the picture on screen, or -1 when it cannot be trusted: no NAV pack since the last
-// flush, a VOBU with no picture (a still with an audio loop: land at the cell start,
-// docs/save_states.md §5g), or a lead outside -1.5..30 s (a PTS discontinuity between the
-// demux and the screen). The lead may be slightly NEGATIVE: with the decoder's buffer
-// near empty (just after a seek) the picture on screen is a few frames into the front
-// VOBU itself -- measured -26 ms on the rig (docs/nav_engine.md §10) -- and the
-// formula adds it. Rounded to the NEAREST second: the time map lands on either side of
-// its target (measured -0.36..+0.30 s), so rounding down only biased every landing early
-// (three rig trials -0.49 s on average; docs/nav_engine.md §10).
-static int vmsnap_disp_secs(uint32_t eltm, uint32_t sptm, uint32_t stc, int fresh, int video)
-{
-	if (!fresh || !video || !sptm) return -1;
-	int32_t lead = (int32_t)(sptm - stc);
-	if (lead < -135000 || lead > 30 * 90000) return -1;
-	unsigned b0 = eltm >> 24, b1 = (eltm >> 16) & 0xFF, b2 = (eltm >> 8) & 0xFF, b3 = eltm & 0xFF;
-	unsigned hh = (b0 >> 4) * 10 + (b0 & 15);
-	unsigned mm = (b1 >> 4) * 10 + (b1 & 15);
-	unsigned ss = (b2 >> 4) * 10 + (b2 & 15);
-	unsigned ff = ((b3 >> 4) & 3) * 10 + (b3 & 15);
-	unsigned fps = ((b3 >> 6) == 1) ? 25 : 30;            // dvd_time rate bits (11 = 30)
-	if (mm > 59 || ss > 59 || ff >= fps) return -1;
-	int64_t ticks = (int64_t)((hh * 60 + mm) * 60 + ss) * 90000 + (int64_t)ff * 90000 / fps - lead;
-	return ticks < 0 ? 0 : (int)((ticks + 45000) / 90000);
-}
-
 static int      vs_wait = 0;          // a request is outstanding
 static uint16_t vs_seq0;              // the core's seq when we asked
 static unsigned vs_t0, vs_last;
 
-// One transaction: the command, then the control word (bit 0 = take a snapshot when
-// this transaction ends). The core never writes the buffer while a transaction is
-// open, so asking and reading are always separate transactions.
 static void vmsnap_request()
 {
-	uint16_t m = spi_uio_cmd_cont(UIO_DVD_VMSNAP);
-	uint16_t seq = spi_w(1);
-	DisableIO();
-	if (m != DVD_VMSNAP_MAGIC)
+	uint16_t seq = 0;
+	if (!dvd_vmsnap_ask(&seq))
 	{
 		ctl_log("DVD_CTL: core has no VM snapshot (0x7D)");
 		FILE *f = fopen(DVD_VMSNAP_FILE, "w");
@@ -470,26 +433,18 @@ static void vmsnap_request()
 	ctl_log("DVD_CTL: vmsnap requested (seq %u)", seq);
 }
 
-// Read the header; once a new snapshot is complete (seq moved, not busy), its words
-// follow in the same transaction. Otherwise only the 13 header words are clocked.
 static void vmsnap_poll(unsigned now)
 {
 	if (now - vs_last < DVD_VMSNAP_POLL_MS) return;
 	vs_last = now;
 	uint16_t h[DVD_VMSNAP_HDR];
 	static uint16_t w[DVD_VMSNAP_MAXW];
-	h[0] = spi_uio_cmd_cont(UIO_DVD_VMSNAP);
-	for (int i = 1; i < DVD_VMSNAP_HDR; i++) h[i] = spi_w(0);
-	int busy = h[2] >> 15;
-	unsigned len = h[2] & 0xFF;
-	int ready = h[0] == DVD_VMSNAP_MAGIC && !busy && h[1] != vs_seq0 && len;
-	if (len > DVD_VMSNAP_MAXW) len = DVD_VMSNAP_MAXW;      // never past our buffer
-	if (ready) for (unsigned i = 0; i < len; i++) w[i] = spi_w(0);
-	DisableIO();
-	if (!ready)
+	int len = dvd_vmsnap_fetch(vs_seq0, h, w);
+	if (len <= 0)
 	{
 		if (now - vs_t0 > DVD_VMSNAP_TIMEOUT)
 		{
+			int busy = h[2] >> 15;
 			vs_wait = 0;
 			ctl_log("DVD_CTL: vmsnap timed out (busy %d) -- the VM never came to rest", busy);
 			FILE *f = fopen(DVD_VMSNAP_FILE, "w");
@@ -514,12 +469,12 @@ static void vmsnap_poll(unsigned now)
 	        ts.tv_sec + ts.tv_nsec / 1e9, h[1], h[3], (h[4] >> 1) & 1, h[4] & 1,
 	        ((unsigned)h[5] << 16) | h[6], ((unsigned)h[7] << 16) | h[8],
 	        ((unsigned)h[9] << 16) | h[10], h[11], h[12] & 0xFF,
-	        eltm, sptm, stc, vmsnap_disp_secs(eltm, sptm, stc, (h[4] >> 1) & 1, h[4] & 1));
-	for (unsigned i = 0; i < len; i++) fprintf(f, "%s%u", i ? "," : "", w[i]);
+	        eltm, sptm, stc, dvd_vmsnap_disp_secs_h(h));
+	for (int i = 0; i < len; i++) fprintf(f, "%s%u", i ? "," : "", w[i]);
 	fprintf(f, "]}\n");
 	fclose(f);
 	rename(tmp, DVD_VMSNAP_FILE);                      // a reader never sees half a file
-	ctl_log("DVD_CTL: vmsnap seq %u, %u words, fmt %04x", h[1], len, h[3]);
+	ctl_log("DVD_CTL: vmsnap seq %u, %d words, fmt %04x", h[1], len, h[3]);
 }
 
 // ---------------------------------------------------------------------------
@@ -529,7 +484,7 @@ static int      vl_wait = 0;          // a load is outstanding
 static unsigned vl_t0, vl_last;
 static const char *vl_names[8] = { "none", "pending", "applied", "refused: format",
                                    "refused: length", "refused: checksum",
-                                   "refused: busy", "?" };
+                                   "refused: busy", "refused: Disc Menus off" };
 
 static void vmload_result(const char *what, int verdict)
 {
@@ -589,25 +544,12 @@ static void vmload_request(const char *path)
 	}
 	// the landing: a time (PGC seconds) or 0xFFFF = the saved cell's start
 	uint16_t tm = (disp >= 0 && disp < 0xFFFF) ? (uint16_t)disp : 0xFFFF;
-	uint16_t sum = (uint16_t)(tm + (rbn >> 16) + (rbn & 0xFFFF));
-	for (int i = 0; i < n; i++) sum += w[i];
-	uint16_t m = spi_uio_cmd_cont(UIO_DVD_VMSNAP);
-	if (m != DVD_VMSNAP_MAGIC)
+	if (!dvd_vmload_send(fmt, w, n, tm, rbn))
 	{
-		DisableIO();
 		ctl_log("DVD_CTL: core has no VM snapshot (0x7D)");
 		vmload_result("absent", -1);
 		return;
 	}
-	spi_w(2);                                   // control: LOAD
-	spi_w(fmt);
-	spi_w((uint16_t)n);
-	spi_w(sum);
-	spi_w(tm);
-	spi_w((uint16_t)(rbn >> 16));
-	spi_w((uint16_t)rbn);
-	for (int i = 0; i < n; i++) spi_w(w[i]);
-	DisableIO();                                // the core checks it as this ends
 	unlink(DVD_VMLOAD_FILE);
 	vl_wait = 1;
 	vl_t0 = vl_last = now_ms();
@@ -619,17 +561,14 @@ static void vmload_poll(unsigned now)
 {
 	if (now - vl_last < DVD_VMSNAP_POLL_MS) return;
 	vl_last = now;
-	uint16_t h[5];
-	h[0] = spi_uio_cmd_cont(UIO_DVD_VMSNAP);
-	for (int i = 1; i < 5; i++) h[i] = spi_w(0);
-	DisableIO();
-	int verdict = h[0] == DVD_VMSNAP_MAGIC ? (h[4] >> 13) & 7 : 0;
+	int verdict = dvd_vmload_verdict();
+	if (verdict < 0) verdict = 0;
 	if (verdict == 1 || verdict == 0)
 	{
 		if (now - vl_t0 > DVD_VMSNAP_TIMEOUT)
 		{
 			vl_wait = 0;
-			ctl_log("DVD_CTL: vmload still pending at 3 s -- the VM never came to rest (Disc Menus off?)");
+			ctl_log("DVD_CTL: vmload still pending at 3 s -- the VM never came to rest");
 			vmload_result("timeout", -1);
 		}
 		return;

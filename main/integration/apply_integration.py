@@ -464,6 +464,26 @@ u = insert_after(u, '\tdvd_ctl_tick();         // host control FIFO + /tmp/dvd_t
     '\tdvd_remote_tick();      // dvd:remote - B19 Eject, B20/B21 Volume\n',
     40, 'dvd_remote_tick();')
 
+# 57. include for save states (support/dvd/dvd_sstate.{h,cpp}, docs/nav_engine.md §11).
+u = insert_after(u, '#include "support/dvd/dvd_remote.h"',
+    '#include "support/dvd/dvd_sstate.h"\n',
+    57, 'support/dvd/dvd_sstate.h')
+
+# 58. the disc identity that keys the save slots, from the same mount. The mount PATH
+# cannot name the file -- every physical disc mounts as one sentinel -- so this reads
+# VIDEO_TS.IFO's first sector (about four sector reads, once per mount) and caches it.
+u = insert_after(u, '\tdvd_report_note_mount(name);   // dvd:report — observe only',
+    '\tdvd_sstate_note_mount(name);   // dvd:sstate — disc identity for save slots\n',
+    58, 'dvd_sstate_note_mount(name)')
+
+# 59. the OSD's Save/Load Slot requests. AFTER dvd_remote_tick, which can unmount: a
+# save must never be written against a slot being torn down in the same pass. Three
+# SPI words per 20 ms unless a request counter moved, and it defers entirely while
+# dvd_launch_ui_busy() (raising UI during an MGL launch pins the menu FSM).
+u = insert_after(u, '\tdvd_remote_tick();      // dvd:remote - B19 Eject, B20/B21 Volume',
+    '\tdvd_sstate_tick();      // dvd:sstate - OSD Save/Load Slot requests\n',
+    59, 'dvd_sstate_tick();')
+
 # 30. let dvd_phys see slot 0 being taken by something that is not the drive, so
 # an eject only tears down what the drive still owns and the auto-mount does not
 # fire over an image the user asked for (an MGL <file>, say). Observes only.
