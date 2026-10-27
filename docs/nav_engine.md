@@ -647,6 +647,11 @@ address's bit 10, registered with them; `tools/nav_isa.py` writes `nav_ucode.mem
 `vm_ab` is trace- and cycle-identical, and the JumpSS handlers that live above word 1,023
 ran 2,218 traced instructions in it. `tools/check_gprm_ram.py` pins both arrays (R6: one
 1,280-deep ROM again; R7: a combinational read of the high one).
+**Measured** (`DVD_vmsnap_20261027_0410.rbf`, SEED 7): RAM blocks 536 → **533** / 553;
+`nav_seq` 9 → 6 M10K (the ROM 5 + the data RAM 1), +23 ALM for the 40-bit select. Timing
+passes (`clk_dec` 87.96 / 89.45, `clk_mem` 98.44 / 99.82). Rig smoke: boot chain, Play
+Movie, the Menu key (its CallSS/JumpSS handlers run from `romh`), and a restore (+0.36 s,
+no picture between the flushes).
 
 **Limits.** A restore waits for the VM's rest and for Disc Menus on; with menus off it
 stays pending (verdict 1) and the host times out. A mount aborts a running restore; the

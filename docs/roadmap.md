@@ -662,8 +662,8 @@ a cheap rebuild possible. Each step is useful on its own:
    `jump_ttn_hint`; a 1,280-word ROM. `docs/nav_engine.md` §9. Lands at the saved
    CELL's start. On the rig: a minigame snapshot restored from the menu and from the
    boot logo (the §5g case) lands and plays, the state matching the snapshot.
-   **Next:** let `hil_suite` start mid-game from a snapshot; split the ROM (3 M10K
-   back).
+   **Next:** let `hil_suite` start mid-game from a snapshot. (The ROM split took the 3
+   M10K back, 2026-10-27: 533 / 553.)
    ✅ **3b. Exact landing for films** (same branch: sim-proven, fitted at +109 ALM,
    HW-measured): the snapshot records the displayed picture's PGC time (the demux lead
    taken off the HUD clock), and the restore time-seeks there after its cell landing.
