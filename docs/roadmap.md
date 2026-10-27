@@ -674,6 +674,16 @@ a cheap rebuild possible. Each step is useful on its own:
 4. ⏳ **The user-facing feature:** the OSD rows, slot files and disc identity from
    `feature/save-states`.
 
+**★ Merge gate (user decision, 2026-10-27): save states merge only together with a
+logic reclaim.** The device is at 98 % ALM on `feature/vm-snapshot`, against 92 % for v0.9.1.
+So once step 4 is done, the reclaim work in `docs/logic_reclaim.md` §10 goes on a
+branch stacked on top of it. Start with `mult22x16` (§10d). Then, if needed, the AC-3 IMDCT
+on the audio engine (§10a), paid for in M10K by the subtitle bitmap packing (§6). **Neither
+branch is pushed or merged until the reclaim succeeds.** If it fails, both stay local. The
+proposed bar for success is to win back at least what save states cost, about 370 ALM. Measure it
+in ALUTs and by entity, not with the device "ALMs needed" line, which moves several points
+with fitter packing. M10K must not go up overall, and timing must pass.
+
 ### ⏳ 2026-10-01 spec-audit: DVD Demystified 3rd-edition follow-ups (items 1–8 and 10b ✅; the rest re-ranked 2026-10-06, PR #165)
 
 The audit, with evidence and the user's decisions, is in
