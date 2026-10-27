@@ -1175,8 +1175,14 @@ localparam [2:0] UFB_BOOTM = 3'd7;
 // ==== END GENERATED ====
 
 // ---------------------------------------------------------------- program ROM
-(* ramstyle = "M10K" *) reg [39:0] rom [0:UC_DEPTH-1];
+// TWO arrays, 1,024 + 256 words, read on the same clock and picked by the address's top
+// bit (registered with them): Quartus rounds one 1,280-deep array up to 2,048 deep, which
+// cost 8 M10K for 5 blocks' worth of words (docs/nav_engine.md §9). The images are
+// tools/nav_isa.py's, split the same way.
+(* ramstyle = "M10K" *) reg [39:0] rom  [0:1023];
+(* ramstyle = "M10K" *) reg [39:0] romh [0:UC_DEPTH-1025];
 initial $readmemh("dvd/nav/nav_ucode.mem", rom);
+initial $readmemh("dvd/nav/nav_ucode_hi.mem", romh);
 
 // ---------------------------------------------------------------- data RAM
 (* ramstyle = "M10K, no_rw_check" *) reg [15:0] dram [0:255];
@@ -1187,7 +1193,9 @@ initial for (di = 0; di < 256; di = di + 1) dram[di] = 16'd0;
 localparam [1:0] Q_BOOT = 2'd0, Q_RUN = 2'd1, Q_LD = 2'd2;
 reg [1:0]  q;
 reg [10:0] pc;                   // the address of ir
-reg [39:0] ir;
+reg [39:0] ir_lo, ir_hi;
+reg        ir_sel;                // the fetch address's bit 10: which array ir comes from
+wire [39:0] ir = ir_sel ? ir_hi : ir_lo;
 reg [15:0] rf [0:15];
 reg [10:0] stk [0:3];
 reg [2:0]  sp;
@@ -1288,7 +1296,11 @@ end
 
 // next fetch: the same word while stalled (and while finishing a load), else npc
 wire [10:0] fetch_a = (q == Q_BOOT) ? 11'd0 : (q == Q_LD) ? pc1 : stall ? pc : npc;
-always @(posedge clk) ir <= rom[fetch_a];
+always @(posedge clk) begin
+    ir_lo  <= rom[fetch_a[9:0]];
+    ir_hi  <= romh[fetch_a[7:0]];
+    ir_sel <= fetch_a[10];
+end
 
 // ---------------------------------------------------------------- memories
 wire [15:0] ea   = va + imm;

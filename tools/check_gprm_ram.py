@@ -37,8 +37,12 @@ MEMS = {
         'if (d_we) dram[d_a] <= vd;',
         'd_q <= dram[d_a];',
         'initial for (di = 0; di < 256; di = di + 1) dram[di] = 16\'d0;'}),
-    'rom': (r'\(\*\s*ramstyle\s*=\s*"M10K[^"]*"\s*\*\)\s*reg\s*\[39:0\]\s*rom\s*\[0:UC_DEPTH-1\]', {
-        'always @(posedge clk) ir <= rom[fetch_a];'}),
+    # the program ROM is two arrays (1,024 + 256 words: one 1,280-deep array rounds up
+    # to 2,048 deep, 8 M10K instead of 5; docs/nav_engine.md §9)
+    'rom': (r'\(\*\s*ramstyle\s*=\s*"M10K[^"]*"\s*\*\)\s*reg\s*\[39:0\]\s*rom\s*\[0:1023\]', {
+        'ir_lo <= rom[fetch_a[9:0]];'}),
+    'romh': (r'\(\*\s*ramstyle\s*=\s*"M10K[^"]*"\s*\*\)\s*reg\s*\[39:0\]\s*romh\s*\[0:UC_DEPTH-1025\]', {
+        'ir_hi <= romh[fetch_a[7:0]];'}),
     'cmem_e': (r'\(\*\s*ramstyle\s*=\s*"M10K[^"]*"\s*\*\)\s*reg\s*\[7:0\]\s*cmem_e\s*\[0:2047\]', {
         'if (cmd_we && !cmd_waddr[0]) cmem_e[cmd_waddr[11:1]] <= cmd_wdata;',
         'ce_q <= cmem_e[c_ra];',
@@ -81,8 +85,12 @@ def red():
          "wire parked       = wev_req;\nwire [15:0] dbg_g0 = dram[0];"),
         ('R2 a combinational ROM read', "wire [5:0]  op  = ir[39:34];",
          "wire [39:0] ir_c = rom[pc];\nwire [5:0]  op  = ir[39:34];"),
-        ('R3 the data RAM reset in the sequencer', "        for (ri = 0; ri < 4; ri = ri + 1) stk[ri] <= 10'd0;",
-         "        for (ri = 0; ri < 4; ri = ri + 1) stk[ri] <= 10'd0;\n        for (ri = 0; ri < 256; ri = ri + 1) dram[ri] <= 16'd0;"),
+        ('R3 the data RAM reset in the sequencer', "        for (ri = 0; ri < 4; ri = ri + 1) stk[ri] <= 11'd0;",
+         "        for (ri = 0; ri < 4; ri = ri + 1) stk[ri] <= 11'd0;\n        for (ri = 0; ri < 256; ri = ri + 1) dram[ri] <= 16'd0;"),
+        ('R6 one 1,280-deep ROM again', '(* ramstyle = "M10K" *) reg [39:0] romh [0:UC_DEPTH-1025];',
+         '(* ramstyle = "M10K" *) reg [39:0] romh [0:UC_DEPTH-1];'),
+        ('R7 a combinational read of the high ROM', "wire [5:0]  op  = ir[39:34];",
+         "wire [39:0] ir_h = romh[pc[7:0]];\nwire [5:0]  op  = ir[39:34];"),
         ('R4 ramstyle dropped on the data RAM', '(* ramstyle = "M10K, no_rw_check" *) reg [15:0] dram [0:255];',
          'reg [15:0] dram [0:255];'),
         ('R5 a second write port on the command table', "always @(posedge clk) begin\n    if (cmd_we && cmd_waddr[0])",

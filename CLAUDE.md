@@ -509,7 +509,9 @@ Each of these cost at least one hardware round. The story is in `docs/status_log
   module parameter named `INIT_FILE` leaks into the module's OTHER inferred RAMs.
 - **Benches:** `$fatal`, not `$finish` (vvp exits 0 otherwise); runners require the PASS
   marker; assert against the *consumer's* contract, not the producer's belief; every claim
-  gets a mutation that must fail *exactly* its own arm.
+  gets a mutation that must fail *exactly* its own arm. Don't run many `--red` gates at once:
+  runners `timeout` their mutants, and under load a cut-off run drops its last arms' FAILs
+  (2026-10-27: a false `run_cmd_hold` regression, bisected for nothing).
 - **An instrument derived from its subject reports health when the subject is absent.**
   Prefer counters that can say "nothing real happened".
 - **A disc field is a claim an authoring tool wrote, not a measurement**

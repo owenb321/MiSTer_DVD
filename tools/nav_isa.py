@@ -61,7 +61,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 NDIR = os.path.join(REPO, 'dvd', 'nav')
 UASM = os.path.join(NDIR, 'vm.uasm')
-UMEM = os.path.join(NDIR, 'nav_ucode.mem')
+UMEM = os.path.join(NDIR, 'nav_ucode.mem')         # ROM words 0..1023 (4 M10K)
+UMEMH = os.path.join(NDIR, 'nav_ucode_hi.mem')     # ROM words 1024..1279 (1 M10K)
 USVH = os.path.join(NDIR, 'nav_ucode.svh')
 VMSV = os.path.join(REPO, 'dvd', 'dvd_vm.sv')   # its GENERATED blocks
 PEEK = os.path.join(REPO, 'bench', 'dvd', 'dvd_vm_peek.svh')
@@ -77,6 +78,8 @@ FN = {n: i for i, n in enumerate(FNS)}
 CONDS = ['eq', 'ne', 'ltu', 'geu']
 STACK_DEPTH = 4
 UC_DEPTH = 1280                  # 5 M10K at 40 bits (256 x 40 each); the pc is 11 bits
+UC_LO = 1024                     # ...as TWO arrays, 1,024 + 256 words: one 1,280-deep array
+                                 # is rounded up to 2,048 deep by Quartus = 8 M10K, not 5
 PC_MASK = 0x7FF
 RAM_WORDS = 256
 CMD_WORDS = 2048                 # 4096 bytes = 512 commands, the reader's table
@@ -594,10 +597,17 @@ def stamp_rtl(svh):
     return pat.sub(lambda m: block, text).splitlines()
 
 
+def rom_images(words):
+    """-> (the low image, words 0..UC_LO-1; the high image, UC_LO..UC_DEPTH-1)."""
+    full = [f'{w:010x}' for w in words] + ['0000000000'] * (UC_DEPTH - len(words))
+    return full[:UC_LO], full[UC_LO:]
+
+
 def write_mems(check=False):
     words, labels, _ = load_program()
     svh = ucode_svh(words, labels)
-    files = {UMEM: [f'{w:010x}' for w in words] + ['0000000000'] * (UC_DEPTH - len(words)),
+    lo, hi = rom_images(words)
+    files = {UMEM: lo, UMEMH: hi,
              USVH: svh, VMSV: stamp_rtl(svh), PEEK: peek_svh()}
     bad = []
     for path, lines in files.items():
@@ -645,19 +655,26 @@ def main():
         # dvd/dvd_vm.sv whose ROM loads that image. Prints the .sv path.
         os.makedirs(a.mutant[1], exist_ok=True)
         mem = os.path.abspath(os.path.join(a.mutant[1], a.mutant[0] + '.mem'))
+        memh = os.path.abspath(os.path.join(a.mutant[1], a.mutant[0] + '_hi.mem'))
         words, _, _ = load_program(a.mutant[0])
-        open(mem, 'w').write('\n'.join([f'{w:010x}' for w in words] +
-                                       ['0000000000'] * (UC_DEPTH - len(words))) + '\n')
+        lo, hi = rom_images(words)
+        open(mem, 'w').write('\n'.join(lo) + '\n')
+        open(memh, 'w').write('\n'.join(hi) + '\n')
         sv = os.path.join(a.mutant[1], f'dvd_vm_{a.mutant[0]}.sv')
         text = open(VMSV).read()
         assert text.count('"dvd/nav/nav_ucode.mem"') == 1
-        open(sv, 'w').write(text.replace('"dvd/nav/nav_ucode.mem"', f'"{mem}"'))
+        assert text.count('"dvd/nav/nav_ucode_hi.mem"') == 1
+        text = text.replace('"dvd/nav/nav_ucode.mem"', f'"{mem}"')
+        open(sv, 'w').write(text.replace('"dvd/nav/nav_ucode_hi.mem"', f'"{memh}"'))
         print(sv)
         return 0
     if a.mem_out:
+        # two images: MEM_OUT (words 0..1023) and MEM_OUT with _hi before its extension
         words, _, _ = load_program(a.mutate)
-        open(a.mem_out, 'w').write('\n'.join([f'{w:010x}' for w in words] +
-                                              ['0000000000'] * (UC_DEPTH - len(words))) + '\n')
+        lo, hi = rom_images(words)
+        open(a.mem_out, 'w').write('\n'.join(lo) + '\n')
+        root, ext = os.path.splitext(a.mem_out)
+        open(root + '_hi' + (ext or '.mem'), 'w').write('\n'.join(hi) + '\n')
         return 0
     if a.list:
         listing()

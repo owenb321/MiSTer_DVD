@@ -639,6 +639,15 @@ at rest) is not restored.
 the ROM into 1,024 + 256-word arrays should give 3 back: a follow-up. Timing passes:
 `clk_dec` 91.26 / 87.68 MHz, `clk_mem` 99.06 / 99.65.
 
+**The ROM split (2026-10-27).** The 1,280-word ROM was one array, which Quartus rounds up
+to 2,048 deep: 8 M10K for 5 blocks' worth of words. It is now two arrays, `rom` (1,024
+words, 4 M10K) and `romh` (256, 1 M10K), read on the same clock and picked by the fetch
+address's bit 10, registered with them; `tools/nav_isa.py` writes `nav_ucode.mem` and
+`nav_ucode_hi.mem` (and `--mutant` / `--mem-out` both images). Same latency, same program:
+`vm_ab` is trace- and cycle-identical, and the JumpSS handlers that live above word 1,023
+ran 2,218 traced instructions in it. `tools/check_gprm_ram.py` pins both arrays (R6: one
+1,280-deep ROM again; R7: a combinational read of the high one).
+
 **Limits.** A restore waits for the VM's rest and for Disc Menus on; with menus off it
 stays pending (verdict 1) and the host times out. A mount aborts a running restore; the
 request survives and runs after the boot chain. The disc must be the same one: nothing
