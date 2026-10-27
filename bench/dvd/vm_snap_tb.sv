@@ -40,6 +40,13 @@
 //              without a target, none when a menu landed, none when another PGC loaded
 //              first; [pos] also checks the clock / s_ptm / STC latches
 //
+// THE OSD's SAVE STATE ROWS (save states step 4, docs/nav_engine.md §11):
+//   [ui]       word 2 carries {vm_en, slot, load_n, save_n}: each press moves its own
+//              2-bit count once (wrapping), the slot is the Slot row AT the press -- a
+//              row moved afterwards does not change it -- and vm_en follows enable
+//   [menusoff] with Disc Menus off a good blob is refused as verdict 7 and never
+//              raises restore_req; back on, the same blob is taken
+//
 // Run: iverilog -g2012 -I dvd -o /tmp/vs dvd/dvd_vm.sv dvd/vm_snap.sv bench/dvd/vm_snap_tb.sv && vvp /tmp/vs
 `timescale 1ns/1ps
 `default_nettype none
@@ -81,6 +88,7 @@ module vm_snap_tb;
     reg [31:0] eltm = 0, vobu_sptm = 0;
     reg [32:0] stc = 0;
     reg        video_live = 0, mount = 0;
+    reg        ui_save = 0, ui_load = 0; reg [1:0] ui_slot = 0;
     wire       rst_seek_pulse; wire [16:0] rst_seek_secs; wire [31:0] rst_seek_rbn;
     // ---- the position ----
     reg        pos_clr = 0, pos_commit = 0;
@@ -135,7 +143,8 @@ module vm_snap_tb;
         .c_eltm(c_eltm), .vob_idn(vob_idn), .c_idn(c_idn),
         .eltm(eltm), .vobu_sptm(vobu_sptm), .stc(stc), .pgc_loaded(pgc_loaded),
         .video_live(video_live), .menu_active(menu_active), .mount(mount),
-        .rst_seek_pulse(rst_seek_pulse), .rst_seek_secs(rst_seek_secs), .rst_seek_rbn(rst_seek_rbn));
+        .rst_seek_pulse(rst_seek_pulse), .rst_seek_secs(rst_seek_secs), .rst_seek_rbn(rst_seek_rbn),
+        .ui_save(ui_save), .ui_load(ui_load), .ui_slot(ui_slot), .vm_en(enable));
 
     reg drive_seen = 1'b0;
     always @(posedge clk) if (drive === 1'b1) drive_seen <= 1'b1;
@@ -278,11 +287,33 @@ module vm_snap_tb;
         begin_arm("empty");
         read_all;
         check(w[1] === 16'd0, "seq is not 0 before any snapshot");
-        check(w[2] === 16'd0, "busy/len not 0 before any snapshot");
+        check(w[2] === 16'h4000, "word 2 not {vm_en=1, 0...} before any snapshot");
         check(w[3] === USNAP_FMT, "fmt is not USNAP_FMT");
         ok = 1; for (i = HDR; i < HDR + USNAP_WORDS + 4; i = i + 1) if (w[i] !== 16'd0) ok = 0;
         check(ok, "payload words before any snapshot");
         end_arm;
+
+        // ------------------------------------------------------------ [ui]
+        begin_arm("ui");
+        ui_slot = 2'd2;
+        @(negedge clk) ui_save = 1; @(negedge clk) ui_save = 0;
+        ui_slot = 2'd1;                                // moved after the press
+        txn(CMD, 16'd0, 4);
+        check(w[2][9:8] === 2'd1 && w[2][11:10] === 2'd0, "one save press is not save_n 1, load_n 0");
+        check(w[2][13:12] === 2'd2, "the slot is not the row AT the press");
+        @(negedge clk) ui_load = 1; @(negedge clk) ui_load = 0;
+        txn(CMD, 16'd0, 4);
+        check(w[2][11:10] === 2'd1 && w[2][9:8] === 2'd1, "one load press is not load_n 1, save_n unchanged");
+        check(w[2][13:12] === 2'd1, "a load press did not latch the slot");
+        for (i = 0; i < 3; i = i + 1) begin @(negedge clk) ui_save = 1; @(negedge clk) ui_save = 0; end
+        txn(CMD, 16'd0, 4);
+        check(w[2][9:8] === 2'd0, "save_n does not wrap at 4");
+        check(w[2][14] === 1'b1, "vm_en is not set with enable on");
+        check(w[2][15] === 1'b0 && w[2][7:0] === 8'd0, "the presses disturbed busy/len");
+        end_arm;
+        // put word 2's request fields back to 0 so the arms below read busy/len plainly
+        for (i = 0; i < 2; i = i + 1) begin @(negedge clk) ui_load = 1; @(negedge clk) ui_load = 0; end
+        @(negedge clk) ui_load = 1; ui_slot = 2'd0; @(negedge clk) ui_load = 0;
 
         // give the VM a state worth reading: distinct RAM words, SPRMs, wrapper state
         for (i = 0; i < 40; i = i + 1) vm.u_seq.dram[i] = 16'h1000 + i * 16'h0101;
@@ -313,7 +344,7 @@ module vm_snap_tb;
         check(dut.busy === 1'b0, "the snapshot never completed");
         read_all;
         check(w[1] === 16'd1, "seq is not 1 after one snapshot");
-        check(w[2] === {8'd0, 8'd96}, "busy/len is not {0, 96}");
+        check(w[2] === {8'h40, 8'd96}, "busy/len is not {0, 96}");
         check(w[3] === USNAP_FMT, "fmt is not USNAP_FMT");
         end_arm;
 
@@ -385,7 +416,7 @@ module vm_snap_tb;
         wait_done(4000); nclk(4);
         read_all;
         check(w[1] === seq0[15:0] + 16'd1, "the waiting snapshot did not complete at rest");
-        check(w[2] === {8'd0, 8'd96}, "busy/len after the waiting snapshot");
+        check(w[2] === {8'h40, 8'd96}, "busy/len after the waiting snapshot");
         end_arm;
 
         // ------------------------------------------------------------ restores
@@ -507,6 +538,24 @@ module vm_snap_tb;
         @(negedge clk) pgc_loaded = 1; @(negedge clk) pgc_loaded = 0;
         nclk(20); video_live = 1; nclk(10); video_live = 0;
         check(n_seek == 2, "a seek fired across a mount");
+        end_arm;
+
+        // ------------------------------------------------------------ [menusoff]
+        begin_arm("menusoff");
+        ld_tm = 16'hFFFF; ld_rbn = 32'd0;
+        nclk(400);
+        n_rreq = 0;
+        enable = 0;
+        txn(CMD, 16'd0, 4);
+        check(w[2][14] === 1'b0, "vm_en still set with Disc Menus off");
+        load(USNAP_FMT, 16'd96, sum, USNAP_WORDS); read_all;
+        check(w[4][15:13] === 3'd7, "a load with Disc Menus off is not refused as verdict 7");
+        nclk(200);
+        check(n_rreq == 0, "a load with Disc Menus off raised restore_req");
+        enable = 1;
+        load(USNAP_FMT, 16'd96, sum, USNAP_WORDS); read_all;
+        check(w[4][15:13] === 3'd1 || w[4][15:13] === 3'd2, "with Disc Menus back on the blob is not taken");
+        check(n_rreq == 1, "with Disc Menus back on no restore_req");
         end_arm;
 
         if (any_fail) $display("RESULT: FAIL");

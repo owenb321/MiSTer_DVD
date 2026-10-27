@@ -1050,6 +1050,22 @@ parameter CONF_STR = {
     // ⚠ Re-ordering an option's value list REMAPS every saved setting, so the
     // "v,N" config version below is bumped with it. See docs/av_sync.md.
     "P1O[23:21],A/V Offset,0ms,-200ms,-100ms,-50ms,+50ms,+100ms,+150ms,+200ms;",
+
+    // ---- Save State (page 2; save states step 4, docs/nav_engine.md §11) ----------
+    // Four slots per DISC. A save state is the VM's whole navigation state plus the
+    // displayed picture's time (dvd/vm_snap.sv); the custom Main writes it to
+    // savestates/DVD/ and pushes it back on a load. With stock Main nothing answers
+    // and the rows do nothing (no core can write a file).
+    // ★ `R` is the framework's momentary row (Main's menu.cpp: "'R' covers every
+    // momentary option ... the PSX core also uses it for Save state, Restore state"),
+    // and it closes the OSD after the press. vm_snap counts the presses and latches
+    // the Slot row AT each one, so moving the row afterwards cannot redirect it.
+    // ⚠ Bits 53-56 were never allocated: no "v,N" bump, nobody's settings reset. It
+    // IS a CONF_STR edit, so it re-rolls the pinned fitter SEED.
+    "P2,Save State;",
+    "P2O[54:53],Slot,1,2,3,4;",
+    "P2R[55],Save to Slot;",
+    "P2R[56],Load Slot;",
     "R0,Reset;",
     // Saved-settings version (lowercase v = user_io.cpp config_ver, DISTINCT
     // from the display-only uppercase V line below): the framework persists
@@ -6585,6 +6601,16 @@ nav_dsi nav_dsi_inst (
 // states step 2: read-only, it changes nothing the VM does (run_vm_ab.sh). Placed
 // below nav_dsi, whose fields it latches. Gated by tools/check_vm_snap_wiring.py.
 // =========================================================================
+// The OSD's Save State rows -> one-cycle edges. Main holds an `R` bit for many
+// clk_sys cycles, so an edge is what turns a press into ONE request.
+reg ss_save_q, ss_load_q;
+always @(posedge clk_sys or negedge reset_n) begin
+    if (!reset_n) begin ss_save_q <= 1'b0; ss_load_q <= 1'b0; end
+    else begin ss_save_q <= status[55]; ss_load_q <= status[56]; end
+end
+wire ss_save_edge = status[55] & ~ss_save_q;
+wire ss_load_edge = status[56] & ~ss_load_q;
+
 vm_snap vm_snap_inst (
     .clk          (clk_sys),
     .rst_n        (reset_n),
@@ -6613,6 +6639,10 @@ vm_snap vm_snap_inst (
     .eltm         (whole_eltm_w),       // the HUD clock, at the demux front
     .vobu_sptm    (hl_vobu_sptm_w),     // ...that VOBU's start PTS
     .stc          (av_stc),             // ...and the displayed picture's PTS
+    .ui_save      (ss_save_edge),       // the OSD's "Save to Slot"
+    .ui_load      (ss_load_edge),       // the OSD's "Load Slot"
+    .ui_slot      (status[54:53]),      // the Slot row
+    .vm_en        (menus_on),           // = dvd_vm's enable
     .pgc_loaded   (pgc_loaded),
     .video_live   (video_live_s2),
     .menu_active  (menu_active),

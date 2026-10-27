@@ -38,6 +38,10 @@ EXPECTED = {
     'Player Language': (40, 43),
     'CC Test Line': (44, 44),
     'D-Pad Seek': (45, 45),
+    'Screensaver': (47, 48),
+    'Analog Dither': (8, 8),
+    'Analog CSync': (46, 46),         # P1O[46]
+    'Slot': (53, 54),                 # P2O[54:53]; Save to Slot R[55], Load Slot R[56]
 }
 
 fails = 0

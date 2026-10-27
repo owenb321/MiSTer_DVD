@@ -26,14 +26,20 @@
 //   word 0  MAGIC 0x5E02 -- bit 15 clear: a core without this module never drives the
 //           bus for 0x7D and hps_io answers 0, so 0 = ABSENT
 //   word 1  seq      completed snapshots (wrapping), latched at the command
-//   word 2  {busy, 7'd0, len[7:0]}  busy = requested, not yet complete; len = words in
-//           the last completed snapshot (0 = none yet)
+//   word 2  {busy, vm_en, slot[1:0], load_n[1:0], save_n[1:0], len[7:0]}  busy =
+//           requested, not yet complete; len = words in the last completed snapshot
+//           (0 = none yet). The OSD's Save State rows (save states step 4,
+//           docs/nav_engine.md §11): save_n / load_n count "Save to Slot" / "Load
+//           Slot" presses (2-bit, wrapping: the Main acts when one MOVES, from a
+//           baseline it latches first), slot = the Slot row AT the last press, vm_en =
+//           Disc Menus is on (the VM runs; a restore needs it)
 //   word 3  fmt      the layout id the words follow (tools/nav_isa.py snap_fmt())
 //   word 4  {verdict[2:0], rcount[4:0], 6'd0, pos_fresh, has_video}: the last LOAD's
 //           verdict (0 none, 1 pending -- checked, waiting for the VM to rest, 2 applied,
 //           3 refused: format, 4 refused: length, 5 refused: checksum, 6 refused: a
-//           restore or a snapshot was still pending) and a wrapping count of applied
-//           restores.
+//           restore or a snapshot was still pending, 7 refused: Disc Menus is off --
+//           the VM is disabled and would never take it) and a wrapping count of
+//           applied restores.
 //           pos_fresh = a NAV pack has been parsed since
 //           the last flush (else the position below is stale); has_video = that VOBU's
 //           1stref_ea != 0, i.e. it carries a picture (docs/save_states.md §5g: a
@@ -127,6 +133,12 @@ module vm_snap #(
     input  [31:0] vobu_sptm,             // nav_pci: the front VOBU's start PTS
     input  [32:0] stc,                   // av_stc: the displayed picture's PTS
 
+    // --- the OSD's Save State rows (save states step 4) -------------------------
+    input         ui_save,               // pulse: "Save to Slot" pressed
+    input         ui_load,               // pulse: "Load Slot" pressed
+    input   [1:0] ui_slot,               // the Slot row (0 = slot 1)
+    input         vm_en,                 // Disc Menus on: dvd_vm's enable
+
     // --- the landing's time seek (emu ORs it into the scrub seek) ---------------
     input         pgc_loaded,            // the reader loaded a PGC
     input         video_live,            // the display shows a decoded picture
@@ -169,6 +181,7 @@ module vm_snap #(
     reg  [4:0]  rcount;
     reg  [15:0] seq;
     reg  [7:0]  len;
+    reg  [1:0]  sv_n, ld_n, slot_l;      // the OSD's presses, and the slot at the last one
     reg         p_fresh, p_video;
     reg  [31:0] p_lbn, p_prev, p_eltm, p_tm, p_sptm, p_stc;
     reg  [15:0] p_vob;
@@ -182,7 +195,11 @@ module vm_snap #(
             fresh <= 1'b0; p_fresh <= 1'b0; p_video <= 1'b0;
             p_lbn <= 32'd0; p_prev <= 32'd0; p_eltm <= 32'd0; p_vob <= 16'd0; p_cid <= 8'd0;
             p_tm <= 32'd0; p_sptm <= 32'd0; p_stc <= 32'd0;
+            sv_n <= 2'd0; ld_n <= 2'd0; slot_l <= 2'd0;
         end else begin
+            if (ui_save) sv_n <= sv_n + 2'd1;
+            if (ui_load) ld_n <= ld_n + 2'd1;
+            if (ui_save | ui_load) slot_l <= ui_slot;
             snap_req <= 1'b0;
             restore_req <= 1'b0;
             if (pos_clr)         fresh <= 1'b0;
@@ -195,6 +212,7 @@ module vm_snap #(
             // a load is checked when its transaction ends; only a good one is applied
             if (!io_enable && load_l) begin
                 if (rbusy || busy)              verdict <= 3'd6;   // a restore or snapshot pending
+                else if (!vm_en)                verdict <= 3'd7;   // Disc Menus off: never taken
                 else if (h_fmt != snap_fmt)     verdict <= 3'd3;
                 else if (h_len != {8'd0, WORDS} || h_cnt != WORDS) verdict <= 3'd4;
                 else if (h_acc != h_sum)        verdict <= 3'd5;
@@ -310,7 +328,7 @@ module vm_snap #(
                         dout_r <= seq_s; req_l <= io_din[0]; load_l <= io_din[1];
                         h_acc <= 16'd0; h_cnt <= 8'd0; h_tm <= 16'hFFFF;
                     end
-                    5'd2: dout_r <= {busy_s, 7'd0, len_s};
+                    5'd2: dout_r <= {busy_s, vm_en, slot_l, ld_n, sv_n, len_s};
                     5'd3: dout_r <= snap_fmt;
                     5'd4: dout_r <= {verdict, rcount, 6'd0, p_fresh, p_video};
                     5'd5: dout_r <= p_lbn[31:16];

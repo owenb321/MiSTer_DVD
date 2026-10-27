@@ -12,7 +12,8 @@ instantiates (emu.sv has no bench). A position taken from the wrong counter comp
 passes every bench, and saves a place the viewer was never at.
 
 WHAT IS PINNED
-  emu.sv        every vm_snap port, by expression; dvd_vm's five snap_* ports on the
+  emu.sv        every vm_snap port, by expression; the Save State rows' bits in
+                CONF_STR (Slot O[54:53], Save R[55], Load R[56]) and their edges; dvd_vm's five snap_* ports on the
                 same nets; nav_dsi's 1stref_ea / prev_video connected to the nets
                 vm_snap reads (it left them open before); the EXT_BUS OR and mux
   dvd_vm.sv     snap_we is the O_SNAP output strobe; snap_d the output bus; the
@@ -20,8 +21,9 @@ WHAT IS PINNED
   vm_snap.sv    CMD 0x7D, MAGIC 0x5E02 with bit 15 clear, HDR 13; no other EXT_BUS
                 module answers 0x7D
   DVD.qsf       names dvd/vm_snap.sv
-  dvd_ctl.cpp   UIO_DVD_VMSNAP / DVD_VMSNAP_MAGIC / DVD_VMSNAP_HDR equal the RTL's;
-                DVD_VMSNAP_MAXW holds the snapshot (>= USNAP_WORDS, <= the buffer)
+  dvd_vmsnap.h  UIO_DVD_VMSNAP / DVD_VMSNAP_MAGIC / DVD_VMSNAP_HDR equal the RTL's;
+                DVD_VMSNAP_MAXW holds the snapshot (>= USNAP_WORDS, <= the buffer);
+                the VMSNAP_* word-2 field macros sit where vm_snap.sv packs them
 
 strip_comments() first (comments quote the pre-fix code). A missing instance is a
 named FAIL, never a skip.
@@ -41,7 +43,8 @@ from check_field_blend_wiring import strip_comments, connections  # noqa: E402
 FILES = {
     'emu': 'dvd/emu.sv', 'vm': 'dvd/dvd_vm.sv', 'snap': 'dvd/vm_snap.sv',
     'trace': 'dvd/nav_trace.sv', 'telem': 'dvd/dvd_telem.sv', 'qsf': 'DVD.qsf',
-    'ctl': 'main/support/dvd/dvd_ctl.cpp', 'svh': 'dvd/nav/nav_ucode.svh',
+    'ctl': 'main/support/dvd/dvd_vmsnap.h', 'vcpp': 'main/support/dvd/dvd_vmsnap.cpp',
+    'svh': 'dvd/nav/nav_ucode.svh',
     'pci': 'dvd/nav_pci.sv',
 }
 
@@ -65,6 +68,10 @@ SNAP_PORTS = {
     'pgc_loaded': 'pgc_loaded', 'video_live': 'video_live_s2', 'menu_active': 'menu_active',
     'mount': 'start_streaming', 'rst_seek_pulse': 'rst_seek_pulse',
     'rst_seek_secs': 'rst_seek_secs', 'rst_seek_rbn': 'rst_seek_rbn',
+    # the OSD's Save State rows (save states step 4, docs/nav_engine.md §11): one edge
+    # per press, the Slot row, and Disc Menus (the VM's own enable: a restore needs it)
+    'ui_save': 'ss_save_edge', 'ui_load': 'ss_load_edge', 'ui_slot': 'status[54:53]',
+    'vm_en': 'menus_on',
 }
 VM_PORTS = {'snap_req': 'vm_snap_req', 'snap_we': 'vm_snap_we', 'snap_d': 'vm_snap_d',
             'snap_done': 'vm_snap_done', 'snap_fmt': 'vm_snap_fmt',
@@ -114,6 +121,14 @@ def run(txt, verbose=True):
     rd = connections(em, 'dvd_iso_reader')
     for port, want in RD_PORTS.items():
         pin(rd, 'dvd_iso_reader', port, want)
+    pin(vm, 'dvd_vm', 'enable', 'menus_on')            # vm_en must be the VM's own enable
+    for bits, row in (('O[54:53]', 'Slot,1,2,3,4'), ('R[55]', 'Save to Slot'), ('R[56]', 'Load Slot')):
+        ok(re.search(r'"P2' + re.escape(bits + ',' + row) + r';"', em) is not None,
+           f'CONF_STR has P2{bits},{row}')
+    for n, b in (('save', 55), ('load', 56)):
+        ok(re.search(r'\bss_%s_q\s*<=\s*status\[%d\]\s*;' % (n, b), em) is not None and
+           re.search(r'\bwire\s+ss_%s_edge\s*=\s*status\[%d\]\s*&\s*~\s*ss_%s_q\s*;' % (n, b, n), em) is not None,
+           f'ss_{n}_edge = the rising edge of status[{b}]')
     pc = connections(em, 'nav_pci')
     pin(pc, 'nav_pci', 'vobu_sptm', 'hl_vobu_sptm_w')
     ds = connections(em, 'nav_dsi')
@@ -175,7 +190,7 @@ def run(txt, verbose=True):
                  s['qsf'], re.M) is not None, 'DVD.qsf names dvd/vm_snap.sv')
 
     if verbose:
-        print('== dvd_ctl.cpp ==')
+        print('== dvd_vmsnap.h / .cpp ==')
     c = s['ctl']
 
     def define(name):
@@ -187,7 +202,22 @@ def run(txt, verbose=True):
     mx = define('DVD_VMSNAP_MAXW')
     ok(mx is not None and words is not None and rtl_buf is not None and words <= mx <= rtl_buf,
        f'DVD_VMSNAP_MAXW ({mx}) holds a snapshot and no more than the buffer')
-    ok(re.search(r'spi_uio_cmd_cont\(\s*UIO_DVD_VMSNAP\s*\)', c) is not None, 'the Main issues UIO_DVD_VMSNAP')
+    ok(re.search(r'spi_uio_cmd_cont\(\s*UIO_DVD_VMSNAP\s*\)', s['vcpp']) is not None, 'the Main issues UIO_DVD_VMSNAP')
+    # word 2's fields: the RTL's concatenation, MSB first, against the Main's shifts
+    m2 = re.search(r"5'd2:\s*dout_r\s*<=\s*\{([^}]*)\}\s*;", t)
+    order = [x.strip() for x in m2.group(1).split(',')] if m2 else []
+    widths = {'busy_s': 1, 'vm_en': 1, 'slot_l': 2, 'ld_n': 2, 'sv_n': 2, 'len_s': 8}
+    pos, at = {}, 16
+    for f in order:
+        at -= widths.get(f, 99)
+        pos[f] = at
+    want = {'busy_s': ('VMSNAP_BUSY', 1), 'vm_en': ('VMSNAP_VM_EN', 1), 'slot_l': ('VMSNAP_SLOT', 3),
+            'ld_n': ('VMSNAP_LOAD_N', 3), 'sv_n': ('VMSNAP_SAVE_N', 3)}
+    ok(at == 0 and set(order) == set(widths), f'vm_snap word 2 is the six fields, 16 bits ({order})')
+    for f, (mac, mask) in want.items():
+        mm2 = re.search(r'#define\s+%s\(w2\)\s+\(\(\(w2\)\s*>>\s*(\d+)\)\s*&\s*(\d+)\)' % mac, c)
+        ok(mm2 is not None and int(mm2.group(1)) == pos.get(f) and int(mm2.group(2)) == mask,
+           f'{mac} reads bit {pos.get(f)} (mask {mask}), where vm_snap packs {f}')
     return fails
 
 
@@ -211,11 +241,20 @@ MUTATIONS = [
     ('ctl', '#define DVD_VMSNAP_MAGIC    0x5E02', '#define DVD_VMSNAP_MAGIC    0x5E01', 'Main magic drifts'),
     ('ctl', '#define UIO_DVD_VMSNAP      0x7D', '#define UIO_DVD_VMSNAP      0x7C', 'Main asks nav_trace'),
     ('ctl', '#define DVD_VMSNAP_HDR      19', '#define DVD_VMSNAP_HDR      18', 'Main header one short'),
+    ('ctl', '#define VMSNAP_SLOT(w2)     (((w2) >> 12) & 3)', '#define VMSNAP_SLOT(w2)     (((w2) >> 10) & 3)',
+     'the Main reads the load count as the slot'),
+    ('snap', "5'd2: dout_r <= {busy_s, vm_en, slot_l, ld_n, sv_n, len_s};",
+     "5'd2: dout_r <= {busy_s, vm_en, slot_l, sv_n, ld_n, len_s};", 'the RTL swaps the two counts'),
     ('emu', '.stc          (av_stc),             // ...and the displayed picture\'s PTS',
      '.stc          (33\'d0),', 'the displayed PTS tied off'),
     ('emu', '.eltm         (whole_eltm_w),       // the HUD clock, at the demux front',
      '.eltm         (dsi_c_eltm),', 'the cell clock instead of the PGC clock'),
     ('emu', '.video_live   (video_live_s2),', ".video_live   (1'b1),", 'the seek fires before a picture'),
+    ('emu', '.ui_slot      (status[54:53]),', '.ui_slot      (status[53:52]),', 'the slot read off the wrong bits'),
+    ('emu', '.ui_load      (ss_load_edge),', '.ui_load      (ss_save_edge),', 'a save press counted as a load'),
+    ('emu', '.vm_en        (menus_on),', ".vm_en        (1'b1),", 'loads sent to a disabled VM'),
+    ('emu', 'wire ss_save_edge = status[55] & ~ss_save_q;', 'wire ss_save_edge = status[55];', 'a held bit is many saves'),
+    ('emu', '"P2R[56],Load Slot;",', '"P2R[57],Load Slot;",', 'the Load row on a bit the core never reads'),
     ('pci', 'assign vobu_sptm     = f_vptm;', 'assign vobu_sptm     = f_sptm;', 'the HLI start PTS, not the VOBU\'s'),
 ]
 

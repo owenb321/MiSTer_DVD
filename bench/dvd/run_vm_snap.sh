@@ -3,7 +3,8 @@
 # docs/nav_engine.md "State snapshot"). Save states, step 2.
 #
 #   GREEN  bench/dvd/vm_snap_tb.sv: arms [absent] [empty] [req] [words] [nochange]
-#          [pos] [reread] [busy] and the restore's [refuse] [load] [pending] all PASS --
+#          [pos] [reread] [busy], the restore's [refuse] [load] [pending] [land], and the
+#          OSD rows' [ui] [menusoff] (save states step 4) all PASS --
 #          the real microcode and vm_snap together
 #          tools/check_vm_snap_wiring.py: the emu.sv / dvd_vm / nav_dsi / qsf /
 #          dvd_ctl.cpp seams (emu.sv has no bench)
@@ -117,11 +118,22 @@ PYEOF
     mut "S18 another load does not abandon it"   "land" \
         "default: if (pgc_loaded) rs <= RS_IDLE;    // something else loaded first" "default: if (1'b0) rs <= RS_IDLE;"
     # S19: every LOAD carries the target word, so with it outside the sum every load
-    # is refused, and every restore arm fails with it
-    mut "S19 the target not under the checksum"  "land load pending refuse" \
+    # is refused, and every restore arm fails with it ([menusoff]'s "back on" load too)
+    mut "S19 the target not under the checksum"  "land load menusoff pending refuse" \
         "8'd5: begin h_tm   <= io_din; h_acc <= h_acc + io_din; end" "8'd5: h_tm <= io_din;"
     mut "S20 the cell clock latched, not the PGC's" "pos" \
         "p_tm <= eltm;" "p_tm <= c_eltm;"
+
+    # ---- the OSD's Save State rows (save states step 4) ----
+    mut "S22 the slot read live, not at the press" "ui" \
+        "if (ui_save | ui_load) slot_l <= ui_slot;" "slot_l <= ui_slot;"
+    mut "S23 a load press counted as a save"     "ui" \
+        "if (ui_load) ld_n <= ld_n + 2'd1;" "if (ui_load) sv_n <= sv_n + 2'd1;"
+    # [ui] runs with enable on, so a constant 1 only shows once Disc Menus goes off
+    mut "S24 vm_en not reported"                 "menusoff" \
+        "5'd2: dout_r <= {busy_s, vm_en, slot_l, ld_n, sv_n, len_s};" "5'd2: dout_r <= {busy_s, 1'b1, slot_l, ld_n, sv_n, len_s};"
+    mut "S25 a load with Disc Menus off accepted" "menusoff" \
+        "else if (!vm_en)                verdict <= 3'd7;   // Disc Menus off: never taken" "else if (1'b0)                  verdict <= 3'd7;"
 
     echo "== RED (wiring: the checker must catch each)"
     python3 tools/check_vm_snap_wiring.py --red || fail=1
