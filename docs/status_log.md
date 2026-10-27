@@ -27,7 +27,11 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
   measured with the nav FIFO: landings +0.24, +0.17, +0.56, −0.80 s from the saved
   picture. Found on the rig: a slightly NEGATIVE demux lead is normal just after a seek
   (−26 ms), and rounding down biased landings early; both fixed in the Main.
-  +109 ALM in `vm_snap`; the device is at 98 %. The snapshot latches the HUD clock,
+  +109 ALM in `vm_snap`; the device is at 98 %.
+  - **No flash (§10a):** the seek fired on the landing's first picture, so the cell start
+    showed for 40 ms. It now fires at the landing's first NAV pack: four rig trials, no
+    picture between the two flushes (11-12 ms apart); the same instrument reports the old
+    build's flash in all four of its trials. The snapshot latches the HUD clock,
   the front VOBU's `vobu_s_ptm` and the STC; the Main computes the displayed picture's PGC
   time (clock − lead) or −1 (no picture in the VOBU, stale, lead out of 0..30 s); the
   restore lands at the cell, then fires ONE time seek through the D-pad's path after the

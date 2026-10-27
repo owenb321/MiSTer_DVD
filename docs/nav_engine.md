@@ -728,3 +728,10 @@ without teaching the reader a "jump + time" request; a flash is not.
   decoded; the seek's flush comes at the next block boundary, inside the ~41 ms.
 - The first picture stays as the fallback trigger (a cell whose NAV pack the demux never
   reports).
+
+**Measured** (rig, `DVD_vmsnap_20261027_0155.rbf`, Scooby-Doo 2's film, the §10 instrument
+plus "was any picture shown between the restore's two flushes", read from the nav FIFO's
+`video_live` edges). The instrument sees the old flash: replayed on the previous build's
+four trials it reports a picture 40 ms after the jump in every one. This build, four
+trials: **no picture between the flushes, which are 11-12 ms apart**; landings +0.22,
+−0.31, +0.57, −0.84 s. Timing: `clk_dec` 90.76 / 88.27 MHz.

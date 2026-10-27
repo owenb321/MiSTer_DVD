@@ -667,8 +667,9 @@ a cheap rebuild possible. Each step is useful on its own:
    ✅ **3b. Exact landing for films** (same branch: sim-proven, fitted at +109 ALM,
    HW-measured): the snapshot records the displayed picture's PGC time (the demux lead
    taken off the HUD clock), and the restore time-seeks there after its cell landing.
-   Seven rig trials: within ±1 s of the saved picture (+0.24, +0.17, +0.56, −0.80 s with
-   the final rounding). `docs/nav_engine.md` §10. ⚠ The device is at 98 % ALM. Open for films: the displayed picture's position (step 2's finding)
+   Within ±1 s of the saved picture on the rig, and since §10a one visible transition
+   (the seek fires at the landing's first NAV pack: no flash of the cell start, measured).
+   `docs/nav_engine.md` §10. ⚠ The device is at 98 % ALM. Open for films: the displayed picture's position (step 2's finding)
    and the no-picture VOBU rule (step 1's).
 4. ⏳ **The user-facing feature:** the OSD rows, slot files and disc identity from
    `feature/save-states`.
