@@ -111,7 +111,7 @@ module vm_ab_tb;
 `ifdef VM_NEW
         .snap_req(snap_req), .snap_we(snap_we), .snap_d(snap_d), .snap_done(snap_done),
         .snap_fmt(snap_fmt), .restore_req(restore_req), .rst_ra(rst_ra), .rst_q(rst_q),
-        .rst_done(rst_done), .jump_ttn_hint(jump_ttn_hint),
+        .rst_done(rst_done), .jump_ttn_hint(jump_ttn_hint), .ast_set(1'b0), .ast_set_val(8'd0), .spst_set(1'b0), .spst_set_val(8'd0),
 `endif
         .dbg_state(dbg_state), .dbg_g3(dbg_g3), .dbg_g14_9(dbg_g14_9), .dbg_rsm(dbg_rsm),
         .dbg_deadend(dbg_deadend), .link_fail(link_fail), .link_fail_pgcn(link_fail_pgcn));

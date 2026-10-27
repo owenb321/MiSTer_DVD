@@ -2301,6 +2301,8 @@ end
 // of the wrap rule, which is the "bench that agrees with a copy of the thing"
 // failure in register form.
 reg        angle_pulse_q;
+reg        ast_wb, spst_wb;                  // Audio / Subtitle write-back (below sub_on_eff)
+reg  [7:0] ast_wb_val, spst_wb_val;
 reg        angle_wb;
 reg  [3:0] angle_wb_val;
 always @(posedge clk_sys or negedge reset_n) begin
@@ -2916,6 +2918,10 @@ dvd_vm dvd_vm_inst (
     .pre_done      (vm_pre_done),         // PRE resolved -> the angle is settled
     .agl_set       (angle_wb),            // B6 press: write the user's angle back
     .agl_set_val   (angle_wb_val),
+    .ast_set       (ast_wb),              // Audio step: SPRM1 = the stream now playing
+    .ast_set_val   (ast_wb_val),
+    .spst_set      (spst_wb),             // Subtitle step: SPRM2 = {display, stream}
+    .spst_set_val  (spst_wb_val),
     .ptt_upd       (ptt_upd_w),           // SPRM7 follows playback (the reader's part)
     .ptt_val       (ptt_cur_w),
     .dbg_state     (),
@@ -3030,6 +3036,14 @@ always @(posedge clk_sys or negedge reset_n) begin
         aud_cur <= 3'd0; sub_on <= 1'b0; sub_idx <= 5'd0;
     end else if (start_streaming) begin
         aud_cur <= 3'd0; sub_on <= 1'b0; sub_idx <= 5'd0;  // default: track 0, subs off
+    end else if (vm_rst_done) begin
+        // A save state's restore wrote SPRM1/SPRM2 (E_RST, before RSTDONE): the user's
+        // side follows them, so the saved track plays whether or not the write moved
+        // the VM's value (an unchanged SPRM claims nothing: vm_owns_* below).
+        // 62/63 (bit 5) are "none"/"forced", not streams: subtitles off.
+        aud_cur <= (vm_astn < 8'd8) ? vm_astn[2:0] : 3'd0;
+        sub_on  <= vm_spstn[6] & ~vm_spstn[5];
+        sub_idx <= vm_spstn[5] ? 5'd0 : vm_spstn[4:0];
     end else begin
         if (aud_step_w)
             aud_cur <= (({1'b0,aud_log} + 4'd1) >= audio_ntracks_w) ? 3'd0 : aud_log + 3'd1;
@@ -3203,6 +3217,31 @@ assign     sp_sel = (menus_on && vm_owns_sp && vm_spstn[6]) ? vm_spstn[4:0] : su
 // sub_on OR a menu SetSTN display-on that still owns the selection (the same two
 // terms sp_route_en carries for the title).
 assign     sub_on_eff = sub_on | (menus_on && vm_owns_sp && vm_spstn[6]);
+
+// ---- the user's Audio / Subtitle choice written back to SPRM1 / SPRM2 ----------
+// As angle_wb does for SPRM3: a set-top player's stream change IS a write of SPRM1/2,
+// and both a disc command reading it and a save state (docs/nav_engine.md §11) need
+// the stream playing, not the one the disc last set. Taken one cycle after the step,
+// from the EFFECTIVE selection (aud_log / sp_sel, after the step released the VM's
+// claim), never a predicted value. The write moves vm_astn/vm_spstn, which re-claims
+// the selection for the VM -- with the same value, so nothing audible changes.
+// Subtitles OFF keep SPRM2's stream number and clear bit 6, as libdvdnav does: the
+// forced-subtitle fallback reads that stream (docs/subpicture.md).
+reg aud_step_q, sub_step_q;
+always @(posedge clk_sys or negedge reset_n) begin
+    if (!reset_n) begin
+        aud_step_q <= 1'b0; sub_step_q <= 1'b0;
+        ast_wb <= 1'b0; spst_wb <= 1'b0; ast_wb_val <= 8'd0; spst_wb_val <= 8'd62;
+    end else begin
+        aud_step_q <= aud_step_w; sub_step_q <= sub_step_w;
+        ast_wb <= 1'b0; spst_wb <= 1'b0;
+        if (aud_step_q) begin ast_wb <= 1'b1; ast_wb_val <= {5'd0, aud_log}; end
+        if (sub_step_q) begin
+            spst_wb     <= 1'b1;
+            spst_wb_val <= sub_on_eff ? {2'b01, 1'b0, sp_sel} : {2'b00, vm_spstn[5:0]};
+        end
+    end
+end
 
 // ---- DVD subpicture display-mode substream mapping (in-title HLI buttons) ----
 // A VM SetSTN (SPRM2) selects a LOGICAL subpicture stream; the PHYSICAL substream

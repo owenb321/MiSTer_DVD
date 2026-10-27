@@ -221,7 +221,8 @@ def main():
                           'track the popup number names' % (port, rdr.get(port), want))
 
     # A8 -- the step starts from what the popup SHOWED, so "AUD 2" steps to 3.
-    m = re.search(r"aud_cur\s*<=\s*\(([^;]*);", src)
+    # (the step's assignment, not the restore's sync from SPRM1 -- docs/nav_engine.md §11)
+    m = re.search(r"if\s*\(\s*aud_step_w\s*\)\s*aud_cur\s*<=\s*\(([^;]*);", src)
     if not m or 'aud_log' not in terms(m.group(1)) or 'aud_cur' in terms(m.group(1)):
         bad('A8', 'the Audio step must advance from aud_log (the effective track), not aud_cur')
     # Every ADVANCING subtitle step must come from sp_sel: directly (`sp_sel + 1`, the

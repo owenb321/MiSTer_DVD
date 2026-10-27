@@ -233,6 +233,14 @@ module dvd_vm (
     // source of truth for exactly this reason.
     input             agl_set,        // pulse: user changed the angle
     input      [3:0]  agl_set_val,    // 1-based angle to store in SPRM3
+    // The same write-back for the Audio and Subtitle buttons (save states step 4,
+    // docs/nav_engine.md §11): SPRM1 / SPRM2 are the user's stream choice as well as
+    // the disc's. Without it a disc command reading SPRM1 saw the stream the disc last
+    // SET, not the one playing, and a save state lost the user's track.
+    input             ast_set,        // pulse: user changed the audio stream
+    input      [7:0]  ast_set_val,    // SPRM1: the logical audio stream
+    input             spst_set,       // pulse: user changed the subtitle stream/display
+    input      [7:0]  spst_set_val,   // SPRM2: {display (bit 6), logical stream [5:0]}
     // SPRM7 (PTTN) follows playback, as libdvdnav's set_PGN does: the reader's
     // global part (VTS_PTT_SRPT reverse map) of the cell now playing in a title,
     // 0 when no part names it (libdvdnav writes 0 too). Before 2026-10-08 the VM
@@ -774,6 +782,8 @@ always @(posedge clk or negedge rst_n) begin
         // in this block and win.
         if (btns_armed && !sprm8_frozen) sprm8 <= {btn_sel, 10'd0};
         if (agl_set) sprm3 <= {12'd0, agl_set_val};
+        if (ast_set) sprm1 <= {8'd0, ast_set_val};
+        if (spst_set) sprm2 <= {8'd0, spst_set_val};
         // the last SUCCESSFULLY loaded menu PGC (the LINK FAIL re-enter target) and
         // menu_seen (the boot-chain shortcut's gate), on the load event itself
         if (pgc_loaded && (vm_dom == DOM_VMGM || vm_dom == DOM_VTSM)) begin

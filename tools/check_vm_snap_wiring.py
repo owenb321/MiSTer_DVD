@@ -122,6 +122,18 @@ def run(txt, verbose=True):
     for port, want in RD_PORTS.items():
         pin(rd, 'dvd_iso_reader', port, want)
     pin(vm, 'dvd_vm', 'enable', 'menus_on')            # vm_en must be the VM's own enable
+    # the user's Audio / Subtitle choice written back to SPRM1 / SPRM2 (a save state
+    # carries it; a disc command reads it), and the user side synced on a restore
+    for port, want in (('ast_set', 'ast_wb'), ('ast_set_val', 'ast_wb_val'),
+                       ('spst_set', 'spst_wb'), ('spst_set_val', 'spst_wb_val')):
+        pin(vm, 'dvd_vm', port, want)
+    ok(re.search(r'\baud_step_q\s*<=\s*aud_step_w\s*;', em) is not None and
+       re.search(r'if\s*\(\s*aud_step_q\s*\)\s*begin\s*ast_wb\s*<=\s*1\'b1;\s*ast_wb_val\s*<=\s*\{5\'d0,\s*aud_log\}\s*;', em) is not None,
+       'ast_wb: one cycle after the Audio step, the effective aud_log')
+    ok(re.search(r'spst_wb_val\s*<=\s*sub_on_eff\s*\?\s*\{2\'b01,\s*1\'b0,\s*sp_sel\}\s*:\s*\{2\'b00,\s*vm_spstn\[5:0\]\}\s*;', em) is not None,
+       'spst_wb_val: {display, the effective stream}, or SPRM2\'s stream with display off')
+    ok(re.search(r'else\s+if\s*\(\s*vm_rst_done\s*\)\s*begin\s*aud_cur\s*<=', em) is not None,
+       'a restore syncs aud_cur / sub_on / sub_idx from the restored SPRMs')
     for bits, row in (('O[54:53]', 'Slot,1,2,3,4'), ('R[55]', 'Save to Slot'), ('R[56]', 'Load Slot')):
         ok(re.search(r'"P2' + re.escape(bits + ',' + row) + r';"', em) is not None,
            f'CONF_STR has P2{bits},{row}')
@@ -255,6 +267,10 @@ MUTATIONS = [
     ('emu', '.vm_en        (menus_on),', ".vm_en        (1'b1),", 'loads sent to a disabled VM'),
     ('emu', 'wire ss_save_edge = status[55] & ~ss_save_q;', 'wire ss_save_edge = status[55];', 'a held bit is many saves'),
     ('emu', '"P2R[56],Load Slot;",', '"P2R[57],Load Slot;",', 'the Load row on a bit the core never reads'),
+    ('emu', '.ast_set       (ast_wb),', ".ast_set       (1'b0),", 'the Audio write-back never reaches the VM'),
+    ('emu', 'if (aud_step_q) begin ast_wb <= 1\'b1; ast_wb_val <= {5\'d0, aud_log}; end',
+     'if (aud_step_q) begin ast_wb <= 1\'b1; ast_wb_val <= {5\'d0, aud_cur}; end', 'the write-back from the user register, not the effective track'),
+    ('emu', '    end else if (vm_rst_done) begin', '    end else if (1\'b0) begin', 'a restore leaves the user side as it was'),
     ('pci', 'assign vobu_sptm     = f_vptm;', 'assign vobu_sptm     = f_sptm;', 'the HLI start PTS, not the VOBU\'s'),
 ]
 

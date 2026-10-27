@@ -113,7 +113,7 @@ module iso_reader_intitle_link_tb;
         // player parameters: the pre-player_regs constants (feature/player-regs)
         .cfg_lang(16'h656E), .cfg_sprm14(16'h0100), .cfg_sprm15(16'h7CFC), .cfg_sprm20(16'h0001),
         // new VM ports tied off (a floating input is X).
-        .agl_set(1'b0), .agl_set_val(4'd1),
+        .agl_set(1'b0), .agl_set_val(4'd1), .ast_set(1'b0), .ast_set_val(8'd0), .spst_set(1'b0), .spst_set_val(8'd0),
         .ptt_upd(ptt_upd_w), .ptt_val(ptt_cur_w), .snap_req(1'b0), .restore_req(1'b0), .rst_q(16'd0),
         .clk(clk), .rst_n(rst_n), .enable(1'b1), .start(start),
         .rnd_seed(16'hACE1), .sec_tick(1'b0),

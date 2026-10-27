@@ -151,7 +151,7 @@ mut M8 "$E" "$TMP/M8.sv" ".attr_a_sel     (aud_log)," ".attr_a_sel     (aud_cur)
 mut M9 "$E" "$TMP/M9.sv" "aud_cur <= (({1'b0,aud_log} + 4'd1) >= audio_ntracks_w) ? 3'd0 : aud_log + 3'd1;" \
     "aud_cur <= (({1'b0,aud_cur} + 4'd1) >= audio_ntracks_w) ? 3'd0 : aud_cur + 3'd1;" \
     && red_emu "M9 audio steps from aud_cur" "$TMP/M9.sv" A8
-mut M10 "$E" "$TMP/M10.sv" "sub_idx <= sp_sel + 3'd1;" "sub_idx <= sub_idx + 3'd1;" \
+mut M10 "$E" "$TMP/M10.sv" "sub_idx <= sp_sel + 5'd1;" "sub_idx <= sub_idx + 5'd1;" \
     && red_emu "M10 subtitle steps from sub_idx" "$TMP/M10.sv" A8
 
 echo "== RED (transport_hud decision) =="

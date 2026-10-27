@@ -46,6 +46,8 @@
 //              row moved afterwards does not change it -- and vm_en follows enable
 //   [menusoff] with Disc Menus off a good blob is refused as verdict 7 and never
 //              raises restore_req; back on, the same blob is taken
+//   [wb]       the user's Audio / Subtitle write-back (ast_set / spst_set) lands in
+//              SPRM1 / SPRM2, and the next snapshot carries it
 //
 // Run: iverilog -g2012 -I dvd -o /tmp/vs dvd/dvd_vm.sv dvd/vm_snap.sv bench/dvd/vm_snap_tb.sv && vvp /tmp/vs
 `timescale 1ns/1ps
@@ -82,6 +84,7 @@ module vm_snap_tb;
     reg [63:0] btn_cmd = 0; reg btn_cmd_valid = 0;
     reg [5:0]  btn_sel = 0; reg btns_armed = 0, wait_hold = 0;
     reg        agl_set = 0; reg [3:0] agl_set_val = 0;
+    reg        ast_set = 0, spst_set = 0; reg [7:0] ast_set_val = 0, spst_set_val = 0;
     reg        ptt_upd = 0; reg [10:0] ptt_val = 0;
 
     // ---- the displayed time's raw parts, and the landing ----
@@ -127,7 +130,8 @@ module vm_snap_tb;
         .jump_cell(jump_cell),
         .seek_pulse(), .seek_cell(), .vm_replay(), .vm_adv(), .vm_from_wait(),
         .wait_hold(wait_hold), .sprm_astn(), .sprm_spstn(), .sprm_agln(), .pre_done(),
-        .agl_set(agl_set), .agl_set_val(agl_set_val), .ptt_upd(ptt_upd), .ptt_val(ptt_val),
+        .agl_set(agl_set), .agl_set_val(agl_set_val), .ast_set(ast_set), .ast_set_val(ast_set_val),
+        .spst_set(spst_set), .spst_set_val(spst_set_val), .ptt_upd(ptt_upd), .ptt_val(ptt_val),
         .dbg_state(), .dbg_g3(), .dbg_g14_9(), .dbg_rsm(), .dbg_deadend(),
         .link_fail(), .link_fail_pgcn(), .trc_gprm_we(), .trc_gprm_a(), .trc_gprm_d(),
         .snap_req(snap_req), .snap_we(snap_we), .snap_d(snap_d), .snap_done(snap_done),
@@ -556,6 +560,23 @@ module vm_snap_tb;
         load(USNAP_FMT, 16'd96, sum, USNAP_WORDS); read_all;
         check(w[4][15:13] === 3'd1 || w[4][15:13] === 3'd2, "with Disc Menus back on the blob is not taken");
         check(n_rreq == 1, "with Disc Menus back on no restore_req");
+        end_arm;
+
+        // ------------------------------------------------------------ [wb]
+        begin_arm("wb");
+        // [menusoff] left a restore pending on its jump: land it, so a snapshot can run
+        nclk(200);
+        @(negedge clk) pgc_loaded = 1; @(negedge clk) pgc_loaded = 0;
+        wait_rst(4000);
+        @(negedge clk) pgc_loaded = 1; @(negedge clk) pgc_loaded = 0;
+        nclk(400);
+        ast_set_val = 8'd5; spst_set_val = 8'h43;     // neither is the restored blob's
+        @(negedge clk) begin ast_set = 1; spst_set = 1; end
+        @(negedge clk) begin ast_set = 0; spst_set = 0; end
+        nclk(4);
+        check(vm.sprm1 === 16'd5 && vm.sprm2 === 16'h0043, "the write-back did not land in SPRM1 / SPRM2");
+        request; wait_done(4000); nclk(4); read_all;
+        check(w[HDR + 41] === 16'd5 && w[HDR + 42] === 16'h0043, "the snapshot does not carry the user's streams");
         end_arm;
 
         if (any_fail) $display("RESULT: FAIL");

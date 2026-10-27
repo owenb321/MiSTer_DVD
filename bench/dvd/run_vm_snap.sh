@@ -82,8 +82,8 @@ PYEOF
         "p_video <= |first_ref_ea;" "p_video <= 1'b1;"
     mut "S6 freshness survives a flush"          "pos" \
         "if (pos_clr)         fresh <= 1'b0;" "if (1'b0)            fresh <= 1'b0;"
-    # S7 also corrupts the reference blob the restore arms read back
-    mut "S7 no read-ahead restart"               "load refuse reread" \
+    # S7 also corrupts the reference blob the restore arms read back, and [wb]'s read
+    mut "S7 no read-ahead restart"               "load refuse reread wb" \
         "begin dout_r <= p_stc[15:0]; raddr <= 7'd0; end" "begin dout_r <= p_stc[15:0]; end"
     mut "S8 a busy buffer streamed"              "busy" \
         "left   <= busy ? 8'd0 : len;" "left   <= len;"
@@ -134,6 +134,29 @@ PYEOF
         "5'd2: dout_r <= {busy_s, vm_en, slot_l, ld_n, sv_n, len_s};" "5'd2: dout_r <= {busy_s, 1'b1, slot_l, ld_n, sv_n, len_s};"
     mut "S25 a load with Disc Menus off accepted" "menusoff" \
         "else if (!vm_en)                verdict <= 3'd7;   // Disc Menus off: never taken" "else if (1'b0)                  verdict <= 3'd7;"
+
+    # ---- the Audio / Subtitle write-back (dvd_vm.sv) ----
+    vmmut() {   # like mut, on dvd/dvd_vm.sv
+        local name=$1 want=$2 old=$3 new=$4
+        python3 - "$tmp/v.sv" "$old" "$new" <<'PYEOF'
+import sys
+dst, old, new = sys.argv[1:]
+s = open('dvd/dvd_vm.sv').read()
+if s.count(old) != 1: sys.exit(f'anchor count {s.count(old)} != 1')
+open(dst, 'w').write(s.replace(old, new))
+PYEOF
+        [ $? != 0 ] && { echo "  FAIL $name: mutation did not apply"; fail=1; return; }
+        local log="$tmp/vlog" arms
+        if ! iverilog -g2012 -I dvd -o "$tmp/vsim" "$tmp/v.sv" dvd/vm_snap.sv "$TB" > "$tmp/vb" 2>&1; then arms=BUILD
+        else vvp "$tmp/vsim" > "$log" 2>&1
+             arms=$(grep -oE '^FAIL \[[a-z]+\]' "$log" | sed 's/FAIL \[\(.*\)\]/\1/' | sort -u | tr '\n' ' ' | xargs); fi
+        if [ "${arms:--}" = "$want" ]; then echo "  ok   $name -> [$arms]"
+        else echo "  FAIL $name: failed [${arms:--}], must fail exactly [$want]"; fail=1; fi
+    }
+    vmmut "S26 the audio write-back dropped" "wb" \
+        "if (ast_set) sprm1 <= {8'd0, ast_set_val};" "if (1'b0) sprm1 <= {8'd0, ast_set_val};"
+    vmmut "S27 the subtitle write-back dropped" "wb" \
+        "if (spst_set) sprm2 <= {8'd0, spst_set_val};" "if (1'b0) sprm2 <= {8'd0, spst_set_val};"
 
     echo "== RED (wiring: the checker must catch each)"
     python3 tools/check_vm_snap_wiring.py --red || fail=1
