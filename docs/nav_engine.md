@@ -673,7 +673,8 @@ itself; the first rule refused every negative lead and lost that snapshot's time
 **The landing.** `vmload` sends `disp_secs` (0xFFFF for none) and the snapshot's NAV-pack
 sector (the time map's fallback, for the 3 % of discs without one) with the blob, under
 the checksum. `vm_snap` arms on `rst_done`, waits for the landing's `pgc_loaded` and then
-its first picture (`video_live` rising), and fires **one** `rst_seek_pulse`. `emu.sv` ORs
+its **first NAV pack** (`dsi_commit`; the first picture is the fallback trigger), and fires
+**one** `rst_seek_pulse` (§10a). `emu.sv` ORs
 it into the scrub's seek in front of `mode_realign` (`seek_any_pulse`) and qualifies it as
 a time seek on its own pulse — the D-pad's path exactly, but not a HUD user event. It is
 abandoned if a menu landed, another PGC loads first, a disc is mounted, or ~3 s pass.
@@ -685,8 +686,7 @@ abandoned if a menu landed, another PGC loads first, a disc is mounted, or ~3 s 
 - **Host arithmetic, not RTL.** Three 32-bit latches in `vm_snap` cost a few dozen ALMs;
   the BCD conversion, the lead, the bounds and the fallbacks are C, under test
   (`dvd_ctl_test` [16]), and step 4's Main reuses them.
-- **After the picture, not after the load.** A seek issued while the jump's flush is still
-  settling would race it; the first picture says the landing has finished.
+- **At the first NAV pack, not at the load, not at the picture** (§10a).
 
 **Accuracy, measured** (2026-10-26, rig, `DVD_vmsnap_20261026_1856.rbf`, Scooby-Doo 2's
 film). Instrument: pause, snapshot F (the saved picture's exact time from its raw clock,
@@ -711,5 +711,20 @@ landing state machine); the device is at 41,125 / 41,910 ALM (98 %). `clk_dec` 8
 pulse, its own time, through `mode_realign`, not a HUD event); `main/tests/run_tests.sh
 --red` ([13], [16]; `ctl-vl-lead-added`, `-lead-unbounded`, `-no-video-timed`).
 
-**Limits.** Two flushes per restore (the cell landing, then the seek): a brief picture of
-the cell start shows first. A snapshot whose lead is out of bounds lands at the cell start.
+**Limits.** A snapshot whose lead is out of bounds lands at the cell start.
+
+### 10a. One visible transition (2026-10-26)
+
+The first build fired the seek on the landing's first picture, so the cell start showed
+for ~40 ms (one or two frames) before the seek's flush: the FIFO logged jump flush → cell
+start's picture (+41 ms) → seek flush → landing (+175 ms). Two flushes are unavoidable
+without teaching the reader a "jump + time" request; a flash is not.
+- **Not at `pgc_loaded`.** `S_PGC_DONE` raises `cell_mode` and `pgc_loaded` together, so a
+  seek would be accepted; but `seek_jump` is not gated by the reader's state, and would
+  pre-empt the post-load steps (`S_CELL_LOAD`, the angle scan) that a D-pad seek, which
+  never arrives microseconds after a load, has never interrupted.
+- **At the first NAV pack.** By `dsi_commit` the reader is streaming — where every D-pad
+  seek finds it — and the NAV pack leads its VOBU, so the cell start's I-frame is not yet
+  decoded; the seek's flush comes at the next block boundary, inside the ~41 ms.
+- The first picture stays as the fallback trigger (a cell whose NAV pack the demux never
+  reports).

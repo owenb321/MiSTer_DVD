@@ -58,10 +58,15 @@
 //   -- and the replies to them are the header words as usual (the host ignores them)
 //
 // ★ EXACT LANDING (docs/nav_engine.md §10). The VM's restore lands at the saved CELL's
-// start. With a time target, once that landing has loaded and its first picture is on
-// screen, rst_seek_pulse fires ONE time seek (the D-pad's own path: the disc's time
-// map, the RBN as its fallback). Abandoned if another PGC loads first, a disc is
-// mounted, a menu is what landed, or ~3 s pass.
+// start. With a time target, rst_seek_pulse fires ONE time seek (the D-pad's own path:
+// the disc's time map, the RBN as its fallback) at the landing's FIRST NAV PACK
+// (pos_commit after its pgc_loaded): the reader is streaming by then, as a D-pad seek
+// always finds it, and the NAV pack leads its VOBU, so the seek's flush comes before
+// the cell start's first picture is decoded -- one visible transition, not a flash of
+// the cell start (§10a). Not at pgc_loaded itself: seek_jump is not gated by the
+// reader's state and would pre-empt its post-load steps (S_CELL_LOAD, the angle scan).
+// The first picture is the fallback trigger. Abandoned if another PGC loads first, a
+// disc is mounted, a menu is what landed, or ~3 s pass.
 //
 // ★ RESTORE (save states step 3, docs/nav_engine.md §9). A LOAD writes the blob into the
 // same buffer. When its transaction ends the blob is CHECKED -- fmt = snap_fmt, len =
@@ -234,8 +239,8 @@ module vm_snap #(
                      end
             RS_LOAD: if (pgc_loaded) rs <= menu_active ? RS_IDLE : RS_LIVE;
             default: if (pgc_loaded) rs <= RS_IDLE;    // something else loaded first
-                     else if (video_live && !live_d) begin
-                         rst_seek_pulse <= 1'b1;         // the landing's first picture
+                     else if (pos_commit || (video_live && !live_d)) begin
+                         rst_seek_pulse <= 1'b1;         // the landing's first NAV pack
                          rst_seek_secs  <= {1'b0, l_tm};
                          rst_seek_rbn   <= l_rbn;
                          rs <= RS_IDLE;

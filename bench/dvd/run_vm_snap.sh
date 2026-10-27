@@ -108,8 +108,10 @@ PYEOF
     mut "S15 applied restores not counted"       "load" \
         "rbusy <= 1'b0; verdict <= 3'd2; rcount <= rcount + 5'd1;" "rbusy <= 1'b0; verdict <= 3'd2; rcount <= rcount;"
     # ---- the exact landing (§10) ----
-    mut "S16 the seek fires before the picture"  "land" \
-        "else if (video_live && !live_d) begin" "else begin"
+    mut "S16 the seek fires before the NAV pack" "land" \
+        "else if (pos_commit || (video_live && !live_d)) begin" "else begin"
+    mut "S21 no picture fallback"                "land" \
+        "else if (pos_commit || (video_live && !live_d)) begin" "else if (pos_commit) begin"
     mut "S17 a menu landing seeks"               "land" \
         "RS_LOAD: if (pgc_loaded) rs <= menu_active ? RS_IDLE : RS_LIVE;" "RS_LOAD: if (pgc_loaded) rs <= RS_LIVE;"
     mut "S18 another load does not abandon it"   "land" \

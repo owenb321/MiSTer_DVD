@@ -35,9 +35,10 @@
 //
 // EXACT LANDING (docs/nav_engine.md §10):
 //   [land]     a load with a time target fires ONE rst_seek_pulse carrying that time and
-//              the fallback RBN, after the landing's PGC load and its first picture; none
+//              the fallback RBN, at the landing's first NAV pack after its PGC load (or
+//              its first picture, if that comes first); none before the load, none
 //              without a target, none when a menu landed, none when another PGC loaded
-//              before the picture; [pos] also checks the clock / s_ptm / STC latches
+//              first; [pos] also checks the clock / s_ptm / STC latches
 //
 // Run: iverilog -g2012 -I dvd -o /tmp/vs dvd/dvd_vm.sv dvd/vm_snap.sv bench/dvd/vm_snap_tb.sv && vvp /tmp/vs
 `timescale 1ns/1ps
@@ -465,25 +466,33 @@ module vm_snap_tb;
         nclk(40); video_live = 1; nclk(40); video_live = 0;
         check(n_seek == 0, "a restore without a time target sought");
         for (i = 0; i < USNAP_WORDS; i = i + 1) blob[i] = tx2[i];
-        // (a) a target: one seek, after the landing's load AND its first picture
+        // (a) a target: one seek, at the landing's first NAV pack after its load
         ld_tm = 16'd123; ld_rbn = 32'h0001_2345; menu_active = 0;
         load(USNAP_FMT, 16'd96, sum, USNAP_WORDS); wait_rst(4000);
         nclk(40); video_live = 1; nclk(10); video_live = 0;
+        @(negedge clk) pos_commit = 1; @(negedge clk) pos_commit = 0;
         check(n_seek == 0, "the seek fired before the landing's PGC loaded");
         @(negedge clk) pgc_loaded = 1; @(negedge clk) pgc_loaded = 0;
         nclk(40);
-        check(n_seek == 0, "the seek fired before the landing's first picture");
-        video_live = 1; nclk(10);
+        check(n_seek == 0, "the seek fired before the landing's first NAV pack");
+        @(negedge clk) pos_commit = 1; @(negedge clk) pos_commit = 0;
+        nclk(4);
         check(n_seek == 1 && s_secs === 17'd123 && s_rbn === 32'h0001_2345,
               "not one seek to the target time with the fallback RBN");
-        video_live = 0; nclk(40); video_live = 1; nclk(10); video_live = 0;
-        check(n_seek == 1, "a second picture fired the seek again");
+        @(negedge clk) pos_commit = 1; @(negedge clk) pos_commit = 0;
+        video_live = 1; nclk(10); video_live = 0;
+        check(n_seek == 1, "a second NAV pack or the picture fired the seek again");
+        // (a2) no NAV pack before the picture: the picture fires it
+        load(USNAP_FMT, 16'd96, sum, USNAP_WORDS); wait_rst(4000);
+        @(negedge clk) pgc_loaded = 1; @(negedge clk) pgc_loaded = 0;
+        nclk(20); video_live = 1; nclk(10); video_live = 0;
+        check(n_seek == 2, "the first picture did not fire the seek as the fallback");
         // (b) a menu landed: no seek
         ld_tm = 16'd200; menu_active = 1;
         load(USNAP_FMT, 16'd96, sum, USNAP_WORDS); wait_rst(4000);
         @(negedge clk) pgc_loaded = 1; @(negedge clk) pgc_loaded = 0;
         nclk(20); video_live = 1; nclk(10); video_live = 0;
-        check(n_seek == 1, "a menu landing sought");
+        check(n_seek == 2, "a menu landing sought");
         menu_active = 0;
         // (c) another PGC loads before the landing's picture: abandoned
         load(USNAP_FMT, 16'd96, sum, USNAP_WORDS); wait_rst(4000);
@@ -491,13 +500,13 @@ module vm_snap_tb;
         nclk(20);
         @(negedge clk) pgc_loaded = 1; @(negedge clk) pgc_loaded = 0;
         nclk(20); video_live = 1; nclk(10); video_live = 0;
-        check(n_seek == 1, "a seek fired after another PGC loaded first");
+        check(n_seek == 2, "a seek fired after another PGC loaded first");
         // (d) a mount in between: abandoned
         load(USNAP_FMT, 16'd96, sum, USNAP_WORDS); wait_rst(4000);
         @(negedge clk) mount = 1; @(negedge clk) mount = 0;
         @(negedge clk) pgc_loaded = 1; @(negedge clk) pgc_loaded = 0;
         nclk(20); video_live = 1; nclk(10); video_live = 0;
-        check(n_seek == 1, "a seek fired across a mount");
+        check(n_seek == 2, "a seek fired across a mount");
         end_arm;
 
         if (any_fail) $display("RESULT: FAIL");
