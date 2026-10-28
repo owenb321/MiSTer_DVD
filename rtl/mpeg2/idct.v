@@ -1385,42 +1385,38 @@ module mult22x16(clk, clk_en, rst, product, multiplicand, multiplier);
    input signed [15:0]  multiplicand;
    output reg signed [37:0] product;
 
-/* 
- * the following code implements
- *   always @(posedge clk)
- *     product <= multiplier * multiplicand;
- * using only a single 18x18 multiplier, a few shifts and adders.
+/*
+ * DVD-FORK FIX (logic reclaim F, docs/logic_reclaim.md §11): one 27x27 DSP product.
  *
- * See "Expanding Virtex-II" by Ken Chapman, Xilinx UK, 06/30/2001 for
- * a discussion about expanding multipliers.
+ * Upstream split this multiply for Virtex-II's 18x18 blocks (an 18x16 DSP product, a
+ * 4-bit shift-add partial product and a 38-bit adder: ~46 ALMs per instance, six of
+ * them). Cyclone V's 27x27 mode takes 22x16 whole, and each instance already occupied a
+ * whole DSP block, so this costs no DSP and drops the adders.
  *
+ * Bit-identical, same two-cycle latency, for any reset width and clk_en pattern:
+ *   - p carries no reset, so it can be the DSP's own output register (Cyclone V DSP
+ *     registers have no synchronous clear).
+ *   - The reset is moved one stage later: upstream cleared its partial products in the
+ *     reset cycle, so the first product after reset was 0. p_clr ("p not reloaded since
+ *     the reset") forces that same 0 while p still holds a pre-reset value.
+ * The original is kept as bench/dvd/ref/mult22x16_ref.v; bench/dvd/run_idct_mult.sh
+ * scores this against it.
  */
-   wire /* unsigned */  [3:0] multiplier_lsb;
-   wire signed         [17:0] multiplier_msb;
-
-   reg signed [19:0] partial_product_1;
-   reg signed [33:0] partial_product_2;
-
-   assign multiplier_lsb = multiplier[3:0]; 
-   assign multiplier_msb = multiplier[21:4];
+   reg signed [37:0] p;
+   reg               p_clr;
 
    always @(posedge clk)
-     if (~rst) partial_product_2 <= 34'b0;
-     else if (clk_en) partial_product_2 <= multiplier_msb * multiplicand;
-     else partial_product_2 <= partial_product_2;
+     if (clk_en) p <= multiplier * multiplicand;
+     else p <= p;
 
    always @(posedge clk)
-     if (~rst) partial_product_1 <= 20'b0;
-     else if (clk_en) 
-       partial_product_1 <= (multiplier_lsb[0] ? {{4{multiplicand[15]}}, multiplicand      } : 20'b0) + 
-                            (multiplier_lsb[1] ? {{3{multiplicand[15]}}, multiplicand, 1'b0} : 20'b0) +
-                            (multiplier_lsb[2] ? {{2{multiplicand[15]}}, multiplicand, 2'b0} : 20'b0) +
-                            (multiplier_lsb[3] ? {{1{multiplicand[15]}}, multiplicand, 3'b0} : 20'b0);
-     else partial_product_1 <= partial_product_1;
+     if (~rst) p_clr <= 1'b1;
+     else if (clk_en) p_clr <= 1'b0;
+     else p_clr <= p_clr;
 
    always @(posedge clk)
      if (~rst) product <= 38'b0;
-     else if (clk_en) product <=  {partial_product_2, 4'b0} + { {18{partial_product_1[19]}}, partial_product_1};
+     else if (clk_en) product <= p_clr ? 38'sb0 : p;
      else product <= product;
 
 endmodule
