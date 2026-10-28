@@ -1,7 +1,7 @@
 # The AC-3 IMDCT on the shared audio engine (logic reclaim, `logic_reclaim.md` §10a)
 
-**Status (2026-10-28):** I0, the design, on `feature/logic-reclaim-f` (stacked on
-`feature/vm-snapshot`, unpushed). Nothing built yet. **Why now:** the save-states merge gate
+**Status (2026-10-28):** I0 (the design) and **I1 (the program and its emulator) ✅**, on
+`feature/logic-reclaim-f` (stacked on `feature/vm-snapshot`, unpushed). Next: I2, the RTL. **Why now:** the save-states merge gate
 (`roadmap.md` "Save states") needs ~370 ALM back; `mult22x16` gave 209 (§11a there), and
 the maintainer chose this item to close the rest (2026-10-28).
 
@@ -97,13 +97,54 @@ and no separate pass.
 
 ## ⚠ Deltas from `imdct_512` (maintainer to confirm)
 
-1. **The delay line starts from zero after a DTS/MP2 ↔ AC-3 program switch.** The engine
-   is reset on a program switch; `imdct_512` is not, so today the first AC-3 block after a
-   DTS interlude overlaps with the *previous AC-3 track's* tail. The new behaviour is the
-   correct one (a fresh decoder state) and costs nothing; `imdct_512`'s is unreachable in
-   a bit-exact A/B without a switch, so the A/B gates run without one.
+1. **A channel's delay line reads 0 until that channel has been transformed since the
+   engine's reset** (5 valid bits, not `imdct_512`'s one `first_blk`). The ring holds
+   DTS/MP2 junk, so a channel a stream adds mid-play (2/0 → 3/2) must not overlap with it;
+   `imdct_512` reads its never-written M10K, zero from power-up, so from power-up the two
+   agree. They differ only after a program switch: the engine is reset on one and
+   `imdct_512` is not, so today the first AC-3 block after a DTS interlude overlaps with
+   the *previous AC-3 track's* tail. The new behaviour is the correct one (a fresh state).
 2. Slots 2–5 no longer exist. Only `pcm_out`'s slots are kept; benches that read all six
    (`run_imdct_xcheck.sh`) stay on `imdct_512`'s copy until it is deleted.
+
+## I1 result: the program and its emulator (2026-10-28)
+
+`tools/imdct_isa.py` holds the templates (data: a term is `(mode, src, const, dst,
+wrap)`, operands symbolic), the walk, and a cycle-accurate executor: one term a cycle,
+a read presented the cycle before issue, a write landing two cycles after, and a read of
+a word still in flight **stalls** (sequential semantics). The butterflies whose outputs
+overwrite their own inputs (IFFT2, BZERO, BHALF) copy them to temps first: +216 terms a
+long channel (~3.5 %), the price of a program that reads top to bottom.
+
+- **Gate `tools/imdct_isa.py check`** (`--frames 24`, `--random N`), against
+  `imdct_model` (itself `== imdct_512`, `run_imdct_xcheck.sh`, re-run after the model's
+  IFFT + POST became a method, `ifft_post`):
+  - **[strm]** all 31 AC-3 gate streams, 24 frames, every block: pcm slots 0/1 (slot 0
+    for mono) and every channel's delay line. **Bit-identical**;
+  - **[unit]** IFFT + POST from an INJECTED work buffer and delay line (any 32-bit
+    words, clusters at the rails): the only arm whose BHALF pre-sums reach **33 bits**
+    (no coefficient pattern through PRE did, max 32), and it fails as vacuous if they don't;
+  - **[rand]** random and full-scale blocks with max DRC, 1–5 channels, every acmod,
+    three blocks a case so the delay line carries; the ring powers up as JUNK (what DTS
+    leaves).
+- **`--red`: 7 mutations, all caught:** short-block delay sign, DRC shift, negating the
+  operand instead of the floored product, no delay-line mask, a surround level, BHALF's
+  pre-sums stored at 32 bits (caught only by [unit]), BFULL's `wi` as `wr`.
+- **Cycles:** worst block 35,408 (5.1, `noise_5p1`), 24.6 % of a frame; **0 stalls** on
+  every stream once an element forms all its fold words before adding any share (the
+  first version stalled 768 cycles a 5.1 block). Stereo 13,344 a block.
+- **The budget gate now charges it.** `tools/test_ac3_isa.py` [2] replaced `imdct_512`'s
+  measured `IMDCT_BLOCK` with `imdct_isa.frame_cycles` for each frame's own blocks, at the
+  same ×1.25 headroom as the other modelled charges. **Worst frame 58.8 %**
+  (`noise_5p1`) against the 60 % bar: PASS, every stream.
+- ⚠ **That needs elements back to back** (`ELEM_OVH = 0`): the sequencer fetches the next
+  element's schedule entry while the current one issues. At one cycle an element the worst
+  frame is 63.7 %, a FAIL. It is a requirement on I2, which its bench must prove by
+  matching the emulator's cycles exactly; then the ×1.25 can drop (52.7 %).
+- **Margin levers, if I2 comes in slower:** a second ring read port (a duplicated
+  256-word buffer RAM, +1–2 M10K) makes an add of two words one term (IFFT −25 %, about
+  4 points); the pipeline's three-cycle window lets IFFT2/BZERO/BHALF skip their copies
+  (about 1 point).
 
 ## Plan and gates
 
