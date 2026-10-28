@@ -36,7 +36,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
   last AC-3 block to drain, and the first AC-3 block after a switch starts from a clean
   delay line (`imdct_engine.md` "Deltas"). Lesson: a `--red` runner that copies a subset of
   the tree into its mutant directory breaks on a new cross-directory include, reporting
-  every mutant as a harness failure. Rig (`audio_check`, vs the save-states build): T2, BBB, MiB all tracks audible, T2 levels within 0.3 dB of the control. Full smoke (2026-10-28): `hil_suite --tier full` 17/17 = control, `audio_check` on every format, save-state stress 74 loads / 0 failures (`nav_engine.md` §11b, `tools/sstate_stress.py`). **Next: the maintainer's listen, then the push/merge decision.**
+  every mutant as a harness failure. Rig (`audio_check`, vs the save-states build): T2, BBB, MiB all tracks audible, T2 levels within 0.3 dB of the control. Full smoke (2026-10-28): `hil_suite --tier full` 17/17 = control, `audio_check` on every format, save-state stress 75 loads / 0 failures (`nav_engine.md` §11b, `tools/sstate_stress.py`). **Next: the maintainer's listen, then the push/merge decision.**
 
 - ✅ **SAVE STATES FROM THE OSD (save states step 4, 2026-10-27, branch
   `feature/vm-snapshot`; sim-proven, fitted, HW-checked on the rig; not merged).** OSD page 2:

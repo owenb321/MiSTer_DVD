@@ -853,9 +853,9 @@ live, and a slot file with one byte flipped. Each load is scored against the slo
 the save wrote: the verdict message; VM domain, VTS, reader VTS and PGCN; SPRM1/2/3; all 16 GPRMs; in a
 title the landing (shown time − saved time within [−2, elapsed + 2] s) and the picture
 advancing 3 s later.
-- **Result: 74 loads scored on T2, Men in Black and Scooby-Doo 2 (61 in a title, 13 in a
-  menu), 0 failures.** That covers 6 load-spams, 7 save-then-loads, 2 boot loads, empty-slot
-  loads, a damaged file ("That save file is damaged") and Disc Menus off (both rows
+- **Result: 75 loads on T2, Men in Black and Scooby-Doo 2, 0 failures**: 60 restores scored
+  in full (47 in a title, 13 in a menu) and 15 verdict-only. That covers 7 load-spams, 6
+  save-then-loads, 2 boot loads, empty-slot loads, a damaged file ("That save file is damaged") and Disc Menus off (both rows
   refused).
 - **One false alarm, kept as a lesson:** the first T2 run "failed" 4 loads (GPRM 4/5
   changed, shown time ~0 s). Every one had been saved at 41–42 s into T2's intro (VTS 5,

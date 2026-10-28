@@ -242,7 +242,7 @@ short-block material, a codec switch).
 - `audio_check`: every track audible on T2, MiB, Dinosaur (8 tracks), BBB, the 48 kHz WAV,
   a VCD `.bin`; LPCM `.vob` and SVCD `.mpg` play their one stream (tracks 2–8 of a bare
   file are streams that do not exist: identical on `_2214`).
-- Save-state stress (`nav_engine.md` §11b): 74 loads, 0 failures.
+- Save-state stress (`nav_engine.md` §11b): 75 loads, 0 failures.
 - ⏳ The maintainer's listen.
 
 ## Plan and gates
