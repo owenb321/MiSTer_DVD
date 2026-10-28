@@ -258,6 +258,12 @@ tools/hil_suite.py run --rbf releases/<new>.rbf --control releases/<old>.rbf
   align). `--tier full` adds the long ones (Mad Dog's blip, Castle's angle joins).
 - Both builds need the nav event FIFO. `main` has carried it since PR #179, so any build
   of `main` from then on is a valid control; an older release reads NODATA, not PASS.
+- ★ **The suite flashes cores, never a Main.** It runs on whatever `[DVD] main=` points at,
+  and after a `restore` that is the installed Main. A Main without the nav FIFO drain makes
+  every FIFO check NODATA and the capture checks FAIL, identically on both arms, so it reads
+  as "the disc broke" rather than as setup (2026-10-28, a whole 85-minute suite void).
+  `mister.py deploy --agent --main main/.build/MiSTer_DVDcss` first, and check
+  `/tmp/dvd_report.log` doesn't say "core has no nav event FIFO".
 - The rig is left on the build under test (`--leave control|none` otherwise). Say so to
   anyone else using the rig.
 
