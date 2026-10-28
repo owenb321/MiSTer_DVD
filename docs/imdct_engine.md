@@ -1,8 +1,8 @@
 # The AC-3 IMDCT on the shared audio engine (logic reclaim, `logic_reclaim.md` §10a)
 
 **Status (2026-10-28):** I0 (the design), **I1 (the program and its emulator) ✅**, **I2
-(the RTL, `dts_vec` op 25) ✅ in simulation**, I3 (wired into `audio_engine`, `imdct_512`
-out of the build) ⏳ fit; on `feature/logic-reclaim-f` (stacked on `feature/vm-snapshot`,
+(the RTL, `dts_vec` op 25) ✅ in simulation**, **I3 (wired into `audio_engine`, `imdct_512`
+out of the build) ✅ fitted: −2,137 ALUTs, −13 M10K, −7 DSP, timing PASS** (below); on `feature/logic-reclaim-f` (stacked on `feature/vm-snapshot`,
 unpushed). I4 (by ear on the rig) ⏳. **Why now:** the save-states merge gate
 (`roadmap.md` "Save states") needs ~370 ALM back; `mult22x16` gave 209 (§11a there), and
 the maintainer chose this item to close the rest (2026-10-28).
@@ -199,6 +199,30 @@ source's address → [ring]; a stall on every write in flight (values right) →
   `imdct_xcheck_tb.sv` does, because a 3/0 fold multiplies a never-written surround slot
   by `slev = 0` (0 on silicon, X × 0 = X in simulation); before, both sides carried the
   same X and the compare passed on it.
+
+## I3 result: the fit (2026-10-28)
+
+`DVD_reclaim_20261028_0538.rbf` (SEED 7, commit `06d9e5e`), per entity against the
+save-states build `_2214` (`feature/vm-snapshot`) and the F fit (`_0049`, `mult22x16` only):
+
+| | `_2214` (save states) | F | **I3** |
+|---|---|---|---|
+| Device ALUTs | 61,776 | 61,211 | **59,074** |
+| Device "ALMs needed" (packing-noisy) | 41,100 (98 %) | 41,075 | **37,976 (91 %)** |
+| M10K | 533 | 533 | **520** |
+| DSP | 91 | 91 | **84** |
+
+- **`dvd_audio_decode`: −1,546 ALM, −2,503 ALUTs, −13 M10K, −7 DSP.** `u_imdct` goes
+  (−2,053 ALM / −3,196 ALUTs / −23 M10K / −9 DSP); `dts_vec` grows +419 ALM / +605 ALUTs /
+  +10 M10K / +2 DSP (the walker, the template and table ROMs, the 35-bit ring, the 33×27
+  product), `dts_seq` +67 ALM. The estimate was −1,400 … −1,700 ALM, ~−20 M10K, −8 DSP: the
+  M10K came in 7 better than feared and 7 worse than hoped (each new table its own block).
+- Every new memory infers as `altsyncram` (`DVD.map.rpt`: `tprog`, `ring`, `imdct_window`,
+  `imdct_pre_pk`, `imdct_post_pk`, `imdct_sched_pk`, `imdct_fftorder`).
+- Timing: `clk_dec` 90.75 / 87.84 MHz (target 86), `clk_mem` 92.41 / 94.93 MHz (target 90),
+  `lint_undriven`, `netlist_canary`: PASS.
+- Unrelated entities moved by ±50–190 ALM (`mem_shim_burst` +187, `motcomp` −375): fitter
+  packing, with ALUTs flat (±60). The ALUT column is the measure.
 
 ## Plan and gates
 

@@ -710,6 +710,17 @@ product after any reset, even a one-cycle watchdog pulse, is 0 as upstream's was
   "ALMs needed" line only 41,100 → 41,075 (packing). `clk_dec` 89.54 / 90.78 MHz,
   `clk_mem` 93.4 / 95.2: PASS.
 
+### 11c. The AC-3 IMDCT on the audio engine (§10a; ✅ fitted, HW ⏳)
+
+`imdct_512` leaves the build; the transform runs as `dts_vec` op 25, a term program
+(`docs/imdct_engine.md`). Bit-identical PCM to `imdct_512` on every gate stream
+(`run_ac3_ab.sh`), worst AC-3 frame 53.5 % of real time. **Fit** (`_0538`, SEED 7):
+`dvd_audio_decode` −1,546 ALM / −2,503 ALUTs / −13 M10K / −7 DSP. Device against the
+save-states build `_2214`: **61,776 → 59,074 ALUTs (−2,702, F included)**, M10K 533 → 520,
+DSP 91 → 84, "ALMs needed" 98 % → 91 % (below v0.9.1's 92 %). Timing PASS. **This clears
+the save-states merge gate** (~370 ALM, M10K not up, timing) about four times over; the
+gate still wants I4 (by ear on the rig) before anything is pushed.
+
 ### 11b. ⛔ `no_rw_check` on `xfifo_sc` does nothing (tried, reverted)
 
 The map report warns (276020) "pass-through logic has been added" for 34 inferred RAMs,

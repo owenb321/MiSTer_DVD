@@ -22,6 +22,22 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **LOGIC RECLAIM F, STACKED ON SAVE STATES (2026-10-28, branch
+  `feature/logic-reclaim-f` on `feature/vm-snapshot`; sim-proven, fitted; HW ⏳; not
+  pushed).** The save-states merge gate wanted ~370 ALM back. Two items: `mult22x16` as one
+  27×27 DSP product (`idct` −565 ALUTs, `logic_reclaim.md` §11a), and the AC-3 IMDCT moved
+  onto the shared audio engine as `dts_vec` op 25, a template-ROM term program
+  (`docs/imdct_engine.md`), retiring `imdct_512`. PCM is bit-identical to `imdct_512` on
+  every AC-3 gate stream (`run_ac3_ab.sh`); `run_imdct_eng.sh --red` scores all 2,048 ring
+  words and the exact cycle count against `tools/imdct_isa.py`; the worst AC-3 frame is
+  53.5 % of real time. Fit `DVD_reclaim_20261028_0538` (SEED 7): device 61,776 → 59,074
+  ALUTs, M10K 533 → 520, DSP 91 → 84, "ALMs needed" 98 % → 91 %; `clk_dec` 87.84,
+  `clk_mem` 92.41 MHz worst corner, PASS. Behaviour deltas: a codec switch waits for the
+  last AC-3 block to drain, and the first AC-3 block after a switch starts from a clean
+  delay line (`imdct_engine.md` "Deltas"). Lesson: a `--red` runner that copies a subset of
+  the tree into its mutant directory breaks on a new cross-directory include, reporting
+  every mutant as a harness failure. **Next: I4 by ear against `main` on the rig.**
+
 - ✅ **SAVE STATES FROM THE OSD (save states step 4, 2026-10-27, branch
   `feature/vm-snapshot`; sim-proven, fitted, HW-checked on the rig; not merged).** OSD page 2:
   `Slot`, `Save to Slot`, `Load Slot` (`O[54:53]`, `R[55]`, `R[56]`). `vm_snap` counts the
