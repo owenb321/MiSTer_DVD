@@ -233,6 +233,18 @@ Bunny NTSC (1 track) and Men in Black (4 tracks) audible on `_0538`. Telemetry o
 0 over-frame pictures, `av_drift_ms` median +4.8. ⏳ The maintainer's listen (5.1 and
 short-block material, a codec switch).
 
+## I4 smoke (2026-10-28, rig)
+
+`_0538` with the save-states branch's Main:
+- **`hil_suite --tier full` against `_2214`: 17 checks, 0 FAIL, 0 regressions**
+  (Castle angle joins, both Dragon's Lairs, Mad Dog ×3 incl. the purple blip, Thayer's
+  Quest, Time Traveler, Weakest Link).
+- `audio_check`: every track audible on T2, MiB, Dinosaur (8 tracks), BBB, the 48 kHz WAV,
+  a VCD `.bin`; LPCM `.vob` and SVCD `.mpg` play their one stream (tracks 2–8 of a bare
+  file are streams that do not exist: identical on `_2214`).
+- Save-state stress (`nav_engine.md` §11b): 74 loads, 0 failures.
+- ⏳ The maintainer's listen.
+
 ## Plan and gates
 
 - **I1, the program and its emulator** (`tools/imdct_isa.py`): the templates, the

@@ -842,3 +842,28 @@ raises; screenshots cannot see the OSD).
 - **Cost** (`_2214`, SEED 7): 61,776 ALUTs (+17 over the step-3 build), 533 / 553 M10K
   (unchanged), 41,100 ALMs needed (98 %); `clk_dec` 89.24 / 90.24 MHz, `clk_mem` 95.68 /
   96.15, timing PASS.
+
+### 11b. Stress round (2026-10-28, rig, on the stacked reclaim build)
+
+`tools/sstate_stress.py`, a seeded random walk on `DVD_reclaim_20261028_0538.rbf` (logic
+reclaim F stacked on this branch) with this branch's Main. It does saves and loads across all four
+slots, plus seeks, chapter skips, menu/title jumps, audio steps, load spam (2–4 extra
+presses), save-then-load, a relaunch with a load during the boot logos, Disc Menus off
+live, and a slot file with one byte flipped. Each load is scored against the slot file
+the save wrote: the verdict message; VM domain, VTS, reader VTS and PGCN; SPRM1/2/3; all 16 GPRMs; in a
+title the landing (shown time − saved time within [−2, elapsed + 2] s) and the picture
+advancing 3 s later.
+- **Result: 74 loads scored on T2, Men in Black and Scooby-Doo 2 (61 in a title, 13 in a
+  menu), 0 failures.** That covers 6 load-spams, 7 save-then-loads, 2 boot loads, empty-slot
+  loads, a damaged file ("That save file is damaged") and Disc Menus off (both rows
+  refused).
+- **One false alarm, kept as a lesson:** the first T2 run "failed" 4 loads (GPRM 4/5
+  changed, shown time ~0 s). Every one had been saved at 41–42 s into T2's intro (VTS 5,
+  ~48 s long). The load landed exactly (41 s at +0.2 s), the intro ended ~7 s later, and its
+  post command set GPRM 4/5 and jumped to the feature, before the oracle's 7 s sample. The
+  oracle now samples at +2.5 s and compares the reader VTS too. A state check after a load
+  must allow for the disc's own commands running next.
+- ⚠ The tool's first version moved a disc's slots aside into ONE shared folder and
+  restored them only at the normal end. A crash, then a second run, lost one T2 test slot
+  from §11a. It now uses a per-run folder, a `finally`, and a refusal to start over a
+  leftover folder.
