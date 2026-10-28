@@ -689,6 +689,11 @@ proposed bar for success is to win back at least what save states cost, about 37
 in ALUTs and by entity, not with the device "ALMs needed" line, which moves several points
 with fitter packing. M10K must not go up overall, and timing must pass.
 
+**Progress (2026-10-28, `feature/logic-reclaim-f`, stacked, unpushed):** `mult22x16` as one
+DSP product: `idct` −209 ALM (−565 ALUTs), timing PASS (`logic_reclaim.md` §11a). The
+`xfifo_sc` `no_rw_check` idea is a dead end (§11b). **Next (user decision 2026-10-28): the
+AC-3 IMDCT on the audio engine (§10a)** to close the remaining ~160 ALM and leave headroom.
+
 ### ⏳ 2026-10-01 spec-audit: DVD Demystified 3rd-edition follow-ups (items 1–8 and 10b ✅; the rest re-ranked 2026-10-06, PR #165)
 
 The audit, with evidence and the user's decisions, is in
