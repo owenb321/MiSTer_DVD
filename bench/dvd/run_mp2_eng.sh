@@ -161,7 +161,7 @@ PYEOF
   HI=synth_tw_32000_s_384k
   mut M1 $ST "ma = {11'd0, a2}; mb = {10'd0, ic_q[16:0]};" "ma = 27'sd0; mb = {10'd0, ic_q[16:0]};" '\[vop\]' &
   mut M2 $HI "acc_clr = 1'b0; acc_en = 1'b1; rsh = 6'd7; trunc = 1'b1;" "acc_clr = 1'b0; acc_en = 1'b1; rsh = 6'd7; trunc = 1'b0;" '\[vop\]' &
-  mut M3 $ST "ma = ss[26:0]; mb = {5'd0, ic_q[21:0]};" "ma = ss[26:0]; mb = {6'd0, ic_q[21:1]};" '\[vop\]' &
+  mut M3 $ST "ma = {{6{ss[26]}}, ss[26:0]}; mb = {5'd0, ic_q[21:0]};" "ma = {{6{ss[26]}}, ss[26:0]}; mb = {6'd0, ic_q[21:1]};" '\[vop\]' &
   mut M4 $ST "rsh = 6'd14; trunc = 1'b1;" "rsh = 6'd14; trunc = 1'b0;" '\[vop\]' &
   mut M5 $ST "wire  [9:0] mm_rg = moff + {4'd0, k_d[10:5]};" "wire  [9:0] mm_rg = moff + {5'd0, k_d[10:6]};" '\[vop\]' &
   mut M6 $ST "init = mwd_p ? {{27{b2_q[28]}}, b2_q} : 56'sd0;" "init = 56'sd0;" '\[pcm\]' &
@@ -173,7 +173,7 @@ PYEOF
   mut M11 D1 "b2_we = (k_d < 12'd64); b2_wa = k_d[5:0];" "b2_we = 1'b0; b2_wa = k_d[5:0];" '\[vop\]' &
   mut M12 $F32 "else if (vop_start && vop_op == 6'd29) mp2_fs <= vop_args[1:0];" "else if (vop_start && vop_op == 6'd29) mp2_fs <= 2'd1;" '\[count\]' &
   wait
-  mut M13 $ST "ma = {{11{a1[15]}}, a1}; mb = {10'd0, ic_q[16:0]}; acc_en = 1'b1;" "ma = {11'd0, a1}; mb = {10'd0, ic_q[16:0]}; acc_en = 1'b1;" '\[vop\]' &
+  mut M13 $ST "ma = {{17{a1[15]}}, a1}; mb = {10'd0, ic_q[16:0]}; acc_en = 1'b1;" "ma = {17'd0, a1}; mb = {10'd0, ic_q[16:0]}; acc_en = 1'b1;" '\[vop\]' &
   mut M14 $ST "if (!mwd_p) begin rsh = 6'd16; b2_we = 1'b1;" "if (!mwd_p) begin rsh = 6'd15; b2_we = 1'b1;" '\[vop\]' &
   mut M15 $ST "rsh = 6'd1; sat24 = 1'b1; p_wi = 1'b1;" "rsh = 6'd0; sat24 = 1'b1; p_wi = 1'b1;" '\[pcm\]' &
   mut M16 $ST "xb_ra = {3'd0, a0[1:0], side, k[4:0]};" "xb_ra = {3'd0, a0[1:0], 1'b0, k[4:0]};" '\[vop\]' &
