@@ -224,6 +224,15 @@ save-states build `_2214` (`feature/vm-snapshot`) and the F fit (`_0049`, `mult2
 - Unrelated entities moved by ±50–190 ALM (`mem_shim_burst` +187, `motcomp` −375): fitter
   packing, with ALUTs flat (±60). The ALUT column is the measure.
 
+## I4 so far: the rig (2026-10-28)
+
+`tools/audio_check.py`, `_0538` against the save-states build `_2214` as the control:
+ULTIMATE_T2 (4 tracks: AC-3 5.1, DTS, two more) audible on every track on both builds, levels
+within 0.3 dB track for track (the windows are different moments of the film); Big Buck
+Bunny NTSC (1 track) and Men in Black (4 tracks) audible on `_0538`. Telemetry on MiB:
+0 over-frame pictures, `av_drift_ms` median +4.8. ⏳ The maintainer's listen (5.1 and
+short-block material, a codec switch).
+
 ## Plan and gates
 
 - **I1, the program and its emulator** (`tools/imdct_isa.py`): the templates, the
