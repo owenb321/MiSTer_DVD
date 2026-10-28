@@ -48,7 +48,7 @@ MUL_SAMPLE_BITS = 33             # the widened sample operand (docs/imdct_engine
 MUL_CONST_BITS = 27
 
 # ring regions
-RING = {'BUF': 0, 'TMP': 256, 'D': 512, 'DLY': 768, 'PCM': 1408, 'END': 1920}
+RING = {'BUF': 0, 'TMP': 256, 'D': 512, 'DLY': 768, 'PCM': 1536, 'END': 2048}   # PCM = {2'b11, slot, k}
 assert RING['END'] <= 2048
 NTMP = 16
 assert RING['TMP'] + NTMP <= RING['D']
@@ -143,35 +143,35 @@ TPL['DRC'] = chain('dj', (P, 'xj', 'mant'))
 
 # POST, long, element i: ar, br to temps; four outputs (each a fold contribution); the
 # delay line's ai, bi last (the outputs read d0, d1 first)
-POST_L_TMP = (chain('t0', (P, 'bir', 'pr'), (P, 'bii', 'pi')) +          # ar
-              chain('t1', (P, 'bmr', 'pi'), (P, 'bmi', 'pr')))           # br
+POST_L_TMP = (chain('t0', (P, 'bAr', 'pr'), (P, 'bAi', 'pi')) +          # ar
+              chain('t1', (P, 'bDr', 'pi'), (P, 'bDi', 'pr')))           # br
 POST_L_OUT = [   # (output index symbol, parts)
-    ('o0', ((P, 'd0', 'wb0'), (M, 't0', 'wa0'))),      # out[2i]       = pa0
-    ('o1', ((P, 'd0', 'wa0'), (P, 't0', 'wb0'))),      # out[255-2i]   = pa1
-    ('o2', ((P, 'd1', 'wb1'), (P, 't1', 'wa1'))),      # out[2i+1]     = pb0
-    ('o3', ((P, 'd1', 'wa1'), (M, 't1', 'wb1'))),      # out[254-2i]   = pb1
+    ('o0', ((P, 'dl0', 'wb0'), (M, 't0', 'wa0'))),      # out[2i]       = pa0
+    ('o1', ((P, 'dl0', 'wa0'), (P, 't0', 'wb0'))),      # out[255-2i]   = pa1
+    ('o2', ((P, 'dl1', 'wb1'), (P, 't1', 'wa1'))),      # out[2i+1]     = pb0
+    ('o3', ((P, 'dl1', 'wa1'), (M, 't1', 'wb1'))),      # out[254-2i]   = pb1
 ]
-POST_L_DLY = (chain('d0', (P, 'bir', 'pi'), (M, 'bii', 'pr')) +          # ai
-              chain('d1', (P, 'bmr', 'pr'), (M, 'bmi', 'pi')))           # bi
+POST_L_DLY = (chain('dl0', (P, 'bAr', 'pi'), (M, 'bAi', 'pr')) +          # ai
+              chain('dl1', (P, 'bDr', 'pr'), (M, 'bDi', 'pi')))           # bi
 # POST, short, element i
-POST_S_TMP = (chain('t0', (P, 'q1ir', 'pr'), (P, 'q1ii', 'pi')) +        # s_ar
-              chain('t1', (P, 'q1ir', 'pi'), (M, 'q1ii', 'pr')) +        # s_ai
-              chain('t2', (P, 'q1mr', 'pi'), (P, 'q1mi', 'pr')) +        # s_br
-              chain('t3', (P, 'q1mr', 'pr'), (M, 'q1mi', 'pi')))         # s_bi
+POST_S_TMP = (chain('t0', (P, 'bAr', 'pr'), (P, 'bAi', 'pi')) +        # s_ar
+              chain('t1', (P, 'bAr', 'pi'), (M, 'bAi', 'pr')) +        # s_ai
+              chain('t2', (P, 'bBr', 'pi'), (P, 'bBi', 'pr')) +        # s_br
+              chain('t3', (P, 'bBr', 'pr'), (M, 'bBi', 'pi')))         # s_bi
 POST_S_OUT = [
-    ('o0', ((P, 'd2i', 'wb0'), (M, 't0', 'wa0'))),     # out[2i]
-    ('o1', ((P, 'd2i', 'wa0'), (P, 't0', 'wb0'))),     # out[255-2i]
-    ('o2', ((P, 'd127', 'wa1'), (P, 't1', 'wb1'))),    # out[128+2i]
-    ('o3', ((P, 'd127', 'wb1'), (M, 't1', 'wa1'))),    # out[127-2i]
-    ('o4', ((P, 'd2i1', 'wb2'), (M, 't3', 'wa2'))),    # out[2i+1]
-    ('o5', ((P, 'd2i1', 'wa2'), (P, 't3', 'wb2'))),    # out[254-2i]
-    ('o6', ((P, 'd126', 'wa3'), (P, 't2', 'wb3'))),    # out[129+2i]
-    ('o7', ((P, 'd126', 'wb3'), (M, 't2', 'wa3'))),    # out[126-2i]
+    ('o0', ((P, 'dl0', 'wb0'), (M, 't0', 'wa0'))),     # out[2i]
+    ('o1', ((P, 'dl0', 'wa0'), (P, 't0', 'wb0'))),     # out[255-2i]
+    ('o2', ((P, 'dl3', 'wa1'), (P, 't1', 'wb1'))),    # out[128+2i]
+    ('o3', ((P, 'dl3', 'wb1'), (M, 't1', 'wa1'))),    # out[127-2i]
+    ('o4', ((P, 'dl1', 'wb2'), (M, 't3', 'wa2'))),    # out[2i+1]
+    ('o5', ((P, 'dl1', 'wa2'), (P, 't3', 'wb2'))),    # out[254-2i]
+    ('o6', ((P, 'dl2', 'wa3'), (P, 't2', 'wb3'))),    # out[129+2i]
+    ('o7', ((P, 'dl2', 'wb3'), (M, 't2', 'wa3'))),    # out[126-2i]
 ]
-POST_S_DLY = (chain('d2i', (P, 'q2ir', 'pi'), (M, 'q2ii', 'pr')) +       # s_ci
-              chain('d2i1', (P, 'q2mr', 'pi'), (P, 'q2mi', 'pr')) +      # s_dr
-              chain('d126', (P, 'q2mr', 'pr'), (M, 'q2mi', 'pi')) +      # s_di
-              chain('d127', (P, 'q2ir', 'pr'), (P, 'q2ii', 'pi')))       # s_cr
+POST_S_DLY = (chain('dl0', (P, 'bCr', 'pi'), (M, 'bCi', 'pr')) +       # s_ci
+              chain('dl1', (P, 'bDr', 'pi'), (P, 'bDi', 'pr')) +      # s_dr
+              chain('dl2', (P, 'bDr', 'pr'), (M, 'bDi', 'pi')) +      # s_di
+              chain('dl3', (P, 'bCr', 'pr'), (P, 'bCi', 'pi')))       # s_cr
 
 
 # ------------------------------------------------------------------ the fold
@@ -216,6 +216,121 @@ def fold_plan(acmod, nf, cmix, surmix):
         else:
             plan.append([('add', 1, slev)] if slev else [])
     return plan
+
+
+# ------------------------------------------------------------------ the ROM (what I2 runs)
+# Operand symbols -> 6-bit codes. The RTL resolves a code to an address with the
+# element's context (resolve_src below is that function); code 0 is "none".
+SRC = (['none'] + [f'c{n}{p}' for n in range(4) for p in 'ri'] + [f't{n}' for n in range(NTMP)] +
+       ['da0', 'da1', 'bi_r', 'bi_i', 'xj', 'dj'] +
+       [f'b{q}{p}' for q in 'ABCD' for p in 'ri'] + [f'dl{n}' for n in range(4)] +
+       [f'p{sl}_{n}' for sl in (0, 1) for n in range(8)])
+assert len(SRC) <= 64
+SRC_CODE = {n: k for k, n in enumerate(SRC)}
+# Constant symbols -> 4-bit codes; 0 = no constant (an add term)
+CST = ['none', 'wr', 'wi', 'pr', 'pi', 'wa0', 'wb0', 'wa1', 'wb1', 'wa2', 'wb2', 'wa3', 'wb3',
+       'mant', 'clev', 'slev']
+assert len(CST) <= 16
+CST_CODE = {n: k for k, n in enumerate(CST)}
+MODE_CODE = {'set': 0, 'nset': 1, 'add': 2, 'sub': 3}
+MODES = {v: k for k, v in MODE_CODE.items()}
+TERM_BITS = 20                     # {last, w35, dst[5:0], cst[3:0], src[5:0], mode[1:0]}
+
+# The fold's per-channel roles (fold_plan's contributions, the gain named by its constant)
+CLASSES = {
+    'D0':   [('set', 0, None)],                       # L, or channel 0 of a 1/2-channel mode
+    'D1':   [('set', 1, None)],                       # channel 1 of a 2-channel mode; R, no C
+    'A1':   [('add', 1, None)],                       # R after C
+    'C':    [('add', 0, 'clev'), ('set', 1, 'clev')],
+    'S':    [('add', 0, 'slev'), ('add', 1, 'slev')], # one surround, both sides
+    'LS':   [('add', 0, 'slev')],
+    'RS':   [('add', 1, 'slev')],
+    'NONE': [],                                       # a surround at slev 0: delay line only
+}
+CLASS_LIST = list(CLASSES)
+
+
+def fold_classes(acmod, nf, cmix, surmix):
+    """-> (per-channel class names, clev, slev): fold_plan, as the ROM's classes."""
+    plan = fold_plan(acmod, nf, cmix, surmix)
+    has_c = bool(acmod & 1) and acmod != 1
+    clev = CLEV[cmix] if (has_c and nf > 2) else 0
+    names, slev = [], 0
+    for c in plan:
+        if c == [('set', 0, None)]:
+            names.append('D0')
+        elif c == [('set', 1, None)]:
+            names.append('D1')
+        elif c == [('add', 1, None)]:
+            names.append('A1')
+        elif not c:
+            names.append('NONE')
+        elif c[0][2] == clev and len(c) == 2 and c[1][0] == 'set':
+            names.append('C')
+        else:
+            slev = c[0][2]
+            names.append({2: 'S'}.get(len(c), 'LS' if c[0][1] == 0 else 'RS'))
+    return names, clev, slev
+
+
+def _outs_symbolic(cls, out_parts):
+    """An element's output words, symbolically (Block.outs' order)."""
+    contrib = CLASSES[cls]
+    direct = [c for c in contrib if c[2] is None]
+    gained = [c for c in contrib if c[2] is not None]
+    lift = {'set': 'add', 'nset': 'sub', 'add': 'add', 'sub': 'sub'}
+    t = []
+    for n, (_, parts) in enumerate(out_parts):
+        if direct:
+            (mode, slot, _), = direct
+            tpl = chain(f'p{slot}_{n}', *parts)
+            if mode == 'add':
+                tpl = [('set', f'p{slot}_{n}', None, None, W32)] + [(lift[x[0]],) + x[1:] for x in tpl]
+            t += tpl
+        if gained:
+            t += chain(f't{8 + n}', *parts)
+    for n, _ in enumerate(out_parts):
+        for mode, slot, g in gained:
+            if mode == 'set':
+                t += chain(f'p{slot}_{n}', (P, f't{8 + n}', g))
+            else:
+                t += [('set', f'p{slot}_{n}', None, None, W32), ('add', f't{8 + n}', g, f'p{slot}_{n}', W32)]
+    return t
+
+
+def templates():
+    """-> {kind: [terms]}: every element kind the walk runs."""
+    k = {'DRC': TPL['DRC'], 'PRE': TPL['PRE']}
+    for op in OPS:
+        k[op] = TPL[op]
+    for cls in CLASSES:
+        k['POSTL_' + cls] = POST_L_TMP + _outs_symbolic(cls, POST_L_OUT) + POST_L_DLY
+        k['POSTS_' + cls] = POST_S_TMP + _outs_symbolic(cls, POST_S_OUT) + POST_S_DLY
+    return k
+
+
+def encode(term, last):
+    mode, src, cst, dst, wr = term
+    return (MODE_CODE[mode] | SRC_CODE[src] << 2 | CST_CODE[cst or 'none'] << 8 |
+            (SRC_CODE[dst] if dst else 0) << 12 | (wr == W35) << 18 | last << 19)
+
+
+def decode(w):
+    return (MODES[w & 3], SRC[(w >> 2) & 63], CST[(w >> 8) & 15], SRC[(w >> 12) & 63],
+            W35 if (w >> 18) & 1 else W32, (w >> 19) & 1)
+
+
+def build_rom():
+    """-> (words, {kind: (base, length)}): the term ROM and its directory."""
+    words, dirn = [], {}
+    for kind, tpl in templates().items():
+        dirn[kind] = (len(words), len(tpl))
+        for n, t in enumerate(tpl):
+            words.append(encode(t, n == len(tpl) - 1))
+    return words, dirn
+
+
+ROM, DIR = build_rom()
 
 
 # ------------------------------------------------------------------ the executor
@@ -271,157 +386,155 @@ class Engine:
         self._now += 1
 
     def barrier(self, n=0):
-        """A phase boundary: pipeline refill."""
+        """Fixed cycles: the RTL's pipeline fill and drain (BLOCK_FILL, BLOCK_DRAIN)."""
         self._now += n
 
 
-class Block:
-    """One channel's transform: resolves the templates' symbols and runs them."""
+# Output word n's sample index, and the window taps, by element i (long / short POST)
+def k_of(n, i, short):
+    return ((2 * i, 255 - 2 * i, 128 + 2 * i, 127 - 2 * i, 2 * i + 1, 254 - 2 * i, 129 + 2 * i, 126 - 2 * i)
+            if short else (2 * i, 255 - 2 * i, 2 * i + 1, 254 - 2 * i))[n]
 
-    def __init__(self, eng, coeff, ch, short, dynrng, plan):
+
+def win_of(sym, i, short):
+    n, ab = int(sym[2]), sym[1]
+    if short:
+        idx = {('a', 0): 2 * i, ('b', 0): 255 - 2 * i, ('a', 1): 127 - 2 * i, ('b', 1): 128 + 2 * i,
+               ('a', 2): 2 * i + 1, ('b', 2): 254 - 2 * i, ('a', 3): 126 - 2 * i, ('b', 3): 129 + 2 * i}
+    else:
+        idx = {('a', 0): 2 * i, ('b', 0): 255 - 2 * i, ('a', 1): 2 * i + 1, ('b', 1): 254 - 2 * i}
+    return idx[(ab, n)]
+
+
+class Ctx:
+    """An element's context: what the RTL holds in registers while its terms issue."""
+    __slots__ = ('ch', 'short', 'i', 'j', 'a0', 'a1', 's', 'wr', 'wi', 'phase')
+
+    def __init__(self, **k):
+        for f in self.__slots__:
+            setattr(self, f, k.get(f, 0))
+
+
+def resolve_src(sym, c):
+    """A sample symbol -> its ring address, or ('X', bin). The RTL's address mux."""
+    R = RING
+    if sym[0] == 'c' and len(sym) == 3:
+        return R['BUF'] + 2 * (c.s[int(sym[1])] & 127) + (sym[2] == 'i')
+    if sym[0] == 't':
+        return R['TMP'] + int(sym[1:])
+    if sym in ('da0', 'da1'):
+        return R['D'] + (c.a0 if sym == 'da0' else c.a1)
+    if sym in ('bi_r', 'bi_i'):
+        return R['BUF'] + 2 * c.i + (sym == 'bi_i')
+    if sym == 'xj':
+        return ('X', c.j)
+    if sym == 'dj':
+        return R['D'] + c.j
+    if sym[0] == 'b':
+        ix = {'A': c.i, 'B': 63 - c.i, 'C': 64 + c.i, 'D': 127 - c.i}[sym[1]]
+        return R['BUF'] + 2 * ix + (sym[2] == 'i')
+    if sym[:2] == 'dl':
+        j = (2 * c.i, 2 * c.i + 1, 126 - 2 * c.i, 127 - 2 * c.i)[int(sym[2])]
+        return R['DLY'] + 128 * c.ch + j
+    if sym[0] == 'p':
+        return R['PCM'] + 256 * int(sym[1]) + k_of(int(sym[3]), c.i, c.short)
+    raise KeyError(sym)
+
+
+def resolve_cst(sym, c, blk):
+    """A constant symbol -> (value, shift). The RTL's constant-ROM address mux."""
+    if sym == 'wr':
+        return c.wr, 17
+    if sym == 'wi':
+        return c.wi, 17
+    if sym in ('pr', 'pi'):
+        if c.phase == 'PRE':
+            t = IM.PRE2[c.i & 63] if c.short else IM.PRE1[c.i]
+        else:
+            t = IM.POST2[c.i] if c.short else IM.POST1[c.i]
+        return t[sym == 'pi'], 17
+    if sym[0] == 'w':
+        return IM.WINDOW[win_of(sym, c.i, c.short)], 17
+    if sym == 'mant':
+        return blk.mant, blk.drc_sh
+    if sym == 'clev':
+        return blk.clev, 17
+    if sym == 'slev':
+        return blk.slev, 17
+    raise KeyError(sym)
+
+
+class Block:
+    """One channel's transform, run from the term ROM (ROM, DIR) only."""
+
+    def __init__(self, eng, coeff, ch, short, dynrng, cls, clev, slev):
         self.e, self.coeff, self.ch, self.short = eng, coeff, ch, short
-        self.plan = plan
+        self.cls, self.clev, self.slev = cls, clev, slev
         mant = 32 + (dynrng & 31)
         ex = (dynrng >> 5) & 7
         ex = ex - 8 if ex & 4 else ex
         self.mant, self.drc_sh = mant, 5 - ex
-        self.sym = {}
-        self.cst = {}
 
-    def addr(self, s):
-        return self.sym[s]
-
-    def rd(self, s):
-        a = self.sym[s]
-        if isinstance(a, tuple):            # ('X', bin)
-            return lambda: self.coeff[a[1]], None
-        if self.ch not in self.e.valid and RING['DLY'] <= a < RING['PCM']:
-            return (lambda: 0), a
-        return (lambda: self.e.ring[a]), a
-
-    def run(self, tpl, sh=17):
-        self.e.elements += 1
-        for mode, src, cst, dst, wr in tpl:
-            fn, sa = self.rd(src)
-            self.e.term(mode, fn, sa, None if cst is None else self.cst[cst], sh,
-                        None if dst is None else self.sym[dst], wr)
+    def run_kind(self, kind, c):
+        e = self.e
+        e.elements += 1
+        base, n = DIR[kind]
+        for w in ROM[base:base + n]:
+            mode, src, cst, dst, wr, _ = decode(w)
+            a = resolve_src(src, c)
+            if isinstance(a, tuple):
+                fn, sa = (lambda b=a[1]: self.coeff[b]), None
+            elif self.ch not in e.valid and RING['DLY'] <= a < RING['PCM']:
+                fn, sa = (lambda: 0), a
+            else:
+                fn, sa = (lambda x=a: e.ring[x]), a
+            if cst == 'none':
+                const, sh = None, 0
+            else:
+                const, sh = resolve_cst(cst, c, self)
+            e.term(mode, fn, sa, const, sh, None if dst == 'none' else resolve_src(dst, c), wr)
 
     def transform(self):
-        e, ch = self.e, self.ch
-        R = RING
-        buf = lambda i, part: R['BUF'] + 2 * (i & 127) + part     # noqa: E731
-        dly = lambda j: R['DLY'] + 128 * ch + j                   # noqa: E731
-        for n in range(NTMP):
-            self.sym[f't{n}'] = R['TMP'] + n
-        # ---- PRE pass 1: DRC every coefficient into D
-        self.cst['mant'] = self.mant
+        c = Ctx(ch=self.ch, short=self.short, phase='DRC')
         for j in range(256):
-            self.sym['xj'] = ('X', j)
-            self.sym['dj'] = R['D'] + j
-            self.run(TPL['DRC'], sh=self.drc_sh)
-        e.barrier(2)
-        # ---- PRE pass 2
+            c.j = j
+            self.run_kind('DRC', c)
+        c.phase = 'PRE'
         for i in range(128):
             if self.short:
                 fo = IM.FFTORDER[i & 63]
-                a0 = (fo + 1) & 255 if i >= 64 else fo
-                a1 = (255 - fo) & 255 if i >= 64 else (254 - fo) & 255
-                pr, pi = IM.PRE2[i & 63]
+                c.a0 = (fo + 1) & 255 if i >= 64 else fo
+                c.a1 = (255 - fo) & 255 if i >= 64 else (254 - fo) & 255
             else:
                 fo = IM.FFTORDER[i]
-                a0, a1 = fo, (255 - fo) & 255
-                pr, pi = IM.PRE1[i]
-            self.sym.update(da0=R['D'] + a0, da1=R['D'] + a1, bi_r=buf(i, 0), bi_i=buf(i, 1))
-            self.cst.update(pr=pr, pi=pi)
-            self.run(TPL['PRE'])
-        e.barrier(2)
+                c.a0, c.a1 = fo, (255 - fo) & 255
+            c.i = i
+            self.run_kind('PRE', c)
         self.ifft_post()
 
     def ifft_post(self):
-        e, ch = self.e, self.ch
-        R = RING
-        buf = lambda i, part: R['BUF'] + 2 * (i & 127) + part     # noqa: E731
-        dly = lambda j: R['DLY'] + 128 * ch + j                   # noqa: E731
-        for n in range(NTMP):
-            self.sym[f't{n}'] = R['TMP'] + n
-        # ---- the IFFT
+        c = Ctx(ch=self.ch, short=self.short, phase='IFFT')
         for op, sa, sb, sc, sd, wr, wi in IM.SCHED[self.short]:
-            for nm, ix in (('c0', sa), ('c1', sb), ('c2', sc), ('c3', sd)):
-                self.sym[nm + 'r'], self.sym[nm + 'i'] = buf(ix, 0), buf(ix, 1)
-            self.cst.update(wr=wr, wi=wi)
-            self.run(TPL[OPS[op]])
-        e.barrier(2)
-        # ---- POST, window, overlap, the fold
-        if not self.short:
-            for i in range(64):
-                self.sym.update(bir=buf(i, 0), bii=buf(i, 1), bmr=buf(127 - i, 0), bmi=buf(127 - i, 1),
-                                d0=dly(2 * i), d1=dly(2 * i + 1))
-                pr, pi = IM.POST1[i]
-                self.cst.update(pr=pr, pi=pi,
-                                wa0=IM.WINDOW[2 * i], wb0=IM.WINDOW[255 - 2 * i],
-                                wa1=IM.WINDOW[2 * i + 1], wb1=IM.WINDOW[254 - 2 * i])
-                self.run(POST_L_TMP)
-                ks = {'o0': 2 * i, 'o1': 255 - 2 * i, 'o2': 2 * i + 1, 'o3': 254 - 2 * i}
-                self.outs([(ks[o], parts) for o, parts in POST_L_OUT])
-                self.run(POST_L_DLY)
-        else:
-            for i in range(32):
-                self.sym.update(q1ir=buf(i, 0), q1ii=buf(i, 1), q1mr=buf(63 - i, 0), q1mi=buf(63 - i, 1),
-                                q2ir=buf(64 + i, 0), q2ii=buf(64 + i, 1),
-                                q2mr=buf(127 - i, 0), q2mi=buf(127 - i, 1),
-                                d2i=dly(2 * i), d2i1=dly(2 * i + 1), d126=dly(126 - 2 * i),
-                                d127=dly(127 - 2 * i))
-                pr, pi = IM.POST2[i]
-                W = IM.WINDOW
-                self.cst.update(pr=pr, pi=pi,
-                                wa0=W[2 * i], wb0=W[255 - 2 * i],
-                                wa1=W[127 - 2 * i], wb1=W[128 + 2 * i],
-                                wa2=W[2 * i + 1], wb2=W[254 - 2 * i],
-                                wa3=W[126 - 2 * i], wb3=W[129 + 2 * i])
-                self.run(POST_S_TMP)
-                ks = {'o0': 2 * i, 'o1': 255 - 2 * i, 'o2': 128 + 2 * i, 'o3': 127 - 2 * i,
-                      'o4': 2 * i + 1, 'o5': 254 - 2 * i, 'o6': 129 + 2 * i, 'o7': 126 - 2 * i}
-                self.outs([(ks[o], parts) for o, parts in POST_S_OUT])
-                self.run(POST_S_DLY)
-        e.barrier(2)
+            c.s, c.wr, c.wi = (sa, sb, sc, sd), wr, wi
+            self.run_kind(OPS[op], c)
+        c.phase = 'POST'
+        kind = ('POSTS_' if self.short else 'POSTL_') + self.cls
+        for i in range(32 if self.short else 64):
+            c.i = i
+            self.run_kind(kind, c)
 
-    def outs(self, words):
-        """An element's output words and their fold contributions (docs/imdct_engine.md
-        "The fold"). A word a gain multiplies is formed first into its own temp (t8 +
-        n, w32: the value imdct_512's pcm slot held), every one of them before any share
-        is added, so no share reads a temp still in flight."""
-        R = RING
-        contrib = self.plan[self.ch]
-        direct = [c for c in contrib if c[2] is None]
-        gained = [c for c in contrib if c[2] is not None]
-        lift = {'set': 'add', 'nset': 'sub', 'add': 'add', 'sub': 'sub'}
-        for n, (k, parts) in enumerate(words):
-            if direct:
-                (mode, slot, _), = direct
-                self.sym['pk'] = R['PCM'] + 256 * slot + k
-                tpl = chain('pk', *parts)
-                if mode == 'add':                   # acc = slot; then the chain on top
-                    tpl = [('set', 'pk', None, None, W32)] + [(lift[t[0]],) + t[1:] for t in tpl]
-                self.run(tpl)
-            if gained:
-                self.sym['vk'] = R['TMP'] + 8 + n
-                self.run(chain('vk', *parts))
-        for n, (k, parts) in enumerate(words):
-            self.sym['vk'] = R['TMP'] + 8 + n
-            for mode, slot, gain in gained:
-                self.sym['pk'] = R['PCM'] + 256 * slot + k
-                self.cst['g'] = gain
-                if mode == 'set':
-                    self.run(chain('pk', (P, 'vk', 'g')))
-                else:
-                    self.run([('set', 'pk', None, None, W32), ('add', 'vk', 'g', 'pk', W32)])
+
+BLOCK_FILL = 2       # op start -> the first term issues (fetch, resolve)
+BLOCK_DRAIN = 3      # the last term issues -> its write lands -> done
 
 
 def run_block(eng, coeff, nf, blksw, dynrng, acmod, cmix, surmix):
-    plan = fold_plan(acmod, nf, cmix, surmix)
+    cls, clev, slev = fold_classes(acmod, nf, cmix, surmix)
+    eng.barrier(BLOCK_FILL)
     for ch in range(nf):
         short = bool((blksw >> ch) & 1) if ch < 5 else False
-        Block(eng, coeff[ch], ch, short, dynrng, plan).transform()
+        Block(eng, coeff[ch], ch, short, dynrng, cls[ch], clev, slev).transform()
+    eng.barrier(BLOCK_DRAIN)
     eng.valid |= set(range(nf))
 
 
@@ -447,8 +560,9 @@ def compare(eng, im, nf, acmod):
 # Cycles charged per element walked. 0 is a REQUIREMENT on the RTL, not an estimate: the
 # sequencer fetches the next element's schedule entry while the current one issues, so
 # elements run back to back (docs/imdct_engine.md I1). At 1 the worst AC-3 frame is
-# 63.7 % under the budget's x1.25, over the 60 % bar; at 0, 58.8 %. I2's bench must
-# match these cycles exactly.
+# 63.7 % under the budget's x1.25, over the 60 % bar; at 0, 58.8 %. The RTL meets it:
+# bench/dvd/run_imdct_eng.sh [cycles] matches every item, so the budget charges these
+# at x1.0.
 ELEM_OVH = 0
 
 
@@ -547,15 +661,15 @@ def _neg_floor():
 
 
 def _no_first():
-    orig = Block.rd
+    orig = Block.run_kind
 
-    def rd(self, s):
+    def run_kind(self, kind, c):
         valid, self.e.valid = self.e.valid, set(range(5))
         try:
-            return orig(self, s)
+            return orig(self, kind, c)
         finally:
             self.e.valid = valid
-    Block.rd = rd
+    Block.run_kind = run_kind
 
 
 def _drc_off():
@@ -635,7 +749,7 @@ def check_unit(n, seed=2):
             eng.ring[RING['BUF'] + 2 * i], eng.ring[RING['BUF'] + 2 * i + 1] = r, q
         for j in range(128):
             eng.ring[RING['DLY'] + j] = dl[j]
-        Block(eng, [0] * 256, 0, short, 0, fold_plan(1, 1, 0, 0)).ifft_post()
+        Block(eng, [0] * 256, 0, short, 0, 'D0', 0, 0).ifft_post()
         wide = max(wide, eng.max_sample)
         d = compare(eng, im, 1, 1)
         if d:
@@ -644,9 +758,135 @@ def check_unit(n, seed=2):
     return n, bad, first, wide
 
 
+# ------------------------------------------------------------------ RTL vectors
+def _w35(v):
+    return v & ((1 << 35) - 1)
+
+
+def write_vectors(out, streams=(), frames=2, nrand=0, nunit=0, seed=3):
+    """One continuous run for bench/dvd/imdct_eng_tb.sv, from a junk ring:
+      ring0.mem   2048 x 35  the ring before the first item
+      items.txt   per item: N nf blksw dynrng acmod cmix surmix cycles  (a block)
+                            U short cycles                              (ISKIP: IFFT +
+                            POST of channel 0 on an injected buffer and delay line)
+      coeff.mem   per N item, nf x 256 Q1.23 words (slot = channel)
+      inj.mem     per U item, 256 buffer words then 128 delay words (35-bit)
+      expect.mem  per item, the whole ring after it (2048 x 35): every word, temps too
+    -> the item count."""
+    os.makedirs(out, exist_ok=True)
+    eng = Engine(junk=seed)
+    rng = random.Random(seed)
+    items = []
+    for p in streams:
+        for hdr, bl in IM.decode_blocks(p, frames):
+            for b in bl:
+                items.append(('N', b['coeff'], IM.nfchans(hdr['acmod']), b['blksw'], b['dynrng'],
+                              hdr['acmod'], hdr['cmixlev'], hdr['surmixlev']))
+    for k in range(nrand):
+        b = rand_block(rng, 'full' if k % 2 else 'rand')
+        items.append(('N', b['coeff'], b['nf'], b['blksw'], b['dynrng'], b['acmod'], b['cmix'], b['surmix']))
+    for k in range(nunit):
+        top = (1 << 31) - 1
+        mode = k % 3
+        def word():                                           # noqa: E306
+            if mode == 0:
+                return rng.randint(-(1 << 31), top)
+            if mode == 1:
+                return rng.choice([top, top - rng.randint(0, 1 << 20), -(1 << 31) + rng.randint(0, 1 << 20)])
+            return rng.choice([top, -(1 << 31)])
+        items.append(('U', bool(k & 1), [word() for _ in range(256)], [word() for _ in range(128)]))
+    with open(os.path.join(out, 'ring0.mem'), 'w') as f:
+        f.writelines(f'{_w35(v):09x}\n' for v in eng.ring)
+    fi = open(os.path.join(out, 'items.txt'), 'w')
+    fc = open(os.path.join(out, 'coeff.mem'), 'w')
+    fj = open(os.path.join(out, 'inj.mem'), 'w')
+    fe = open(os.path.join(out, 'expect.mem'), 'w')
+    wide = 0
+    for it in items:
+        c0 = block_cycles(eng)
+        if it[0] == 'N':
+            _, coeff, nf, blksw, dyn, acmod, cmix, sur = it
+            run_block(eng, coeff, nf, blksw, dyn, acmod, cmix, sur)
+            for ch in range(nf):
+                fc.writelines(f'{v & 0xFFFFFF:06x}\n' for v in coeff[ch])
+            fi.write(f'N {nf} {blksw} {dyn} {acmod} {cmix} {sur} {block_cycles(eng) - c0}\n')
+        else:
+            _, short, buf, dl = it
+            for n, v in enumerate(buf):
+                eng.ring[RING['BUF'] + n] = v
+            for j, v in enumerate(dl):
+                eng.ring[RING['DLY'] + j] = v
+            fj.writelines(f'{_w35(v):09x}\n' for v in buf + dl)
+            eng.valid |= {0}
+            eng.barrier(BLOCK_FILL)
+            Block(eng, [0] * 256, 0, short, 0, 'D0', 0, 0).ifft_post()
+            eng.barrier(BLOCK_DRAIN)
+            fi.write(f'U {int(short)} {block_cycles(eng) - c0}\n')
+        fe.writelines(f'{_w35(v):09x}\n' for v in eng.ring)
+        wide = max(wide, eng.max_sample)
+    for f in (fi, fc, fj, fe):
+        f.close()
+    return len(items), wide
+
+
+KINDS = (['DRC', 'PRE'] + list(OPS) + ['POSTL_' + c for c in CLASS_LIST] +
+         ['POSTS_' + c for c in CLASS_LIST])        # kind code = index (IFFT op k = 2 + k)
+ASM_MEM = os.path.join(os.path.dirname(HERE), 'dvd', 'dts', 'imdct_tprog.mem')
+ASM_SVH = os.path.join(os.path.dirname(HERE), 'dvd', 'dts', 'imdct_isa.svh')
+
+
+def asm_text():
+    mem = ''.join(f'{w:05x}\n' for w in ROM)
+    kb = ''.join(f'{DIR[k][0]:010b}' for k in reversed(KINDS))
+    kl = ''.join(f'{DIR[k][1]:07b}' for k in reversed(KINDS))
+    assert max(DIR[k][0] for k in KINDS) < 1024 and max(DIR[k][1] for k in KINDS) < 128
+    L = ['// dvd/dts/imdct_isa.svh -- GENERATED by tools/imdct_isa.py asm. DO NOT EDIT.',
+         '// The AC-3 IMDCT term program\'s directory and codes (docs/imdct_engine.md).',
+         f'localparam int IM_TP_WORDS = {len(ROM)};',
+         f'localparam int IM_NKIND = {len(KINDS)};',
+         '// kind k: base IM_KB[10k +: 10], length IM_KL[7k +: 7]; ' +
+         ', '.join(f'{n} {k}' for n, k in enumerate(KINDS)),
+         f"localparam logic [{10 * len(KINDS) - 1}:0] IM_KB = {10 * len(KINDS)}'b{kb};",
+         f"localparam logic [{7 * len(KINDS) - 1}:0] IM_KL = {7 * len(KINDS)}'b{kl};",
+         f'localparam logic [4:0] IM_K_DRC = 5\'d0, IM_K_PRE = 5\'d1, IM_K_OP = 5\'d2, '
+         f'IM_K_POSTL = 5\'d{KINDS.index("POSTL_" + CLASS_LIST[0])}, '
+         f'IM_K_POSTS = 5\'d{KINDS.index("POSTS_" + CLASS_LIST[0])};',
+         '// fold classes: ' + ', '.join(f'{n} {c}' for n, c in enumerate(CLASS_LIST)),
+         '// source symbols (6 bits): ' + ', '.join(f'{n} {c}' for n, c in enumerate(SRC)),
+         f"localparam logic [5:0] IM_S_C = 6'd{SRC_CODE['c0r']}, IM_S_T = 6'd{SRC_CODE['t0']}, "
+         f"IM_S_DA0 = 6'd{SRC_CODE['da0']}, IM_S_DA1 = 6'd{SRC_CODE['da1']}, "
+         f"IM_S_BIR = 6'd{SRC_CODE['bi_r']}, IM_S_BII = 6'd{SRC_CODE['bi_i']}, "
+         f"IM_S_XJ = 6'd{SRC_CODE['xj']}, IM_S_DJ = 6'd{SRC_CODE['dj']}, "
+         f"IM_S_B = 6'd{SRC_CODE['bAr']}, IM_S_DL = 6'd{SRC_CODE['dl0']}, IM_S_P = 6'd{SRC_CODE['p0_0']};",
+         '// constant symbols (4 bits): ' + ', '.join(f'{n} {c}' for n, c in enumerate(CST)),
+         "localparam logic [3:0] " + ', '.join(f"IM_C_{c.upper()} = 4'd{n}" for n, c in enumerate(CST)) + ';',
+         f"localparam logic [10:0] IM_R_BUF = 11'd{RING['BUF']}, IM_R_TMP = 11'd{RING['TMP']}, "
+         f"IM_R_D = 11'd{RING['D']}, IM_R_DLY = 11'd{RING['DLY']}, IM_R_PCM = 11'd{RING['PCM']};",
+         '']
+    return mem, '\n'.join(L)
+
+
+def asm(check=False):
+    mem, svh = asm_text()
+    if check:
+        ok = all(os.path.exists(f) and open(f).read() == t for f, t in ((ASM_MEM, mem), (ASM_SVH, svh)))
+        return 0 if ok else 1
+    open(ASM_MEM, 'w').write(mem)
+    open(ASM_SVH, 'w').write(svh)
+    return 0
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     sub = ap.add_subparsers(dest='cmd', required=True)
+    sm = sub.add_parser('asm')
+    sm.add_argument('--check', action='store_true', help='the generated files match (exit 1 if not)')
+    v = sub.add_parser('vec')
+    v.add_argument('streams', nargs='*')
+    v.add_argument('--out', required=True)
+    v.add_argument('--frames', type=int, default=1)
+    v.add_argument('--random', type=int, default=0)
+    v.add_argument('--unit', type=int, default=0)
     c = sub.add_parser('check')
     c.add_argument('streams', nargs='*')
     c.add_argument('--frames', type=int, default=4)
@@ -654,9 +894,19 @@ def main():
     c.add_argument('--mutate', choices=sorted(MUTS))
     c.add_argument('--red', action='store_true', help='run every mutation; each must be caught')
     a = ap.parse_args()
+    if a.cmd == 'asm':
+        rc = asm(check=a.check)
+        print(f'imdct_isa asm: {"up to date" if a.check and not rc else "STALE" if rc else "written"} '
+              f'({len(ROM)} words, {len(KINDS)} kinds)')
+        return rc
+    if a.cmd == 'vec':
+        n, wide = write_vectors(a.out, a.streams, a.frames, a.random, a.unit)
+        print(f'imdct_isa vec: {n} items -> {a.out} (widest sample {wide} bits)')
+        return 0
     fails = 0
     if a.mutate:
         MUTS[a.mutate][0]()
+        globals().update(zip(('ROM', 'DIR'), build_rom()))   # a template mutation reaches the ROM
     if a.red:
         gs = IM.gate_streams()
         pick = lambda key: [p for p in gs if key in os.path.basename(p)][:1]     # noqa: E731

@@ -54,6 +54,12 @@ module ac3_ab_tb;
         fd = $fopen({stem, ".frames"}, "r");
         for (int i = 0; i < n_frames; i++) begin r = $fscanf(fd, "%h", v); flen[i] = v[15:0]; end
         $fclose(fd);
+        // the old side's imdct_512 memories start at zero, as its M10K does at power-up
+        // (bench/ac3/imdct_xcheck_tb.sv does the same): a 3/0 fold multiplies a never-written
+        // surround slot by slev = 0, which is 0 on silicon and X x 0 = X in simulation. The
+        // engine (docs/imdct_engine.md) skips a zero-gain share, so it has no such read.
+        for (int k = 0; k < 1536; k++) u_old.u_parse.u_imdct.pcm_mem[k] = 32'sd0;
+        for (int k = 0; k < 512; k++) u_old.u_parse.u_imdct.delay_mem[k] = 64'd0;
     end
 
     // ---------------------------------------------------------------- old: ac3_front

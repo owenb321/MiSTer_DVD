@@ -14,8 +14,8 @@ Claims (docs/ac3_engine.md):
       RTL's own cycle counts (bench/dvd/run_ac3_seq.sh [cycles] checks the units'
       charges), the vector side's MODELLED charges with their headroom factor, and
       the IMDCT in series ON THE ENGINE (docs/imdct_engine.md): tools/imdct_isa.py's
-      cycles for that frame's own blocks, with the same headroom factor until the RTL
-      measures them (I2);
+      cycles for that frame's own blocks, at x1.0 -- they ARE the RTL's (bench/dvd/
+      run_imdct_eng.sh [cycles] matches every item cycle for cycle);
   [3] the generated images match the program (ac3_isa.py --asm --check).
 RED arms: microcode mutations (`;MUT name:` lines in ac3.uasm), each tied to the
 stream feature it needs; one that bites on no stream with the feature is a FAIL,
@@ -43,12 +43,12 @@ ARMS = {'p3seed': 'blocks', 'cplseed': 'cpl', 'phsflg': 'phsflg', 'dynreset': 'd
 def frame_cost(m, imdct):
     """The worst frame: the sequencer and its units as the RTL counts them, the
     modelled vector-side charges with headroom, plus that frame's IMDCT on the engine
-    in series (imdct: per-frame cycles, tools/imdct_isa.frame_cycles), with headroom."""
+    in series (imdct: per-frame cycles, tools/imdct_isa.frame_cycles), RTL-exact."""
     if not m.frame_cycles:
         return 0
     vec = m.vec_model / max(len(m.frame_cycles), 1)
     head = (A.CYC_HEADROOM - 1) * vec
-    return max(fc + head + A.CYC_HEADROOM * (imdct[k] if k < len(imdct) else max(imdct, default=0))
+    return max(fc + head + (imdct[k] if k < len(imdct) else max(imdct, default=0))
                for k, fc in enumerate(m.frame_cycles))
 
 

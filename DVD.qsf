@@ -108,6 +108,11 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/ref_dta_gate.sv
 # bsi_parse, audblk_parse, exponent_decode, bit_allocation and mantissa_dequant, which
 # stay in dvd/ac3/ as the reference bench/dvd/run_ac3_ab.sh scores the engine against
 # (docs/ac3_engine.md "W1"). bit_fifo + bit_reader left the build with mp2_decode.
+# Since logic reclaim F the engine runs the IMDCT too (op 25, a term program:
+# dvd/dts/imdct_tprog.mem + imdct_isa.svh, docs/imdct_engine.md), so imdct_512 left the
+# build as well; it stays in dvd/ac3/ as the reference run_ac3_ab.sh and
+# bench/ac3/run_imdct_xcheck.sh score against. dts_vec includes its tables
+# (dvd/ac3/ac3_imdct_tables.svh).
 # The engine's ROM images load by repo-relative path (dvd/dts/*.mem).
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/dts/dts_seq.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/dts/dts_vec.sv
@@ -117,7 +122,6 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/audio_engine.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/dts/dts_cb_mem.sv
 # ... one of the three is mp2_decode's old PCM FIFO, kept as a read-only host
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/dts/cb_host_ram.sv
-set_global_assignment -name SYSTEMVERILOG_FILE dvd/ac3/imdct_512.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/ac3/pcm_out.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/ddr_arb.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/vidfeed_cdc.sv

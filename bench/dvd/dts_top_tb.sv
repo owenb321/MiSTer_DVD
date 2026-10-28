@@ -52,7 +52,10 @@ module dts_top_tb;
         .pcm_l, .pcm_r, .pcm_valid, .pcm_ready,
         .frames, .refused, .last_err, .err_seen, .overrun_bits, .lenient_codes,
         .dmix_ignored, .vop_start, .vop_op, .vop_done,
-        .tr_valid, .tr_pc, .tr_kind, .tr_addr, .tr_val);
+        .tr_valid, .tr_pc, .tr_kind, .tr_addr, .tr_val,
+        // AC-3's IMDCT and PCM ports, tied off: codec 0 / 2 never reach op 25
+        .imdct_req(), .imdct_go(1'b0), .imdct_fin(), .pcm_ra(9'd0), .pcm_q(),
+        .coef_ra(11'd0), .coef_q());
 
     string stem, cbdir;
     int stall, ostall, cblat;

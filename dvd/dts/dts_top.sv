@@ -9,11 +9,13 @@
 // top-level port: the codebooks are off-chip (docs/dts_decoder.md D4), answered by
 // the bench in P1b and by ram2 from P2. clk_sys, 27 MHz. docs/dts_decoder.md sec 10.
 //
-// AC-3 (codec 1, docs/ac3_engine.md): no PCM; each block's coefficients are handed to
-// imdct_512 instead. At the program's IMDCT op, imdct_req rises with the block's side
-// information latched (blk_*); the caller reads X through coef_ra -> coef_q (one cycle;
-// {slot, bin}: slots 0-4 the full-bandwidth channels, 6 LFE, 24-bit Q1.23 sign-extended
-// to 25) and pulses imdct_done.
+// AC-3 (codec 1, docs/ac3_engine.md): each block is transformed here too (op 25, the
+// IMDCT as a term program, docs/imdct_engine.md). At the op, imdct_req rises with the
+// block's side information latched (blk_*) and waits for imdct_go (the caller's pcm_out
+// has drained the last block); imdct_fin pulses when PCM slots 0/1 hold the block, which
+// the caller reads through pcm_ra -> pcm_q (one cycle) until its next go. While
+// imdct_req waits, coef_ra -> coef_q reads X ({slot, bin}, Q1.23 sign-extended to 25):
+// the benches score the parse's coefficients there.
 //
 // MP2 (codec 2, docs/mp2_engine.md): PCM pairs out as DTS's, at the stream's own rate,
 // which mp2_fs carries (MFS, op 29: no vector work, latched here).
@@ -59,10 +61,13 @@ module dts_top (
     output logic         refuse,             // pulse: a frame refused ...
     output logic   [4:0] refuse_code,        // ... with this code
 
-    // AC-3: the block for imdct_512
-    output logic         imdct_req,
-    input  wire          imdct_done,
-    input  wire   [10:0] coef_ra,
+    // AC-3: the IMDCT runs here (op 25, docs/imdct_engine.md); pcm_out reads its output
+    output logic         imdct_req,          // a block is ready to transform: waits for go
+    input  wire          imdct_go,           // pcm_out has drained the last block
+    output logic         imdct_fin,          // pulse: PCM slots 0/1 hold the block
+    input  wire    [8:0] pcm_ra,             // {slot, idx}
+    output logic  [31:0] pcm_q,
+    input  wire   [10:0] coef_ra,            // X while imdct_req waits (benches)
     output logic  [24:0] coef_q,
     output logic   [4:0] blk_blksw,          // a bit a channel
     output logic   [7:0] blk_dynrng,
@@ -104,7 +109,7 @@ module dts_top (
         .xq_code, .xq_valid, .xq_ready,
         .cb_req, .cb_sel, .cb_addr, .cb_valid, .cb_data,
         .pcm_l, .pcm_r, .pcm_valid, .pcm_ready,
-        .xq_addr, .abort(err_valid), .imdct_req, .imdct_done, .coef_ra, .coef_q);
+        .xq_addr, .abort(err_valid), .imdct_req, .imdct_go, .imdct_fin, .pcm_ra, .pcm_q, .coef_ra, .coef_q);
 
     // AC-3: IMDCT's arguments, the block's side information (ac3.uasm M_DONE), latched
     // on the op's start

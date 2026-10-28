@@ -126,8 +126,9 @@ if [ $red = 1 ]; then
       { echo "  $name: no golden for arm $arm"; echo MUTFAIL; } > "$RES/$name"; return
     fi
     local d; d=$(mktemp -d)
-    mkdir -p "$d/dvd/dts" "$d/bench/dvd"
+    mkdir -p "$d/dvd/dts" "$d/dvd/ac3" "$d/bench/dvd"
     cp dvd/dts/*.sv dvd/dts/*.svh dvd/dts/*.mem "$d/dvd/dts/"
+    cp dvd/ac3/ac3_imdct_tables.svh "$d/dvd/ac3/"   # dts_vec includes it (the IMDCT, op 25)
     cp $TB "$d/bench/dvd/"
     python3 - "$d" "$old" "$new" <<'PYEOF'
 import sys, glob

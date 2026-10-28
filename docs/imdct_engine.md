@@ -1,7 +1,9 @@
 # The AC-3 IMDCT on the shared audio engine (logic reclaim, `logic_reclaim.md` §10a)
 
-**Status (2026-10-28):** I0 (the design) and **I1 (the program and its emulator) ✅**, on
-`feature/logic-reclaim-f` (stacked on `feature/vm-snapshot`, unpushed). Next: I2, the RTL. **Why now:** the save-states merge gate
+**Status (2026-10-28):** I0 (the design), **I1 (the program and its emulator) ✅**, **I2
+(the RTL, `dts_vec` op 25) ✅ in simulation**, I3 (wired into `audio_engine`, `imdct_512`
+out of the build) ⏳ fit; on `feature/logic-reclaim-f` (stacked on `feature/vm-snapshot`,
+unpushed). I4 (by ear on the rig) ⏳. **Why now:** the save-states merge gate
 (`roadmap.md` "Save states") needs ~370 ALM back; `mult22x16` gave 209 (§11a there), and
 the maintainer chose this item to close the rest (2026-10-28).
 
@@ -145,6 +147,58 @@ long channel (~3.5 %), the price of a program that reads top to bottom.
   256-word buffer RAM, +1–2 M10K) makes an add of two words one term (IFFT −25 %, about
   4 points); the pipeline's three-cycle window lets IFFT2/BZERO/BHALF skip their copies
   (about 1 point).
+
+## I2 result: the RTL (2026-10-28)
+
+`dvd/dts/dts_vec.sv` op 25 runs the term program (`dvd/dts/imdct_tprog.mem`, 653 × 20,
+and `dvd/dts/imdct_isa.svh`, both written by `tools/imdct_isa.py asm`, which `--check`s
+them) on the shared datapath. Three stages ahead of it: **F** walks the element (phase,
+channel, index, term) and prefetches the next element's `fftorder` / schedule entry, so
+elements run back to back; **R** resolves the term's sample, constant and destination
+symbols against the element's context (one mux, the same code for source and
+destination), presents the ring / X / constant reads, and **stalls** while its ring word
+has a write in flight in I or in stage Y (the term ROM's output register is held, so the
+waiting word is not overwritten); **I** issues on the multiplier. `imdct_512`'s own table
+file supplies the schedule, twiddles, window and order (`ac3_imdct_tables.svh`, its include
+guard undefined on both sides so a bench that compiles both modules gets two copies).
+- **Datapath:** `ma` 27 → 33 bits (two MP2 operands needed explicit sign extension:
+  `{{11{a1[15]}}, a1}` and `ss[26:0]` would have zero-extended into the wider port);
+  `x_prod` 54 → 56; a product mode in stage Y (`psh`: floor by 17 before the
+  accumulator; `psub`: subtract the floored product); the ring 32 → 35 bits, written
+  sign-extended from 32 or (`w35`) whole.
+- **The ring's read port** is `pcm_out`'s (`{2'b11, slot, idx}`) unless an op reads the
+  ring (DTS's and MP2's windows, the IMDCT), so V_WIN now states its address.
+- **Five valid bits**, one a channel, mask a delay line until its channel is transformed.
+- **The stalls are real:** the DRC → PRE seam stalls 1–2 cycles a channel (PRE's first
+  element reads `D[255]` / `D[254]`, DRC's last writes). All 270 configurations (acmod ×
+  per-channel short × surround level, two blocks each) stall 3,186 cycles in all,
+  data-independent. The I1 figures that showed none were taken while phase barriers
+  hid them.
+- **ISKIP (`a7[0]`, benches only)** starts the walker at the IFFT, so a bench can write an
+  injected buffer: no coefficient block reaches a 33-bit pre-sum through PRE (400
+  full-scale, max-DRC blocks searched: 32 bits at most), and this is the only way to test
+  the 33-bit path and the 35-bit store in RTL.
+
+**Gate `bench/dvd/run_imdct_eng.sh --red`** (`imdct_eng_tb.sv`, `dts_vec` alone, one
+continuous run from a junk ring: one frame each of 5.1, 3/0, 2/1, 3/1, 2/2, dual mono,
+mono, short-block 5.1 and a DRC stream, 16 random and full-scale blocks, 8 ISKIP items):
+after every item **all 2,048 ring words** equal the emulator's, temporaries included,
+and **go → `imdct_fin` equals the emulator's cycles**, so `test_ac3_isa.py`'s budget
+charges the RTL's own count. 78 items PASS. 11 mutations, each failing exactly its arm
+(the bench scores the ring before the cycles, so a mutation that breaks both names
+[ring]): subtraction, the stall, the 35-bit store, the delay mask, short POST's window,
+short PRE's pairing, R-after-C, the DRC shift, ISKIP's schedule read, a write to the
+source's address → [ring]; a stall on every write in flight (values right) → [cycles].
+
+**In the engine** (`audio_engine.sv`, I3's wiring; the parse gates unchanged):
+- `bench/dvd/run_ac3.sh`: all 36 arms GREEN, the transform now the engine's own. **Worst
+  frame 53.5 % of real time** (`noise_5p1`, B1), measured on the RTL.
+- **`bench/dvd/run_ac3_ab.sh`: PCM identical to `ac3_front` + `imdct_512`, block for
+  block, on every stream** (5.1, short blocks, DRC, refusal windows, dual mono). One fix
+  to the bench: it now zeroes the old side's `pcm_mem` / `delay_mem` at time 0 as
+  `imdct_xcheck_tb.sv` does, because a 3/0 fold multiplies a never-written surround slot
+  by `slev = 0` (0 on silicon, X × 0 = X in simulation); before, both sides carried the
+  same X and the compare passed on it.
 
 ## Plan and gates
 
