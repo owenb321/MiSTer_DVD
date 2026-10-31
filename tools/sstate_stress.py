@@ -82,7 +82,11 @@ def rec(**kw):
 
 
 def where(s):
-    return (s['in_vm_dom'], s['in_vm_vts'], s['in_cur_vts'], s['in_cur_pgcn'])
+    # in a title the reader's VTS is part of the state; a menu restore does not restore it
+    # (the reader keeps the title VTS it was playing), so it is not compared there
+    if s['in_vm_dom'] == 3:
+        return (s['in_vm_dom'], s['in_vm_vts'], s['in_cur_vts'], s['in_cur_pgcn'])
+    return (s['in_vm_dom'], s['in_vm_vts'], s['in_cur_pgcn'])
 
 
 def do_save(slot):
@@ -119,7 +123,7 @@ def do_load(slot, spam=0, tag='load'):
     if not msg or want not in msg:
         bad.append('verdict: %r, wanted %r' % (msg, want))
     if slot in saved and not menus_off and msg and 'Loaded' in msg:
-        time.sleep(2.5)   # soon: a short PGC (T2's 48 s intro) ends and its post command runs
+        time.sleep(1.8)   # soon: a short PGC ends and its cell command runs (T2's intros)
         s1 = snap(); el = time.time() - t0
         time.sleep(3)
         s2 = snap()
@@ -144,7 +148,12 @@ def do_load(slot, spam=0, tag='load'):
                 r['land'] = [e['pos']['disp_secs'], d1, round(el, 1)]
                 if not (-2 <= lag <= el + 2): bad.append('land: saved %d s, shown %d s, %.1f s after the press' % (e['pos']['disp_secs'], d1, el))
                 r['adv'] = d2 - d1
-                if not (1 <= d2 - d1 <= 6): bad.append('alive: shown time %d -> %d over 3 s' % (d1, d2))
+                if where(s1['state']) != where(s2['state']):
+                    # the cell ended and the disc's own command moved on (a save near the end of
+                    # a short title): the clock restarts, so it is not a stuck picture
+                    warns.append((tag, slot + 1, 'moved on between the samples: %s -> %s (a save near a cell end)'
+                                  % (where(s1['state']), where(s2['state']))))
+                elif not (1 <= d2 - d1 <= 6): bad.append('alive: shown time %d -> %d over 3 s' % (d1, d2))
         run(['shot', '-o', os.path.join(out, 'load%03d_s%d.png' % (nload, slot + 1))], 40)
     r['ok'] = not bad
     if bad: r['bad'] = bad; fails.append((tag, slot + 1, bad))

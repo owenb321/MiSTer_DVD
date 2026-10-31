@@ -1029,4 +1029,11 @@ is identical every time (`PGC 11/1`, `CELL 0`, the first window's `HLI_ARM` at 0
 - **Effect on §11g:** the armed landing at "the saved cell's start" now lands at the saved cell.
   A film bookmark's exact time is unchanged: the time seek is by PGC time, whatever cell the jump
   entered.
+- **HIL (2026-10-31, `DVD_reclaim_20261031_0508`):** Mad Dog's chimney slot 8 now enters cell 3 of
+  the PGC (nav trace: `CELL 3`, the 35-button HLI armed on time) and the capture shows the cabin,
+  then the chimney with the reticle. T2 stress (`tools/sstate_stress.py`, 24 ops, 7 loads): 0
+  failures. Its 2 warnings are one save at 31 s of a 34 s cell, where the cell's own command
+  moved the disc on between the oracle's two samples. The tool now ignores the reader's title VTS
+  for menu-domain loads (a menu restore does not restore it, by design) and treats a PGC change
+  between its samples as a warning, not a stuck picture.
 
