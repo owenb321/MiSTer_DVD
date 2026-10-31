@@ -162,6 +162,10 @@ module dvd_iso_reader #(
     // bits 13-14. probed = 0 says the probe never ran (no VMGI, or Disc Menus off).
     output reg        vmgm_probed,    // the probe ran to its end this mount
     output reg        vmgm_title_ok,  // ...and found a VMGM entry-2 (Title) PGC
+    // This mount is DVD-Video: the ISO walk found VIDEO_TS.IFO (vmgi_found; sticky per
+    // mount, set whatever Disc Menus is). The OSD shows Save State only then (emu.sv
+    // status_menumask bit 1, 2026-10-30): a VCD, a .mpg, a WAV or no disc has no VM.
+    output wire       dvd_video,
     // Chapter (PTT) skip (Phase 8): jump to the previous/next chapter boundary.
     // Resolved in-fabric from the PGC program_map (chapter -> entry cell) against
     // the current cell, then executed via the seek_cell primitive. Title only.
@@ -794,6 +798,7 @@ reg [31:0] vmgm_vob_blk;     // length in 2048-sectors
 // IFO (VMGI / TT_SRPT) navigation + selection
 reg [31:0] vmgi_lba;      // ISO LBA of VIDEO_TS.IFO (the VMGI)
 reg        vmgi_found;    // VIDEO_TS.IFO record seen during the VIDEO_TS walk
+assign dvd_video = vmgi_found;
 // The disc has no First Play PGC (VMGI@0x84 == 0): First Play runs VMGM PGCs, as
 // libdvdnav's set_FP_PGC does (S_JMP_VMGI). Set by the first such jump, cleared at
 // mount; while set, a First Play target counts as a menu domain (keep_vbuf /

@@ -21,8 +21,9 @@ tomorrow, and carry on.
 
 ## Saving
 
-1. Open the OSD and go to the **Save State** page.
-2. Pick a **Slot** from 1 to 4.
+1. Open the OSD and go to the **Save State** page. It is there only while a DVD-Video disc
+   or image is loaded.
+2. Pick a **Slot** from 1 to 8.
 3. Choose **Save to Slot**. The OSD closes and the player confirms `Saved to slot N`.
 
 ## Loading
@@ -82,8 +83,8 @@ number.
 
 Save states save and restore the disc's own program, which only runs with **Disc Menus**
 set to On. With it set to Off the player skips the disc's menus and plays the main feature
-by itself, so there is nothing to save or restore. Both rows then say
-`Save states need Disc Menus on`.
+by itself, so there is nothing to save or restore. The **Save State** page is then shown
+greyed out. If a press does reach the player, it says `Save states need Disc Menus on`.
 
 ## Limitations
 

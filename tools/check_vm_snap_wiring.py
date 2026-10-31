@@ -138,8 +138,19 @@ def run(txt, verbose=True):
     ok(re.search(r'else\s+if\s*\(\s*vm_rst_done\s*\)\s*begin\s*aud_cur\s*<=', em) is not None,
        'a restore syncs aud_cur / sub_on / sub_idx from the restored SPRMs')
     for bits, row in (('O[59:57]', 'Slot,1,2,3,4,5,6,7,8'), ('R[55]', 'Save to Slot'), ('R[56]', 'Load Slot')):
-        ok(re.search(r'"P2' + re.escape(bits + ',' + row) + r';"', em) is not None,
-           f'CONF_STR has P2{bits},{row}')
+        ok(re.search(r'"P6' + re.escape(bits + ',' + row) + r';"', em) is not None,
+           f'CONF_STR has P6{bits},{row}')
+    # the page shows only with a DVD-Video disc (H1) and greys with Disc Menus off (D2):
+    # the menu mask's bit 1 must be ~the reader's dvd_video, bit 2 Disc Menus Off
+    ok(re.search(r'"H1D2P6,Save State;"', em) is not None,
+       'CONF_STR has H1D2P6,Save State (hidden with no DVD-Video, greyed with Disc Menus off)')
+    hp = connections(em, 'hps_io')
+    mm = norm((hp or {}).get('status_menumask'))
+    ok(re.fullmatch(r"\{13'd0,status\[1\],~(\w+),interlaced_eff\}", mm or '') is not None,
+       "hps_io.status_menumask = {13'd0, status[1], ~<dvd_video net>, interlaced_eff}"
+       + ('' if mm else '   got: None'))
+    dv = re.fullmatch(r"\{13'd0,status\[1\],~(\w+),interlaced_eff\}", mm or '')
+    pin(rd, 'dvd_iso_reader', 'dvd_video', dv.group(1) if dv else 'rdr_dvd_video_w')
     for n, b in (('save', 55), ('load', 56)):
         ok(re.search(r'\bss_%s_q\s*<=\s*status\[%d\]\s*;' % (n, b), em) is not None and
            re.search(r'\bwire\s+ss_%s_edge\s*=\s*status\[%d\]\s*&\s*~\s*ss_%s_q\s*;' % (n, b, n), em) is not None,
@@ -274,7 +285,11 @@ MUTATIONS = [
     ('emu', '.ui_load      (ss_load_edge),', '.ui_load      (ss_save_edge),', 'a save press counted as a load'),
     ('emu', '.vm_en        (menus_on),', ".vm_en        (1'b1),", 'loads sent to a disabled VM'),
     ('emu', 'wire ss_save_edge = status[55] & ~ss_save_q;', 'wire ss_save_edge = status[55];', 'a held bit is many saves'),
-    ('emu', '"P2R[56],Load Slot;",', '"P2R[57],Load Slot;",', 'the Load row on a bit the core never reads'),
+    ('emu', '"P6R[56],Load Slot;",', '"P6R[57],Load Slot;",', 'the Load row on a bit the core never reads'),
+    ('emu', '"H1D2P6,Save State;",', '"P6,Save State;",', 'the Save State page shown with no DVD-Video disc'),
+    ('emu', "status[1], ~rdr_dvd_video_w, interlaced_eff}", "status[1], rdr_dvd_video_w, interlaced_eff}",
+     'the Save State page hidden exactly when a DVD-Video disc IS mounted'),
+    ('emu', '.dvd_video      (rdr_dvd_video_w),', ".dvd_video      (),", 'the reader\'s dvd_video left open'),
     ('emu', '.ast_set       (ast_wb),', ".ast_set       (1'b0),", 'the Audio write-back never reaches the VM'),
     ('emu', 'if (aud_step_q) begin ast_wb <= 1\'b1; ast_wb_val <= {5\'d0, aud_log}; end',
      'if (aud_step_q) begin ast_wb <= 1\'b1; ast_wb_val <= {5\'d0, aud_cur}; end', 'the write-back from the user register, not the effective track'),

@@ -924,3 +924,49 @@ HLI that is new after the landing.
   `check_vm_snap_wiring.py` (the row, the bits, the shifts and masks, MAGIC).
   `test_status_bits.py`, `main/tests/run_tests.sh --red`.
 
+### 11e. The Save State page hides without a DVD-Video disc (2026-10-30)
+
+**Request (maintainer):** hide the save-state option unless a disc is loaded: it does
+nothing without one. **Decision:** the page header is `H1D2P6,Save State;`.
+- **H1** hides the page while `status_menumask` bit 1 is set. The bit is
+  `~dvd_video`, and `dvd_video` is a new `dvd_iso_reader` output that is simply
+  `vmgi_found`: the ISO walk found `VIDEO_TS.IFO`. It is per mount and clears at the
+  next one. "A disc is loaded" is not enough: a VCD, a `.mpg` or a WAV has no VM to
+  snapshot. It rises with the walk, before the Title-entry probe, and it does not depend
+  on Disc Menus.
+- **D2** greys the page while bit 2 is set, which is `status[1]` (Disc Menus Off). The
+  page stays discoverable, and the existing "Save states need Disc Menus on" message still
+  explains a press that gets through.
+- Bit 0 is the existing Interlaced mask (`H0P1O` / `h0P1O` Deinterlace). The mask word is
+  `{13'd0, status[1], ~rdr_dvd_video_w, interlaced_eff}`.
+- **Gates:** `iso_reader_titleprobe_tb` (every VIDEO_TS arm sees `dvd_video`; arm I
+  checks it clears at a mount and sets on the walk) with T14/T15 in `run_title_probe.sh
+  --red`; `check_vm_snap_wiring.py --red` pins the header, the mask's shape and the
+  reader's net, with three mutations. `check_field_blend_wiring.py` follows the wider mask.
+- **Cost:** it is a `CONF_STR` edit, so it re-rolls the pinned fitter seed.
+
+### 11f. OSD pages by topic (2026-10-30)
+
+The single long list outgrew a page. The OSD is now seven pages (the layout the maintainer
+chose from two proposals):
+
+| Page | Rows |
+|---|---|
+| Main | Load Video, Disc Menus, Player Language, Reset |
+| `P1` Video | Aspect Ratio, Video Output, Deinterlace (two rows, H0/h0), Video Standard, Film 24p Out |
+| `P2` Analog / CRT | Analog Aspect, Analog Dither, Analog CSync |
+| `P3` Audio | Audio, Audio Out, SPDIF Byte Order, A/V Offset |
+| `P4` Subtitles & CC | Line-21 CC, Force 4:3 Subpics |
+| `P5` Playback | D-Pad Seek, Screensaver |
+| `P6` Save State | Slot, Save to Slot, Load Slot (hidden/greyed, §11e) |
+| `P7` Debug | Debug Overlay, Title VTS Tens/Units, Frame Drop, A/V Sync, CC Test Line |
+
+- **A row keeps its `O[]` bits wherever it sits**, so every saved setting is unchanged and
+  there is **no `v,N` bump**. Only the Slot row changed bits (§11d), and that was before any
+  release.
+- Main's `menu.cpp` takes a one-digit page number and puts a mask prefix BEFORE the `P`
+  (`H0P1O...`). `tools/docs_check.py` already accepted both. `check_field_blend_wiring.py`
+  compares the Deinterlace rows without the page digit.
+- The manual's `settings.md` has one section per page, and the references elsewhere ("Debug
+  page", "Main page") point at the page a row now lives on.
+

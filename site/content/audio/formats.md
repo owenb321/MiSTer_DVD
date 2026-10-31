@@ -187,7 +187,7 @@ Audio is locked to the video presentation timeline — the core builds a system 
 referenced to what is actually on screen and paces audio against it, the way a real player
 slaves its audio to the recovered clock.
 
-**`A/V Offset`** (Debug page) trims the relationship, defaulting to **0 ms**. There should
+**`A/V Offset`** (Audio page) trims the relationship, defaulting to **0 ms**. There should
 be no need to change it. Note that it binds at start and re-start events only — a mid-title change
 takes effect at the next seek or reload.
 

@@ -237,7 +237,7 @@ to everything else.
 
     This setting is not in v0.4.0 or earlier.
 
-**Debug page → `Analog CSync` → `SMPTE` (default) / `2H`.**
+**Analog / CRT page → `Analog CSync` → `SMPTE` (default) / `2H`.**
 
 Composite sync is the single signal that tells a television where every line *and* every
 field begins. A broadcast signal surrounds its vertical sync with **equalizing pulses** —
@@ -282,7 +282,7 @@ the same sync as RGB/component, so they change with it.
 
 ## Analog Dither — if dark scenes show bands
 
-**Main page → `Analog Dither` → `Off` (default) / `On`.**
+**Analog / CRT page → `Analog Dither` → `Off` (default) / `On`.**
 
 The DE10-Nano's standard analog I/O board has a 6-bit video DAC: it shows 64 levels per
 colour channel, where the decoded picture has 256. Bright, detailed scenes hide this.

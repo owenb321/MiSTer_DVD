@@ -159,7 +159,9 @@ def mode_eq(expr, val):
 
 
 def check_emu(src, rel, bad):
-    rows = conf_rows(src)
+    # the page a row sits on (P<n>, after any mask prefix; the OSD pages of 2026-10-30)
+    # does not change what it is: compare the rows without it
+    rows = [(a, b, re.sub(r'P\d(?=O)', '', t)) + tuple(rest) for a, b, t, *rest in conf_rows(src)]
     for want, what in ((PROG_ROW, 'Progressive'), (ILACE_ROW, 'Interlaced')):
         n = sum(1 for r in rows if r[2] == want)
         if n != 1:
@@ -180,8 +182,8 @@ def check_emu(src, rel, bad):
     hp = connections(src, 'hps_io')
     if hp is None:
         bad('hps_io instance', 'not found in %s' % rel)
-    elif not re.fullmatch(r"\{\s*15'd0\s*,\s*interlaced_eff\s*\}", hp.get('status_menumask') or ''):
-        bad('hps_io.status_menumask', 'connected to `%s`, want {15\'d0, interlaced_eff}: mask '
+    elif not re.fullmatch(r"\{[^{}]*,\s*interlaced_eff\s*\}", hp.get('status_menumask') or ''):
+        bad('hps_io.status_menumask', 'connected to `%s`, want {..., interlaced_eff} (bit 0): mask '
                                       'bit 0 set = the Interlaced raster, which H0 hides the '
                                       'Blend row on.' % hp.get('status_menumask'))
 
