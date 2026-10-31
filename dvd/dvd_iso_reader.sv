@@ -4291,9 +4291,17 @@ always @(posedge clk or negedge rst_n) begin
             S_PTT_PGC: begin
                 want_ttn <= 7'd0;
                 jptt_l   <= 11'd0;                     // resolve consumed
-                // DVD-FORK FIX: the old `> 255 -> garbage` guard WAS the clamp
-                // (PGCN is a 15-bit field); only 0 is invalid now.
-                if (nr_pgci_srp == 16'd0) begin
+                // DVD-FORK FIX (save states, 2026-10-31): a restore's TTN HINT (jhint_l) only
+                // names the title, for cur_ttn / the chapter map loaded above. The jump
+                // already carries the exact PGCN and start cell, and this resolve read the
+                // title's FIRST part {pgcn, pgn}: it overwrote want_pgcn with that part's PGC
+                // and set the start program, whose entry cell replaced the saved cell. A state
+                // saved in a later PGC, or in a later cell of the entry PGC, restored to the
+                // title's first program (Mad Dog's hideout shootout restarted from its first
+                // frame). iso_reader_restore_tb.
+                if (jhint_l) begin
+                    // keep want_pgcn (the jump's PGCN) and jpgn_l (0: start at jcell_l)
+                end else if (nr_pgci_srp == 16'd0) begin
                     want_pgcn <= 16'd1;                // garbage -> PGCN 1
                 end else begin
                     want_pgcn <= nr_pgci_srp;          // = ptt[part-1].pgcn (u16)

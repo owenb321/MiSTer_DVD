@@ -992,11 +992,41 @@ command 26, jump to cell 13).
   interactive disc waits for input anyway. The manual's "at the start of that scene" now
   holds for these scenes too.
 - **Limitation:** a window that spans cells has its bitmap in an earlier cell, so landing at
-  the saved cell's start would still miss it. Mad Dog, Scooby-Doo 2's windows and the
+  the saved cell's start would still miss it. (§11h: until 2026-10-31 "the saved cell's start"
+  was in fact the title's first program for a title-domain restore.) Mad Dog, Scooby-Doo 2's windows and the
   quiz discs author a window per cell. ⏳ Not checked against a spanning window.
 - **Existing slots do not change:** the flag is written at save time. A slot saved before
   this (Mad Dog's slot 8) still carries its exact time and needs a re-save.
 - **Gates:** `vm_snap_tb` `[armed]` (latched at the snapshot, not live) with S36/S37;
   `check_vm_snap_wiring.py --red` (the port, word 4's bit 2 on both sides, two mutations);
   `dvd_sstate_test` [15] and `ss-armed-exact-time`.
+
+### 11h. A title restore entered the title's first program, not the saved place (2026-10-31)
+
+**Report (maintainer):** after §11g, Mad Dog's slot 8 (saved at the chimney shot, a later part of
+the hideout shootout) loaded at the start of the hideout shootout. The file was right: reader
+cell 3 of 68, SPRM7 = 4, SPRM8 = button 9.
+**Measured on the rig** (`vmload` with only `in_cur_cell` changed to 1, 3 and 7): the nav trace
+is identical every time (`PGC 11/1`, `CELL 0`, the first window's `HLI_ARM` at 0.2 s,
+`CELL_CMD cell 0 cmd 26` 3.8 s later). The saved cell never reached the reader.
+- **Cause:** `dvd_vm` E_RST sends the title number with a HINT flag (`jump_ttn_hint`), so SPRM5
+  and the title's chapter map come back. The hint was meant to leave `want_pgcn` alone, but it
+  still set `want_ttn`, which sends the reader through the PTT resolve (S_PTT_MAT / OFF / PGC).
+  `S_PTT_PGC` then read the title's FIRST part `{pgcn, pgn}` and overwrote `want_pgcn` with its
+  PGC and set `jpgn_l` to its start program, whose entry cell P_PMAP latches over the saved
+  cell. So every title-domain restore entered PGC `ptt[0]`, program `pgn`: right only for a state
+  saved in the title's entry PGC at its first program. Mad Dog's feature PGC *is* PGC 1, so it
+  showed as "the cell is ignored"; a state in a title's PGC 2 or later would have restored into
+  the wrong PGC. It had been latent since the hint was ported (`1e5f57f`, 2026-10-26).
+  Why nothing saw it: the menu-domain jumps skip the resolve; the T2 film is one PGC (entry PGC,
+  cell 0 saved); `iso_reader_menu_tb` TEST 3 has no PTT table, and every other jump that
+  reaches the resolve is an unhinted chapter jump, which is supposed to overwrite.
+- **Fix:** `S_PTT_PGC` does nothing to `want_pgcn` / `jpgn_l` when `jhint_l` is set; it still
+  clears `want_ttn` and `jptt_l`, and `cur_ttn` and the chapter table were already loaded.
+- **Gate:** `run_restore_land.sh --red` (`iso_reader_restore_tb`: a title with a PTT table and a
+  two-cell PGC 2; A/B hinted jumps into PGC 2 cell 1 / cell 0, C the entry PGC, D an unhinted
+  chapter jump). The pre-fix reader fails exactly A and B. Mutations M1-M3.
+- **Effect on §11g:** the armed landing at "the saved cell's start" now lands at the saved cell.
+  A film bookmark's exact time is unchanged: the time seek is by PGC time, whatever cell the jump
+  entered.
 
