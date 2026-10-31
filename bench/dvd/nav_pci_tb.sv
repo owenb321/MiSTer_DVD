@@ -53,6 +53,7 @@ module nav_pci_tb;
     wire btns_armed;
     wire btns_pend;      // an HLI with buttons parsed, not yet promoted (user Still off gate)
     wire [5:0] btn_sel, dbg_btn_ns;
+    wire user_move;      // a D-pad press moved the selection (TEST 21)
 
     always #5 clk = ~clk;
 
@@ -74,11 +75,14 @@ module nav_pci_tb;
         .hl_on(hl_on), .hl_x1(hl_x1), .hl_x2(hl_x2), .hl_y1(hl_y1), .hl_y2(hl_y2),
         .hl_coli(hl_coli),
         .btn_cmd(btn_cmd), .btn_cmd_valid(btn_cmd_valid),
-        .btns_armed(btns_armed), .btns_pend(btns_pend), .btn_sel(btn_sel), .dbg_btn_ns(dbg_btn_ns)
+        .btns_armed(btns_armed), .btns_pend(btns_pend), .btn_sel(btn_sel), .user_move(user_move),
+        .dbg_btn_ns(dbg_btn_ns)
     );
 
     // count activation pulses + last cmd
     int acts = 0;
+    int moves = 0;
+    always_ff @(posedge clk) if (user_move === 1'b1) moves <= moves + 1;
     logic [63:0] last_cmd;
     always_ff @(posedge clk) if (btn_cmd_valid) begin
         acts <= acts + 1; last_cmd <= btn_cmd;
@@ -574,6 +578,28 @@ module nav_pci_tb;
             keep_sel = 1'b0; hl_btnn = 6'd0;
         end else begin
             $display("T20: fosl fixture absent -> FAIL"); errors++;
+        end
+
+        // ---- TEST 21: user_move pulses for a D-pad press that MOVED the selection, and
+        //      for nothing else (dvd_vm ends an activation's SPRM8 freeze on it; Mad
+        //      Dog's shootouts, 2026-10-30). Scooby grid: btn 16 right = 17; btn 1 up =
+        //      1 (a "stay" link).
+        if (nav[12288] === 8'h00 && nav[12288 + 3] === 8'hBA) begin
+            hl_btnn = 6'd16;
+            rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; @(posedge clk);
+            stc = 33'd0; feed_pci(12288); stc = 33'd11000; repeat (160) @(posedge clk);
+            moves = 0; @(posedge clk);
+            pulse(3);                                          // right: 16 -> 17
+            chk(btn_sel == 6'd17 && moves == 1, "T21a a D-pad move pulses user_move once");
+            @(negedge clk); sel_force = 1; sel_force_btn = 6'd1;
+            @(negedge clk); sel_force = 0; sel_force_btn = 6'd0;
+            repeat (80) @(posedge clk);
+            chk(btn_sel == 6'd1 && moves == 1, "T21b a VM force is not a user move");
+            pulse(0);                                          // up from 1: a stay link
+            chk(btn_sel == 6'd1 && moves == 1, "T21c a press that does not move is not a user move");
+            hl_btnn = 6'd0;
+        end else begin
+            $display("T21: Scooby grid fixture absent -> FAIL"); errors++;
         end
 
         if (errors == 0) $display("NAV_PCI_TB: ALL TESTS PASSED");

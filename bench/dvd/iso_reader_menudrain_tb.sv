@@ -210,7 +210,7 @@ module iso_reader_menudrain_tb;
         .key_menu(key_menu), .key_title(1'b0), .key_return(1'b0), .key_cmenu(1'b0),
         .key_chedge(1'b0), .key_chedge_dir(1'b0),   // title-edge chapter key (audit item 7)
         .btn_cmd(btn_cmd), .btn_cmd_valid(btn_cmd_valid), .btn_sel(6'd1),
-        .btns_armed(1'b0), .btn_force(), .btn_force_val(),
+        .btns_armed(1'b0), .sel_moved(1'b0), .btn_force(), .btn_force_val(),
         .jump_pulse(vm_jump_pulse), .jump_domain(vm_jump_domain),
         .jump_vts(vm_jump_vts), .jump_pgcn(vm_jump_pgcn),
         .jump_entry(vm_jump_entry), .jump_ttn(vm_jump_ttn),

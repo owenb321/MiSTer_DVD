@@ -132,7 +132,7 @@ module iso_reader_intitle_link_tb;
         .next_pgcn(rd_next), .prev_pgcn(rd_prev), .goup_pgcn(rd_goup),
         .key_menu(key_menu), .key_title(1'b0), .key_return(1'b0), .key_cmenu(1'b0),
         .key_chedge(1'b0), .key_chedge_dir(1'b0),   // title-edge chapter key (audit item 7)
-        .btn_cmd(64'd0), .btn_cmd_valid(1'b0), .btn_sel(6'd1), .btns_armed(1'b0),
+        .btn_cmd(64'd0), .btn_cmd_valid(1'b0), .btn_sel(6'd1), .btns_armed(1'b0), .sel_moved(1'b0),
         .btn_force(), .btn_force_val(),
         .jump_pulse(vm_jump_pulse), .jump_domain(vm_jump_domain),
         .jump_vts(vm_jump_vts), .jump_pgcn(vm_jump_pgcn),

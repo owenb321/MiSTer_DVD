@@ -1052,7 +1052,7 @@ parameter CONF_STR = {
     "P1O[23:21],A/V Offset,0ms,-200ms,-100ms,-50ms,+50ms,+100ms,+150ms,+200ms;",
 
     // ---- Save State (page 2; save states step 4, docs/nav_engine.md §11) ----------
-    // Four slots per DISC. A save state is the VM's whole navigation state plus the
+    // Eight slots per DISC (four until 2026-10-30). A save state is the VM's whole navigation state plus the
     // displayed picture's time (dvd/vm_snap.sv); the custom Main writes it to
     // savestates/DVD/ and pushes it back on a load. With stock Main nothing answers
     // and the rows do nothing (no core can write a file).
@@ -1062,8 +1062,11 @@ parameter CONF_STR = {
     // the Slot row AT each one, so moving the row afterwards cannot redirect it.
     // ⚠ Bits 53-56 were never allocated: no "v,N" bump, nobody's settings reset. It
     // IS a CONF_STR edit, so it re-rolls the pinned fitter SEED.
+    // 8 slots (2026-10-30): the Slot row moved to fresh bits 57-59 rather than
+    // widening onto bit 52, so an older saved config reads slot 1, not a shifted
+    // number; 53-54 are retired (still never released, still no "v,N" bump).
     "P2,Save State;",
-    "P2O[54:53],Slot,1,2,3,4;",
+    "P2O[59:57],Slot,1,2,3,4,5,6,7,8;",
     "P2R[55],Save to Slot;",
     "P2R[56],Load Slot;",
     "R0,Reset;",
@@ -2835,6 +2838,7 @@ wire        vm_snap_req, vm_snap_we, vm_snap_done;
 wire [15:0] vm_snap_d, vm_snap_fmt;
 // ...and the restore's (save states step 3, docs/nav_engine.md §9)
 wire        vm_rst_req, vm_rst_done;
+wire        nav_user_move;                // nav_pci: the player moved the selection
 wire [6:0]  vm_rst_ra;
 wire [15:0] vm_rst_q;
 
@@ -2892,6 +2896,7 @@ dvd_vm dvd_vm_inst (
     .btn_cmd_valid (hl_btn_cmd_valid),
     .btn_sel       (hl_btn_sel),
     .btns_armed    (hl_btns_armed),
+    .sel_moved     (nav_user_move),     // a move ends an activation's SPRM8 freeze
     .btn_force     (vm_btn_force),
     .btn_force_val (vm_btn_force_val),
     .hl_btnn       (vm_hl_btnn),
@@ -6526,6 +6531,7 @@ nav_pci nav_pci_inst (
     .btns_armed (hl_btns_armed),
     .btns_pend  (hl_btns_pend),
     .btn_sel    (hl_btn_sel),
+    .user_move  (nav_user_move),         // -> dvd_vm: SPRM8 follows the player again
     .dbg_btn_ns (hl_btn_ns),         // gate in-title multi-button menu nav (Scene It)
     .hli_seen   (hl_menu_seen),      // early menu-HLI detect -> open the subpicture gate in time
     .dbg_h_sptm (hl_sptm_w),         // -> nav_trace HLI_ARM payload
@@ -6682,7 +6688,7 @@ vm_snap vm_snap_inst (
     .stc          (av_stc),             // ...and the displayed picture's PTS
     .ui_save      (ss_save_edge),       // the OSD's "Save to Slot"
     .ui_load      (ss_load_edge),       // the OSD's "Load Slot"
-    .ui_slot      (status[54:53]),      // the Slot row
+    .ui_slot      (status[59:57]),      // the Slot row (8 slots)
     .vm_en        (menus_on),           // = dvd_vm's enable
     .pgc_loaded   (pgc_loaded),
     .video_live   (video_live_s2),

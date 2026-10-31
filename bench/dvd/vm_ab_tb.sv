@@ -99,7 +99,11 @@ module vm_ab_tb;
         .key_menu(key_menu), .key_title(key_title), .key_return(key_return),
         .key_cmenu(key_cmenu), .key_chedge(key_chedge), .key_chedge_dir(key_chedge_dir),
         .btn_cmd(btn_cmd), .btn_cmd_valid(btn_cmd_valid), .btn_sel(btn_sel),
-        .btns_armed(btns_armed), .btn_force(btn_force), .btn_force_val(btn_force_val),
+        .btns_armed(btns_armed),
+`ifdef VM_NEW
+        .sel_moved(1'b0),                // the old FSM has no move input; the scripts never move
+`endif
+        .btn_force(btn_force), .btn_force_val(btn_force_val),
         .hl_btnn(hl_btnn), .jump_pulse(jump_pulse), .jump_domain(jump_domain),
         .jump_vts(jump_vts), .jump_pgcn(jump_pgcn), .jump_entry(jump_entry),
         .jump_ttn(jump_ttn), .jump_pgn(jump_pgn), .jump_ptt(jump_ptt), .jump_cell(jump_cell),

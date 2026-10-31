@@ -61,7 +61,7 @@ def wait_msg(m, t=10):
 
 
 def press(bit, slot):
-    sh("echo 'osd [54:53] %d' > /tmp/dvd_ctl; sleep 0.25; echo 'osd [%d] 1' > /tmp/dvd_ctl; "
+    sh("echo 'osd [59:57] %d' > /tmp/dvd_ctl; sleep 0.25; echo 'osd [%d] 1' > /tmp/dvd_ctl; "
        "sleep 0.3; echo 'osd [%d] 0' > /tmp/dvd_ctl" % (slot, bit, bit))
 
 

@@ -4,7 +4,7 @@ Interactive DVDs are real games. Wickles Manor in *Scooby-Doo 2*, the question d
 *Scene It?*, the branching paths in *Atmosfear*: they all keep progress, and without save
 states every load starts them from the beginning.
 
-Save states let you keep that progress. You get **four numbered slots per disc**, from the
+Save states let you keep that progress. You get **eight numbered slots per disc**, from the
 OSD.
 
 They also work as bookmarks on ordinary films: stop halfway through a long film, come back
@@ -59,7 +59,7 @@ chapter skip does: there is a brief black moment, then playback resumes.
 
 ## Slots are per disc
 
-Each disc gets its own four slots, and the player recognises a disc by reading it rather
+Each disc gets its own eight slots, and the player recognises a disc by reading it rather
 than by its filename. That has two useful consequences:
 
 - **Renaming your rip does not lose your saves.**

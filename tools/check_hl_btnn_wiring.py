@@ -121,10 +121,23 @@ def main():
         if not decl:
             bad.append("net '%s' is not declared as wire [5:0]" % vm_net)
 
+    # The player's moves end an activation's SPRM8 freeze (Mad Dog's shootouts,
+    # 2026-10-30): nav_pci .user_move -> ONE net -> dvd_vm .sel_moved. Tied to 0, the
+    # re-seed above snaps the reticle back to the last shot after every jump.
+    mv_nav = port_net(nav, 'user_move')
+    mv_vm = port_net(vm, 'sel_moved')
+    if not (mv_nav and ident.match(mv_nav)):
+        bad.append("nav_pci .user_move is %r -- must drive a plain net" % mv_nav)
+    if not (mv_vm and ident.match(mv_vm)):
+        bad.append("dvd_vm .sel_moved is %r -- must be a plain net (a move ends the SPRM8 freeze)" % mv_vm)
+    if mv_nav and mv_vm and mv_nav != mv_vm:
+        bad.append("nav_pci .user_move (%s) and dvd_vm .sel_moved (%s) are different nets" % (mv_nav, mv_vm))
+
     if bad:
         print('\n'.join('FAIL: ' + b for b in bad))
         return 1
-    print('OK: dvd_vm .hl_btnn -> %s -> nav_pci .hl_btnn (wire [5:0])' % vm_net)
+    print('OK: dvd_vm .hl_btnn -> %s -> nav_pci .hl_btnn (wire [5:0]); nav_pci .user_move -> %s -> dvd_vm .sel_moved'
+          % (vm_net, mv_vm))
     return 0
 
 

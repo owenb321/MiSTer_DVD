@@ -756,14 +756,14 @@ trials: **no picture between the flushes, which are 11-12 ms apart**; landings +
 the 2026-10-27 decision it merges only stacked with a logic reclaim, `docs/roadmap.md` "Save
 states"). ⏳ Not yet run: a physical disc, and the maintainer's own play-test.
 
-**What the user sees.** OSD page 2, **Save State**: `Slot` (1-4), `Save to Slot`, `Load Slot`.
-Four slots per DISC, in `savestates/DVD/<provider>-<16 hex>_N.ss`; messages from the Main's
+**What the user sees.** OSD page 2, **Save State**: `Slot` (1-8), `Save to Slot`, `Load Slot`.
+Eight slots per DISC (four until 2026-10-30, §11d), in `savestates/DVD/<provider>-<16 hex>_N.ss`; messages from the Main's
 notice box. Manual: `site/content/playback/save-states.md`.
 
 **The chain.**
 1. `emu.sv` edge-detects `status[55]` / `status[56]` (`R` rows: Main holds the bit for many
    cycles). `vm_snap` counts each press (2-bit, wrapping) and latches the Slot row
-   (`status[54:53]`) AT the press, so moving the row afterwards cannot redirect it. All of it
+   (`status[59:57]`; `status[54:53]` until §11d) AT the press, so moving the row afterwards cannot redirect it. All of it
    rides header word 2's spare bits with `vm_en` (= `menus_on` = `dvd_vm`'s enable):
    `{busy, vm_en, slot, load_n, save_n, len}`. The Main polls three words every 20 ms.
 2. `main/support/dvd/dvd_sstate.cpp` latches a baseline from the first word it reads (a
@@ -901,4 +901,26 @@ HLI that is new after the landing.
 - `run_vm_snap.sh --red` `[keep]` and S31–S35. S16/S19 now also fail `[keep]`, because
   `keep_sel` follows the landing.
 - `check_vm_snap_wiring.py --red`, which pins both ends of the seam in `emu.sv`.
+
+### 11d. Eight slots (2026-10-30, maintainer's request)
+
+- **The OSD row:** `Slot` moved from `O[54:53]` to `O[59:57]` (1-8), rather than widening
+  onto the free bit 52. Widening would read every saved config's slot as a different
+  number. Fresh bits read 0, which is slot 1. Bits 53-54 are retired. Save states have
+  never shipped, so there is no `v,N` bump.
+- **Header word 2:** it is now `{busy, vm_en, slot[2:0], load_n, save_n, len[6:0]}`. `len`
+  gave up its top bit; it never exceeds 127, because the buffer is 128 words and `wa` is
+  7 bits.
+- **MAGIC:** `0x5E02` became `0x5E03`, so a Main built for the four-slot layout refuses
+  this core, and the reverse, instead of reading the counters off the wrong bits.
+- **The Main:** `dvd_vmsnap.h` has the new shifts, `VMSNAP_LEN` is 7 bits, and
+  `DVD_SSTATE_SLOTS` (8) bounds `dvd_sstate_slot_path`. The old bound was a literal
+  `slot > 3`, which the new `dvd_sstate_test` [14] caught. Its mutation is
+  `ss-four-slots`.
+- **A retired mutation:** `ctl-vs-cap-short` is gone. No 7-bit `len` can reach the
+  128-word cap, so capping at 127 is an equivalent mutation. The cap stays in the code as
+  a guard.
+- **Gates:** `vm_snap_tb` `[ui]` (slot 7 and slot 8 through word 2), and
+  `check_vm_snap_wiring.py` (the row, the bits, the shifts and masks, MAGIC).
+  `test_status_bits.py`, `main/tests/run_tests.sh --red`.
 

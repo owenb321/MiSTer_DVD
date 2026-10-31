@@ -797,10 +797,10 @@ if [ "$RED" -eq 1 ]; then
     red_case dvd_vmsnap.cpp dvd_ctl_test.cpp \
         "FAIL busy: only the 19 header words" \
         "s/int ready = h\[0\] == DVD_VMSNAP_MAGIC \&\& !busy \&\&/int ready = h[0] == DVD_VMSNAP_MAGIC \&\&/" ctl-vs-busy-read
-    # The buffer cap off by one: the last word of a full reply is left on the bus.
-    red_case dvd_vmsnap.cpp dvd_ctl_test.cpp \
-        "FAIL reads at most 128 words" \
-        "s/if (len > DVD_VMSNAP_MAXW) len = DVD_VMSNAP_MAXW;/if (len > DVD_VMSNAP_MAXW) len = DVD_VMSNAP_MAXW - 1;/" ctl-vs-cap-short
+    # (ctl-vs-cap-short retired 2026-10-30: word 2's len is 7 bits since the 8-slot
+    # layout, so no reply can claim more than 127 words and the 128-word cap cannot
+    # trigger; capping at 127 is an equivalent mutation no test can tell apart. The
+    # cap stays in dvd_vmsnap.cpp as a guard; [10] checks the largest claim reads whole.)
     # No timeout: a VM that never comes to rest leaves the host waiting forever.
     red_case dvd_ctl.cpp dvd_ctl_test.cpp \
         "FAIL times out at 3 s" \
@@ -875,6 +875,10 @@ if [ "$RED" -eq 1 ]; then
     red_case dvd_sstate.cpp dvd_sstate_test.cpp \
         "FAIL nothing while the launch runs" \
         "s/if (dvd_launch_ui_busy()) return;/(void)0;/" ss-ui-during-launch
+    # eight slots (2026-10-30): the path builder kept the old four-slot bound
+    red_case dvd_sstate.cpp dvd_sstate_test.cpp \
+        "FAIL says Saved to slot 8" \
+        "s/slot >= DVD_SSTATE_SLOTS/slot > 3/" ss-four-slots
     # dvd_phys records the drive AFTER the mount: the identity hook sees no device
     red_case dvd_phys.cpp dvd_phys_test.cpp \
         "\[17\] mounts whose hooks saw no device" \

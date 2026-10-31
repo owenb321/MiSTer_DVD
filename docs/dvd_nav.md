@@ -1650,6 +1650,29 @@ was right for everything a flush should forget (pending HLIs, timers, banks); th
 selection is a VM register that merely has a shadow here, and a shadow must be
 re-derived from its source after a reset, not from a constant.
 
+#### A move ends an activation's freeze (2026-10-30, Mad Dog's shootouts)
+
+**Report (maintainer):** in Mad Dog's bank shootout the reticle sometimes jumped after a
+shot hit. **Cause:** the re-seed above takes SPRM8, and an activation freezes SPRM8 on
+the activated button until the next PGC load (`sprm8_frozen`, the Atmosfear fix: a
+menu's dispatch must read the button that was pressed). Mad Dog's buttons only score.
+A hit sets a GPRM, the scene plays on and the player keeps aiming, but SPRM8 stays on
+the square that was shot. When the segment ends, its cell command jumps, the flush
+re-seeds `nav_pci` from SPRM8, and the reticle snaps back to the last shot. It only
+shows if you moved after shooting. The shootouts author `fosl 0`, so the forced select
+is not involved. Pre-existing: the freeze, the export and the re-seed are all on `main`.
+
+**Fix:** `nav_pci.user_move` pulses when a D-pad press moves the selection (not a VM
+force, not a press against a "stay" link). `dvd_vm.sel_moved` ends the freeze when an
+activation set it (`sprm8_frz_btn`), and SPRM8 then follows the selection again, as
+libdvdnav's HL_BTNN follows every move. Atmosfear's case has no move between the
+activation and the dispatch, so it is unchanged (S12b). A restore's freeze
+(`UPB_FRZ8`) is never ended by a move, so a press during a load cannot overwrite the
+restored button.
+- Gates: `dvd_vm_tb` S12c and S12d, `nav_pci_tb` T21, and `check_hl_btnn_wiring.py`,
+  which pins `user_move` and `sel_moved` to one net.
+- `run_link_button.sh --red` adds M5–M7 and W3.
+
 ### A sequence of HLI windows is not a looping menu (2026-09-14)
 
 **The report (same disc, the Old Tyme Mining Town whack-a-mole, reader `PGCN 26`):** a

@@ -25,7 +25,7 @@ int dvd_vmsnap_fetch(uint16_t seq0, uint16_t *h, uint16_t *w)
 	h[0] = spi_uio_cmd_cont(UIO_DVD_VMSNAP);
 	for (int i = 1; i < DVD_VMSNAP_HDR; i++) h[i] = spi_w(0);
 	int busy = h[2] >> 15;
-	unsigned len = h[2] & 0xFF;
+	unsigned len = VMSNAP_LEN(h[2]);
 	int ready = h[0] == DVD_VMSNAP_MAGIC && !busy && h[1] != seq0 && len;
 	if (len > DVD_VMSNAP_MAXW) len = DVD_VMSNAP_MAXW;      // never past our buffer
 	if (ready) for (unsigned i = 0; i < len; i++) w[i] = spi_w(0);

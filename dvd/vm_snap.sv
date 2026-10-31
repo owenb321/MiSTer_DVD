@@ -23,16 +23,19 @@
 // READOUT (the dvd_telem / nav_trace protocol: io_enable frames, io_strobe clocks one
 // word, the first strobe carries the command, the word answered at strobe k is word k;
 // io_din at strobe 1 is the host's control word)
-//   word 0  MAGIC 0x5E02 -- bit 15 clear: a core without this module never drives the
+//   word 0  MAGIC 0x5E03 -- bit 15 clear: a core without this module never drives the
 //           bus for 0x7D and hps_io answers 0, so 0 = ABSENT
 //   word 1  seq      completed snapshots (wrapping), latched at the command
-//   word 2  {busy, vm_en, slot[1:0], load_n[1:0], save_n[1:0], len[7:0]}  busy =
+//   word 2  {busy, vm_en, slot[2:0], load_n[1:0], save_n[1:0], len[6:0]}  busy =
 //           requested, not yet complete; len = words in the last completed snapshot
 //           (0 = none yet). The OSD's Save State rows (save states step 4,
 //           docs/nav_engine.md §11): save_n / load_n count "Save to Slot" / "Load
 //           Slot" presses (2-bit, wrapping: the Main acts when one MOVES, from a
 //           baseline it latches first), slot = the Slot row AT the last press, vm_en =
-//           Disc Menus is on (the VM runs; a restore needs it)
+//           Disc Menus is on (the VM runs; a restore needs it). 8 slots (2026-10-30):
+//           slot took len's top bit (len <= 127: the buffer is 128 words) and MAGIC
+//           went 0x5E02 -> 0x5E03, so a Main built for the 4-slot layout refuses this
+//           core rather than reading its counters off the wrong bits.
 //   word 3  fmt      the layout id the words follow (tools/nav_isa.py snap_fmt())
 //   word 4  {verdict[2:0], rcount[4:0], 6'd0, pos_fresh, has_video}: the last LOAD's
 //           verdict (0 none, 1 pending -- checked, waiting for the VM to rest, 2 applied,
@@ -95,7 +98,7 @@
 
 module vm_snap #(
     parameter [15:0] CMD   = 16'h007D,   // free: Main 0x00-0x44, 0x61-63, 0xF0-F9; 0x7A/0x7B dvd_telem, 0x7C nav_trace
-    parameter [15:0] MAGIC = 16'h5E02,
+    parameter [15:0] MAGIC = 16'h5E03,
     parameter [7:0]  WORDS = 8'd96,      // = USNAP_WORDS (check_vm_snap_wiring.py pins it)
     parameter [26:0] SEEK_WD = 27'd81_000_000   // ~3 s at clk_sys: give the landing up
 ) (
@@ -136,7 +139,7 @@ module vm_snap #(
     // --- the OSD's Save State rows (save states step 4) -------------------------
     input         ui_save,               // pulse: "Save to Slot" pressed
     input         ui_load,               // pulse: "Load Slot" pressed
-    input   [1:0] ui_slot,               // the Slot row (0 = slot 1)
+    input   [2:0] ui_slot,               // the Slot row (0 = slot 1 .. 7 = slot 8)
     input         vm_en,                 // Disc Menus on: dvd_vm's enable
 
     // --- the landing's time seek (emu ORs it into the scrub seek) ---------------
@@ -185,7 +188,8 @@ module vm_snap #(
     reg  [4:0]  rcount;
     reg  [15:0] seq;
     reg  [7:0]  len;
-    reg  [1:0]  sv_n, ld_n, slot_l;      // the OSD's presses, and the slot at the last one
+    reg  [1:0]  sv_n, ld_n;              // the OSD's presses
+    reg  [2:0]  slot_l;                  // ...and the slot at the last one
     reg         p_fresh, p_video;
     reg  [31:0] p_lbn, p_prev, p_eltm, p_tm, p_sptm, p_stc;
     reg  [15:0] p_vob;
@@ -199,7 +203,7 @@ module vm_snap #(
             fresh <= 1'b0; p_fresh <= 1'b0; p_video <= 1'b0;
             p_lbn <= 32'd0; p_prev <= 32'd0; p_eltm <= 32'd0; p_vob <= 16'd0; p_cid <= 8'd0;
             p_tm <= 32'd0; p_sptm <= 32'd0; p_stc <= 32'd0;
-            sv_n <= 2'd0; ld_n <= 2'd0; slot_l <= 2'd0;
+            sv_n <= 2'd0; ld_n <= 2'd0; slot_l <= 3'd0;
         end else begin
             if (ui_save) sv_n <= sv_n + 2'd1;
             if (ui_load) ld_n <= ld_n + 2'd1;
@@ -306,13 +310,13 @@ module vm_snap #(
     reg  [15:0] dout_r;
     reg  [7:0]  left;                    // payload words still to send
     reg  [15:0] seq_s;
-    reg  [7:0]  len_s;
+    reg  [6:0]  len_s;                   // len <= 127 (wa is 7 bits): word 2 has 7
     reg         busy_s;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             wcnt <= 5'd0; active <= 1'b0; dout_r <= 16'd0; left <= 8'd0; raddr <= 7'd0;
-            seq_s <= 16'd0; len_s <= 8'd0; busy_s <= 1'b0; req_l <= 1'b0;
+            seq_s <= 16'd0; len_s <= 7'd0; busy_s <= 1'b0; req_l <= 1'b0;
             load_l <= 1'b0; h_we <= 1'b0; h_wa <= 7'd0; h_wd <= 16'd0;
             h_fmt <= 16'd0; h_len <= 16'd0; h_sum <= 16'd0; h_acc <= 16'd0; h_cnt <= 8'd0;
             h_tm <= 16'hFFFF; h_rbnh <= 16'd0; h_rbnl <= 16'd0;
@@ -349,7 +353,7 @@ module vm_snap #(
                 active <= (io_din == CMD);
                 if (io_din == CMD) begin
                     seq_s  <= seq;
-                    len_s  <= len;
+                    len_s  <= len[6:0];
                     busy_s <= busy;
                     left   <= busy ? 8'd0 : len;   // never stream a buffer being written
                     dout_r <= MAGIC;

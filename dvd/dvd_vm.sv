@@ -158,6 +158,7 @@ module dvd_vm (
     input             btn_cmd_valid,
     input      [5:0]  btn_sel,        // nav_pci live selection (SPRM8 shadow)
     input             btns_armed,
+    input             sel_moved,      // nav_pci user_move: the player moved the selection
     output reg        btn_force,      // pulse: force nav_pci selection (SetHL_BTNN)
     output reg [5:0]  btn_force_val,
     // DVD-FORK FIX (2026-09-14, Scooby-Doo 2 Wickles Manor grid): HL_BTNN = the
@@ -575,6 +576,13 @@ reg  [15:0] sprm6, sprm7;
 reg         ptt_pend;                // a part arrived during this PGC's PRE
 reg  [10:0] ptt_q;
 reg         sprm8_frozen;
+// The freeze came from an ACTIVATION (not a restore's FRZ8): the player's next move ends
+// it. A title game whose buttons only score (Mad Dog's shootouts: a hit sets a GPRM, the
+// scene plays on) keeps the reticle moving after a shot; frozen until the next PGC load,
+// SPRM8 held the shot's square, and the segment's jump re-seeded nav_pci there, so the
+// reticle snapped back (2026-10-30, maintainer's report). libdvdnav's HL_BTNN follows
+// every move. Still frozen with no move: Atmosfear's drift (dvd_vm_tb S12b).
+reg         sprm8_frz_btn;
 reg  [15:0] lfsr;
 reg         seed_ld;
 reg  [9:0]  j_ptt;
@@ -748,7 +756,7 @@ always @(posedge clk or negedge rst_n) begin
         last_menu_pgcn <= 16'd0; last_menu_v <= 1'b0;
         sprm1 <= 16'd15; sprm2 <= 16'd62; sprm3 <= 16'd1; sprm8 <= 16'h0400;
         sprm6 <= 16'd0; sprm7 <= 16'd1; ptt_pend <= 1'b0; ptt_q <= 11'd0;
-        sprm8_frozen <= 1'b0;
+        sprm8_frozen <= 1'b0; sprm8_frz_btn <= 1'b0;
         lfsr <= 16'hACE1; seed_ld <= 1'b1;
         j_ptt <= 10'd0;
         pre_armed <= 1'b0; pre_done <= 1'b0;
@@ -824,14 +832,19 @@ always @(posedge clk or negedge rst_n) begin
         ev <= ((ev | ev_set) & ~ev_clr) | ev_force;
         if (enable) begin
             if (vm_cell_cmd) ev_cellcmd_nr <= cell_cmd_nr;
+            // the player moved on after an activation: SPRM8 follows the selection
+            // again (an activation in the same cycle, below, wins)
+            if (sel_moved && sprm8_frz_btn) begin
+                sprm8_frozen <= 1'b0; sprm8_frz_btn <= 1'b0;
+            end
             if (btn_cmd_valid) begin
                 ev_btn_cmd <= btn_cmd;
                 // DVD-FORK FIX: durably latch the ACTIVATED button into SPRM8 (a
                 // menu's dispatch PRE runs after the menu tears down); freeze it
                 sprm8 <= {btn_sel, 10'd0};
-                sprm8_frozen <= 1'b1;
+                sprm8_frozen <= 1'b1; sprm8_frz_btn <= 1'b1;
             end
-            if (pgc_loaded) sprm8_frozen <= 1'b0;
+            if (pgc_loaded) begin sprm8_frozen <= 1'b0; sprm8_frz_btn <= 1'b0; end
             if (key_chedge) ev_chedge_dir <= key_chedge_dir;
         end
 
@@ -881,7 +894,7 @@ always @(posedge clk or negedge rst_n) begin
                 if (od[UPB_TICKDONE]) tick_pending <= 1'b0;
                 if (od[UPB_SNAPDONE]) snap_done <= 1'b1;
                 if (od[UPB_RSTDONE])  begin rst_done <= 1'b1; rst_active <= 1'b0; end
-                if (od[UPB_FRZ8])     sprm8_frozen <= 1'b1;   // until the landing's load
+                if (od[UPB_FRZ8])     begin sprm8_frozen <= 1'b1; sprm8_frz_btn <= 1'b0; end   // until the landing's load; no move ends it
             end
             UOUT_RSTA:      rst_ra <= od[6:0];
             // the wrapper's registers a restore puts back, in RSTW_PORTS order
@@ -913,7 +926,7 @@ always @(posedge clk or negedge rst_n) begin
             last_menu_pgcn <= 16'd0; last_menu_v <= 1'b0;
             sprm1 <= 16'd15; sprm2 <= 16'd62; sprm3 <= 16'd1; sprm8 <= 16'h0400;
             sprm6 <= 16'd0; sprm7 <= 16'd1; ptt_pend <= 1'b0;
-            sprm8_frozen <= 1'b0;
+            sprm8_frozen <= 1'b0; sprm8_frz_btn <= 1'b0;
             lfsr <= lfsr_seed; seed_ld <= 1'b0;
             rst_active <= 1'b0;               // the mount aborts the program, not the request
         end

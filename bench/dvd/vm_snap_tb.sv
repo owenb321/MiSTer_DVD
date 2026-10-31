@@ -55,7 +55,7 @@
 
 module vm_snap_tb;
     `include "nav/nav_ucode.svh"
-    localparam [15:0] CMD = 16'h007D, MAGIC = 16'h5E02;
+    localparam [15:0] CMD = 16'h007D, MAGIC = 16'h5E03;
     localparam integer HDR = 19;
 
     reg clk = 0;
@@ -93,7 +93,7 @@ module vm_snap_tb;
     reg        video_live = 0, mount = 0;
     reg        hli_arm = 0;   // nav_pci: an HLI with buttons armed ([keep])
     wire       keep_sel;
-    reg        ui_save = 0, ui_load = 0; reg [1:0] ui_slot = 0;
+    reg        ui_save = 0, ui_load = 0; reg [2:0] ui_slot = 0;
     wire       rst_seek_pulse; wire [16:0] rst_seek_secs; wire [31:0] rst_seek_rbn;
     // ---- the position ----
     reg        pos_clr = 0, pos_commit = 0;
@@ -126,7 +126,7 @@ module vm_snap_tb;
         .key_menu(key_menu), .key_title(key_title), .key_return(key_return),
         .key_cmenu(key_cmenu), .key_chedge(key_chedge), .key_chedge_dir(key_chedge_dir),
         .btn_cmd(btn_cmd), .btn_cmd_valid(btn_cmd_valid), .btn_sel(btn_sel),
-        .btns_armed(btns_armed), .btn_force(), .btn_force_val(), .hl_btnn(),
+        .btns_armed(btns_armed), .sel_moved(1'b0), .btn_force(), .btn_force_val(), .hl_btnn(),
         .jump_pulse(jump_pulse), .jump_domain(jump_domain), .jump_vts(jump_vts),
         .jump_pgcn(jump_pgcn), .jump_entry(), .jump_ttn(jump_ttn), .jump_pgn(), .jump_ptt(),
         .jump_cell(jump_cell),
@@ -302,25 +302,31 @@ module vm_snap_tb;
 
         // ------------------------------------------------------------ [ui]
         begin_arm("ui");
-        ui_slot = 2'd2;
+        // word 2 = {busy, vm_en, slot[2:0], load_n, save_n, len[6:0]} (8 slots)
+        ui_slot = 3'd6;                                // slot 7: the third bit matters
         @(negedge clk) ui_save = 1; @(negedge clk) ui_save = 0;
-        ui_slot = 2'd1;                                // moved after the press
+        ui_slot = 3'd1;                                // moved after the press
         txn(CMD, 16'd0, 4);
-        check(w[2][9:8] === 2'd1 && w[2][11:10] === 2'd0, "one save press is not save_n 1, load_n 0");
-        check(w[2][13:12] === 2'd2, "the slot is not the row AT the press");
+        check(w[2][8:7] === 2'd1 && w[2][10:9] === 2'd0, "one save press is not save_n 1, load_n 0");
+        check(w[2][13:11] === 3'd6, "the slot is not the row AT the press");
         @(negedge clk) ui_load = 1; @(negedge clk) ui_load = 0;
         txn(CMD, 16'd0, 4);
-        check(w[2][11:10] === 2'd1 && w[2][9:8] === 2'd1, "one load press is not load_n 1, save_n unchanged");
-        check(w[2][13:12] === 2'd1, "a load press did not latch the slot");
+        check(w[2][10:9] === 2'd1 && w[2][8:7] === 2'd1, "one load press is not load_n 1, save_n unchanged");
+        check(w[2][13:11] === 3'd1, "a load press did not latch the slot");
+        ui_slot = 3'd7;                                // slot 8
+        @(negedge clk) ui_load = 1; @(negedge clk) ui_load = 0;
+        txn(CMD, 16'd0, 4);
+        check(w[2][13:11] === 3'd7, "slot 8 does not reach word 2");
         for (i = 0; i < 3; i = i + 1) begin @(negedge clk) ui_save = 1; @(negedge clk) ui_save = 0; end
         txn(CMD, 16'd0, 4);
-        check(w[2][9:8] === 2'd0, "save_n does not wrap at 4");
+        check(w[2][8:7] === 2'd0, "save_n does not wrap at 4");
         check(w[2][14] === 1'b1, "vm_en is not set with enable on");
-        check(w[2][15] === 1'b0 && w[2][7:0] === 8'd0, "the presses disturbed busy/len");
+        check(w[2][15] === 1'b0 && w[2][6:0] === 7'd0, "the presses disturbed busy/len");
         end_arm;
         // put word 2's request fields back to 0 so the arms below read busy/len plainly
-        for (i = 0; i < 2; i = i + 1) begin @(negedge clk) ui_load = 1; @(negedge clk) ui_load = 0; end
-        @(negedge clk) ui_load = 1; ui_slot = 2'd0; @(negedge clk) ui_load = 0;
+        // [ui] left load_n at 2 (the slot-2 and slot-8 loads): two more wrap it to 0
+        @(negedge clk) ui_load = 1; @(negedge clk) ui_load = 0;
+        @(negedge clk) ui_load = 1; ui_slot = 3'd0; @(negedge clk) ui_load = 0;
 
         // give the VM a state worth reading: distinct RAM words, SPRMs, wrapper state
         for (i = 0; i < 40; i = i + 1) vm.u_seq.dram[i] = 16'h1000 + i * 16'h0101;
@@ -351,7 +357,7 @@ module vm_snap_tb;
         check(dut.busy === 1'b0, "the snapshot never completed");
         read_all;
         check(w[1] === 16'd1, "seq is not 1 after one snapshot");
-        check(w[2] === {8'h40, 8'd96}, "busy/len is not {0, 96}");
+        check(w[2] === {9'h080, 7'd96}, "busy/len is not {0, 96}");
         check(w[3] === USNAP_FMT, "fmt is not USNAP_FMT");
         end_arm;
 
@@ -423,7 +429,7 @@ module vm_snap_tb;
         wait_done(4000); nclk(4);
         read_all;
         check(w[1] === seq0[15:0] + 16'd1, "the waiting snapshot did not complete at rest");
-        check(w[2] === {8'h40, 8'd96}, "busy/len after the waiting snapshot");
+        check(w[2] === {9'h080, 7'd96}, "busy/len after the waiting snapshot");
         end_arm;
 
         // ------------------------------------------------------------ restores
@@ -460,7 +466,7 @@ module vm_snap_tb;
         load(USNAP_FMT, 16'd96, sum, USNAP_WORDS);
         read_all;
         check(w[4][15:13] === 3'd1 || w[4][15:13] === 3'd2, "a good blob is not pending or applied");
-        check(w[2][7:0] === 8'd0, "the header still claims a snapshot after a load");
+        check(w[2][6:0] === 7'd0, "the header still claims a snapshot after a load");
         wait_rst(4000);
         check(n_jump == 1, "the restore did not issue exactly one jump");
         check(j_pgcn === blob[65] && j_cell === blob[66][7:0] && j_dom === blob[82][1:0],

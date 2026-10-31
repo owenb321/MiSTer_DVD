@@ -29,6 +29,13 @@
 #   W1  emu.sv : nav_pci .hl_btnn tied to 6'd0        -> wiring check
 #   W2  emu.sv : nav_pci .hl_btnn connection dropped  -> wiring check
 #
+# A move ends an activation's SPRM8 freeze (Mad Dog's shootouts, 2026-10-30: after a
+# hit the player keeps aiming, and the segment's jump re-seeded the SHOT's square):
+#   M5  dvd_vm : a move never ends the freeze         -> dvd_vm_tb S12c
+#   M6  dvd_vm : a move ends a restore's freeze too   -> dvd_vm_tb S12d
+#   M7  nav_pci: user_move never pulses               -> nav_pci_tb T21a
+#   W3  emu.sv : dvd_vm .sel_moved tied to 1'b0       -> wiring check
+#
 #   bench/dvd/run_link_button.sh          # GREEN arms
 #   bench/dvd/run_link_button.sh --red    # GREEN + the mutation arms
 set -u
@@ -82,6 +89,17 @@ if [ "${1:-}" = "--red" ]; then
 
     mut dvd/emu.sv "s/\.hl_btnn    (vm_hl_btnn),/.hl_btnn    (6'd0),/" "$TMP/W1.sv" && {
         if ! python3 tools/check_hl_btnn_wiring.py "$TMP/W1.sv" > /dev/null 2>&1; then pass "W1 nav_pci .hl_btnn tied to 6'd0 -> wiring check red"; else failed "W1 not caught"; fi; }
+    mut dvd/dvd_vm.sv 's/if (sel_moved \&\& sprm8_frz_btn) begin/if (1'"'"'b0) begin \/\/ M5/' "$TMP/M5.sv" && {
+        run_vm "$TMP/M5.sv" M5; r=$?
+        if [ $r -eq 1 ] && grep -q "S12c" "$TMP/vm_M5.out" && ! grep -q "FAIL: S12d\|FAIL: T6" "$TMP/vm_M5.out"; then pass "M5 a move never ends the freeze -> S12c red"; else failed "M5 not caught by exactly S12c"; grep FAIL "$TMP/vm_M5.out"; fi; }
+    mut dvd/dvd_vm.sv 's/if (sel_moved \&\& sprm8_frz_btn) begin/if (sel_moved) begin \/\/ M6/' "$TMP/M6.sv" && {
+        run_vm "$TMP/M6.sv" M6; r=$?
+        if [ $r -eq 1 ] && grep -q "S12d" "$TMP/vm_M6.out" && ! grep -q "FAIL: S12c\|FAIL: T6" "$TMP/vm_M6.out"; then pass "M6 a move ends a restore's freeze -> S12d red"; else failed "M6 not caught by exactly S12d"; grep FAIL "$TMP/vm_M6.out"; fi; }
+    mut dvd/nav_pci.sv 's/        user_move     <= 1.b0;                 \/\/ default: one-cycle pulse/        user_move     <= 1'"'"'b0; \/\/ M7/; s/ moved <= 1.b1; user_move <= 1.b1;/ moved <= 1'"'"'b1;/' "$TMP/M7.sv" && {
+        run_nav "$TMP/M7.sv" M7; r=$?
+        if [ $r -eq 1 ] && grep -q "ERR T21a" "$TMP/nav_M7.out"; then pass "M7 user_move never pulses -> T21a red"; else failed "M7 not caught"; grep ERR "$TMP/nav_M7.out"; fi; }
+    mut dvd/emu.sv "s/\.sel_moved     (nav_user_move),/.sel_moved     (1'b0),/" "$TMP/W3.sv" && {
+        if ! python3 tools/check_hl_btnn_wiring.py "$TMP/W3.sv" > /dev/null 2>&1; then pass "W3 dvd_vm .sel_moved tied to 1'b0 -> wiring check red"; else failed "W3 not caught"; fi; }
     grep -v '^    \.hl_btnn    (vm_hl_btnn),' dvd/emu.sv > "$TMP/W2.sv"
     if ! cmp -s dvd/emu.sv "$TMP/W2.sv" && ! python3 tools/check_hl_btnn_wiring.py "$TMP/W2.sv" > /dev/null 2>&1; then pass "W2 nav_pci .hl_btnn dropped -> wiring check red"; else failed "W2 not caught"; fi
 fi
