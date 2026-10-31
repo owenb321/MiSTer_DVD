@@ -970,3 +970,33 @@ chose from two proposals):
 - The manual's `settings.md` has one section per page, and the references elsewhere ("Debug
   page", "Main page") point at the page a row now lives on.
 
+### 11g. A save with buttons armed lands at the cell start (2026-10-31)
+
+**Report (maintainer, on the rig):** Mad Dog McCree's hideout shootout, saved with the
+reticle on screen in slot 8. The load showed the scene, with the enemy's shot, and no reticle.
+**Measured** (capture card, the saved state loaded with only the landing time changed):
+landing at 0 s shows the reticle, 2 s and the saved 3 s do not. The HLI does arm after the
+exact landing (nav trace: `HLI_ARM`, 35 buttons, `late_ticks` 252252, the 2.8 s the
+window's authored start is behind). The nav events are the same chain either way (arm, cell
+command 26, jump to cell 13).
+- **Cause:** the reticle is the selected button's highlight recolouring a subpicture bitmap
+  (the grid), and that bitmap rides with the first frames of the window, together with the
+  35-button HLI's first pack (`subpicture.md`, the in-title grid). A time seek lands after it.
+  The HLI arms from a later continuation pack and has nothing to recolour. No other state
+  repairs it: the unit is delivered once.
+- **Decision:** when buttons are armed at the snapshot, save no exact time. The core latches
+  `btns_armed` into word 4 bit 2 at `snap_done` (`vm_snap.hl_armed_in`), and the Main's
+  `dvd_vmsnap_disp_secs_h` returns -1 for it, so the file carries no time and the load takes
+  the "saved cell's start" path that menus already use. A film bookmark keeps its exact
+  time. The cost is that a button scene restarts from its first frame, which is where an
+  interactive disc waits for input anyway. The manual's "at the start of that scene" now
+  holds for these scenes too.
+- **Limitation:** a window that spans cells has its bitmap in an earlier cell, so landing at
+  the saved cell's start would still miss it. Mad Dog, Scooby-Doo 2's windows and the
+  quiz discs author a window per cell. ⏳ Not checked against a spanning window.
+- **Existing slots do not change:** the flag is written at save time. A slot saved before
+  this (Mad Dog's slot 8) still carries its exact time and needs a re-save.
+- **Gates:** `vm_snap_tb` `[armed]` (latched at the snapshot, not live) with S36/S37;
+  `check_vm_snap_wiring.py --red` (the port, word 4's bit 2 on both sides, two mutations);
+  `dvd_sstate_test` [15] and `ss-armed-exact-time`.
+

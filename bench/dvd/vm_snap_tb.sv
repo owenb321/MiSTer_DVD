@@ -92,6 +92,7 @@ module vm_snap_tb;
     reg [32:0] stc = 0;
     reg        video_live = 0, mount = 0;
     reg        hli_arm = 0;   // nav_pci: an HLI with buttons armed ([keep])
+    reg        hl_armed = 0;  // nav_pci btns_armed: buttons armed now ([armed])
     wire       keep_sel;
     reg        ui_save = 0, ui_load = 0; reg [2:0] ui_slot = 0;
     wire       rst_seek_pulse; wire [16:0] rst_seek_secs; wire [31:0] rst_seek_rbn;
@@ -151,7 +152,7 @@ module vm_snap_tb;
         .video_live(video_live), .menu_active(menu_active), .mount(mount),
         .rst_seek_pulse(rst_seek_pulse), .rst_seek_secs(rst_seek_secs), .rst_seek_rbn(rst_seek_rbn),
         .ui_save(ui_save), .ui_load(ui_load), .ui_slot(ui_slot), .vm_en(enable),
-        .hli_arm(hli_arm), .keep_sel(keep_sel));
+        .hli_arm(hli_arm), .keep_sel(keep_sel), .hl_armed_in(hl_armed));
 
     reg drive_seen = 1'b0;
     always @(posedge clk) if (drive === 1'b1) drive_seen <= 1'b1;
@@ -630,6 +631,26 @@ module vm_snap_tb;
         check(keep_sel === 1'b0, "a mount did not drop keep_sel");
         @(negedge clk) pgc_loaded = 1; @(negedge clk) pgc_loaded = 0;
         menu_active = 0;
+        end_arm;
+
+        // ------------------------------------------------------------ [armed]
+        // word 4 bit 2 = buttons were armed when the snapshot was taken (the Main then
+        // saves no exact time: a shootout's reticle bitmap arrives with the window's
+        // first frames and a time seek lands after it, Mad Dog 2026-10-31). Latched at
+        // snap_done: moving afterwards must not change it.
+        begin_arm("armed");
+        nclk(200);
+        hl_armed = 1;
+        request; wait_done(4000); nclk(4);
+        hl_armed = 0;                                   // buttons gone after the snapshot
+        read_all;
+        check(w[4][2] === 1'b1, "word 4 bit 2 is not hl_armed as of the snapshot");
+        hl_armed = 0;
+        request; wait_done(4000); nclk(4);
+        hl_armed = 1;                                   // armed after the snapshot
+        read_all;
+        check(w[4][2] === 1'b0, "word 4 bit 2 follows hl_armed live, not at the snapshot");
+        hl_armed = 0;
         end_arm;
 
         if (any_fail) $display("RESULT: FAIL");

@@ -366,6 +366,21 @@ int main(void)
 	for (int i = 0; i < 10; i++) tick();
 	check(n_loads == l8 + 1, "a Load of slot 8 sends it");
 
+	printf("[15] buttons armed at the save: no exact time, the load lands at the cell start\n");
+	core_hdr[4] |= 4;                                  // word 4 bit 2 = hl_armed
+	core_busy_for = 0;
+	press(1, 3);
+	for (int i = 0; i < 6; i++) tick();
+	check(!strcmp(last_info, "Saved to slot 4"), "says Saved to slot 4");
+	snprintf(path, sizeof(path), "%s/DVD/%s_4.ss", save_dir, id1);
+	fl = 0; f = fopen(path, "rb");
+	if (f) { fl = (int)fread(fb, 1, sizeof(fb), f); fclose(f); }
+	check(fl == 64 + 192 && (int32_t)get32(fb + 20) == -1, "armed: the file carries no time (-1), not 771");
+	press(0, 3);
+	for (int i = 0; i < 10; i++) tick();
+	check(ld_tm == 0xFFFF, "armed: the load asks for the saved cell's start (0xFFFF)");
+	core_hdr[4] &= (uint16_t)~4;
+
 	printf(fails ? "dvd_sstate_test: %d FAILED\n" : "dvd_sstate_test: ALL GREEN\n", fails);
 	return fails ? 1 : 0;
 }

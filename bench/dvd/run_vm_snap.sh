@@ -137,6 +137,12 @@ PYEOF
     mut "S25 a load with Disc Menus off accepted" "menusoff" \
         "else if (!vm_en)                verdict <= 3'd7;   // Disc Menus off: never taken" "else if (1'b0)                  verdict <= 3'd7;"
 
+    # ---- the armed bit (the Main lands at the cell start: Mad Dog's hideout reticle) ----
+    mut "S36 hl_armed never latched"             "armed" \
+        "p_video <= |first_ref_ea; p_armed <= hl_armed_in;" "p_video <= |first_ref_ea; p_armed <= 1'b0;"
+    mut "S37 hl_armed read live, not at done"    "armed" \
+        "5'd4: dout_r <= {verdict, rcount, 5'd0, p_armed, p_fresh, p_video};" "5'd4: dout_r <= {verdict, rcount, 5'd0, hl_armed_in, p_fresh, p_video};"
+
     # ---- the restored highlight (keep_sel -> nav_pci; Mad Dog's route menu) ----
     mut "S31 keep_sel never set"                 "keep" \
         "keep_sel <= 1'b1; own_pgc <= 1'b0;" "keep_sel <= 1'b0; own_pgc <= 1'b0;"

@@ -875,6 +875,11 @@ if [ "$RED" -eq 1 ]; then
     red_case dvd_sstate.cpp dvd_sstate_test.cpp \
         "FAIL nothing while the launch runs" \
         "s/if (dvd_launch_ui_busy()) return;/(void)0;/" ss-ui-during-launch
+    # buttons armed at the save (2026-10-31): the landing keeps an exact time a shootout's
+    # reticle cannot survive (its bitmap arrives with the window's first frames)
+    red_case dvd_vmsnap.cpp dvd_sstate_test.cpp \
+        "FAIL armed: the file carries no time" \
+        "s/if ((h\[4\] >> 2) \& 1) return -1;/(void)0;/" ss-armed-exact-time
     # eight slots (2026-10-30): the path builder kept the old four-slot bound
     red_case dvd_sstate.cpp dvd_sstate_test.cpp \
         "FAIL says Saved to slot 8" \

@@ -76,6 +76,11 @@ int dvd_vmsnap_disp_secs(uint32_t eltm, uint32_t sptm, uint32_t stc, int fresh, 
 
 int dvd_vmsnap_disp_secs_h(const uint16_t *h)
 {
+	// Buttons armed at the snapshot (word 4 bit 2): no exact time, so a load lands at the
+	// saved cell's start. A shootout's reticle is a subpicture bitmap that arrives with the
+	// window's first frames, and a time seek into the window lands after it: the HLI
+	// arms and nothing shows (Mad Dog's hideout, 2026-10-31; docs/nav_engine.md 11g).
+	if ((h[4] >> 2) & 1) return -1;
 	return dvd_vmsnap_disp_secs(((uint32_t)h[13] << 16) | h[14], ((uint32_t)h[15] << 16) | h[16],
 	                            ((uint32_t)h[17] << 16) | h[18], (h[4] >> 1) & 1, h[4] & 1);
 }

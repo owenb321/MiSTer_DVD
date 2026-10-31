@@ -75,6 +75,8 @@ SNAP_PORTS = {
     # the restored highlight (docs/nav_engine.md §11c): nav_pci's arms end keep_sel,
     # which nav_pci reads (pinned on both ends below)
     'hli_arm': 'hli_arm_w', 'keep_sel': 'ss_keep_sel',
+    # buttons armed when a snapshot is taken: the Main saves no exact time (docs/nav_engine.md 11g)
+    'hl_armed_in': 'hl_btns_armed',
 }
 VM_PORTS = {'snap_req': 'vm_snap_req', 'snap_we': 'vm_snap_we', 'snap_d': 'vm_snap_d',
             'snap_done': 'vm_snap_done', 'snap_fmt': 'vm_snap_fmt',
@@ -231,6 +233,14 @@ def run(txt, verbose=True):
     ok(mx is not None and words is not None and rtl_buf is not None and words <= mx <= rtl_buf,
        f'DVD_VMSNAP_MAXW ({mx}) holds a snapshot and no more than the buffer')
     ok(re.search(r'spi_uio_cmd_cont\(\s*UIO_DVD_VMSNAP\s*\)', s['vcpp']) is not None, 'the Main issues UIO_DVD_VMSNAP')
+    # word 4's armed bit: the RTL's concatenation puts p_armed at bit 2, and the Main's
+    # landing rule (no exact time) reads that same bit
+    m4 = re.search(r"5'd4:\s*dout_r\s*<=\s*\{([^}]*)\}\s*;", t)
+    f4 = [x.strip() for x in m4.group(1).split(',')] if m4 else []
+    ok(f4[-3:] == ["p_armed", "p_fresh", "p_video"] if f4 else False,
+       f'vm_snap word 4 ends {{p_armed, p_fresh, p_video}} (bit 2 = armed): {f4}')
+    ok(re.search(r'if\s*\(\(h\[4\]\s*>>\s*2\)\s*&\s*1\)\s*return\s*-1\s*;', s['vcpp']) is not None,
+       'the Main lands at the cell start (no time) when word 4 bit 2 is set')
     # word 2's fields: the RTL's concatenation, MSB first, against the Main's shifts
     m2 = re.search(r"5'd2:\s*dout_r\s*<=\s*\{([^}]*)\}\s*;", t)
     order = [x.strip() for x in m2.group(1).split(',')] if m2 else []
@@ -250,6 +260,8 @@ def run(txt, verbose=True):
 
 
 MUTATIONS = [
+    ('emu', '.hl_armed_in  (hl_btns_armed),', ".hl_armed_in  (1'b0),", 'the snapshot never records armed buttons'),
+    ('vcpp', 'if ((h[4] >> 2) & 1) return -1;', 'if ((h[4] >> 3) & 1) return -1;', 'the Main reads the armed bit one off'),
     ('emu', ".keep_sel   (ss_keep_sel),", ".keep_sel   (1'b0),", 'nav_pci never keeps the restored button'),
     ('emu', ".hli_arm        (hli_arm_w),        // the landing's HLI ends keep_sel",
      ".hli_arm        (1'b0),        // the landing's HLI ends keep_sel", 'keep_sel never ends (no HLI arm)'),

@@ -56,7 +56,10 @@ chapter skip does: there is a brief black moment, then playback resumes.
   saved.
 - **In a menu or a game** it lands back on that menu or at the start of that scene,
   with the disc's variables as they were. That is the natural place to resume, because
-  interactive discs wait for your input there anyway.
+  interactive discs wait for your input there anyway. A scene with on-screen buttons,
+  such as a shooting gallery, always restarts from its beginning: the cursor or reticle is
+  drawn from data the disc sends only at the start of the scene, so a load into the
+  middle would show the scene without it.
 
 ## Slots are per disc
 

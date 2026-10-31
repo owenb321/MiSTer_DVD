@@ -6724,6 +6724,7 @@ vm_snap vm_snap_inst (
     .pgc_loaded   (pgc_loaded),
     .video_live   (video_live_s2),
     .menu_active  (menu_active),
+    .hl_armed_in  (hl_btns_armed),      // buttons armed at the snapshot: a load lands at the cell start
     .mount        (start_streaming),
     .rst_seek_pulse (rst_seek_pulse),
     .rst_seek_secs  (rst_seek_secs),
