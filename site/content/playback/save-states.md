@@ -42,8 +42,8 @@ Everything the *disc's own program* is keeping track of, plus where you were:
   given)
 - the disc's random-number state, so a game that rolls dice picks up where it left off
 - where you were in a film, to about a second
-- the button you had highlighted, unless the disc's menu always starts on a particular
-  button. Many menus do, and a set-top player honours that too.
+- the button you had highlighted, even on a menu that normally starts on a particular
+  button whenever you enter it
 - your audio track, subtitle and camera-angle choices
 
 ## What does not

@@ -146,7 +146,11 @@ module vm_snap #(
     input         mount,                 // start_streaming: a new disc
     output reg        rst_seek_pulse,
     output reg [16:0] rst_seek_secs,
-    output reg [31:0] rst_seek_rbn
+    output reg [31:0] rst_seek_rbn,
+
+    // --- the restored highlight (nav_pci) ----------------------------------------
+    input         hli_arm,               // nav_pci: an HLI with buttons was promoted
+    output reg    keep_sel               // the restored SPRM8 beats the HLI's forced select
 );
 
     localparam [4:0] HDR = 5'd19;
@@ -264,6 +268,34 @@ module vm_snap #(
                          rs <= RS_IDLE;
                      end
             endcase
+        end
+    end
+
+    // ---- the restored highlight -------------------------------------------------
+    // A save on a menu stores the live selection in SPRM8 (dvd_vm's sprm8_eff), and the
+    // restore writes it back; nav_pci re-seeds from it after the flush. But the landing
+    // re-presents the menu's HLI to a fresh nav_pci, and an HLI authoring a forced select
+    // (fosl) takes the highlight there, as on any entry: Mad Dog's route menu (VTS 12,
+    // fosl 1) saved on button 2 loaded on button 1 (2026-10-30, maintainer's report).
+    // keep_sel tells nav_pci the restored selection wins, for the landing's HLI only:
+    // set as the restore issues its jump; held through the restore's own PGC load and
+    // the landing's time seek (an HLI armed before that seek is not the landing's);
+    // dropped by the first HLI armed after it, or by any later PGC load (something else
+    // came first: every other entry keeps libdvdnav's forced select).
+    reg own_pgc;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            keep_sel <= 1'b0; own_pgc <= 1'b0;
+        end else if (mount) begin
+            keep_sel <= 1'b0; own_pgc <= 1'b0;
+        end else if (rst_done && rbusy) begin
+            keep_sel <= 1'b1; own_pgc <= 1'b0;
+        end else if (keep_sel) begin
+            if (pgc_loaded) begin
+                if (own_pgc) keep_sel <= 1'b0;   // a later PGC: not the landing's
+                own_pgc <= 1'b1;
+            end else if (hli_arm && own_pgc && rs == RS_IDLE)
+                keep_sel <= 1'b0;                // the landing's HLI took it
         end
     end
 

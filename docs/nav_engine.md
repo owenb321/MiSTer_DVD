@@ -818,11 +818,13 @@ SPRM2's stream and clear bit 6 (libdvdnav; the forced-subtitle fallback reads it
 restore (`vm_rst_done`) syncs `aud_cur` / `sub_on` / `sub_idx` from the restored SPRMs, so
 the saved track plays whether or not the write moved the VM's value.
 
-**The highlighted button.** A menu restore lands with SPRM8 restored, but a menu whose PCI
-authors a forced select (`fosl_btnn`) highlights that button on entry, as libdvdnav does.
-T2's timeline menu forces button 1 (read off the disc's PCI on the rig), so a save on
-"Special Edition" loads on "Theatrical". The manual says a disc's menu may start on its
-own button.
+**The highlighted button** (§11c reverses the 2026-10-27 decision). A menu restore lands
+with SPRM8 restored, but a menu whose PCI authors a forced select (`fosl_btnn`) used to take
+the highlight on the landing, as on any entry and as libdvdnav does. T2's timeline menu
+(fosl 1) loaded a "Special Edition" save on "Theatrical", and that was accepted as
+libdvdnav behaviour. Mad Dog's route menu showed the cost: the maintainer saved with the
+reticle on Saloon and loaded on the Sheriff's office. A save state's job is to come back
+where you were, so the restored button now wins for the landing's HLI (§11c).
 
 ### 11a. HW round (2026-10-27, rig)
 
@@ -867,3 +869,36 @@ advancing 3 s later.
   restored them only at the normal end. A crash, then a second run, lost one T2 test slot
   from §11a. It now uses a per-run folder, a `finally`, and a refusal to start over a
   leftover folder.
+
+### 11c. The restored button beats the landing's forced select (2026-10-30)
+
+**Report (maintainer, on the rig):** Mad Dog McCree, on the route menu after the first
+shootout (VTS 12 PGC 1: an indefinite still, 4 link buttons, `fosl 1`). Saved with the
+reticle on Saloon (button 2), loaded, and the reticle was on button 1. The slot file held
+SPRM8 = 0x0800 (button 2), so the save was right. On the landing, `nav_pci` came out of the flush
+re-seeded with button 2 (`hl_btnn`), and then the HLI's forced select moved it to 1, because a
+freshly reset `nav_pci` is not armed and so treats any HLI as a new one.
+
+**Decision:** a save state comes back where you were. libdvdnav applies `fosl` on every
+entry. It has no save states, and a set-top player's resume is a different thing. So
+for the **landing's HLI only**, a restored SPRM8 that is a button of that HLI stands.
+Every other entry keeps libdvdnav's forced select: menu keys, links and seeks, and an
+HLI that is new after the landing.
+
+**Mechanism:**
+- `vm_snap.keep_sel` is a level on the hard reset, so it lives across the restore's
+  flushes. It is set as the restore issues its jump (`rst_done`).
+- It is held through the restore's own PGC load and, in a film, the landing's time seek.
+  An HLI armed before that seek is the cell start's, not the landing's.
+- It is dropped by the first HLI arm after that (`nav_pci.hli_arm`), or by any later PGC
+  load (no HLI came), or by a mount.
+- `nav_pci`'s promote reads it. When it is up and `btn_sel` (seeded from the restored
+  SPRM8) is 1..`btn_ns`, `fosl` is skipped. Out of range, the old rules apply (`fosl`, else 1).
+
+**Gates:**
+- `nav_pci_tb` T20: kept, and an out-of-range button falls back to `fosl`. T19e is the
+  control, with `keep_sel` low and `fosl` winning.
+- `run_vm_snap.sh --red` `[keep]` and S31–S35. S16/S19 now also fail `[keep]`, because
+  `keep_sel` follows the landing.
+- `check_vm_snap_wiring.py --red`, which pins both ends of the seam in `emu.sv`.
+

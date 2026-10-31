@@ -91,6 +91,8 @@ module vm_snap_tb;
     reg [31:0] eltm = 0, vobu_sptm = 0;
     reg [32:0] stc = 0;
     reg        video_live = 0, mount = 0;
+    reg        hli_arm = 0;   // nav_pci: an HLI with buttons armed ([keep])
+    wire       keep_sel;
     reg        ui_save = 0, ui_load = 0; reg [1:0] ui_slot = 0;
     wire       rst_seek_pulse; wire [16:0] rst_seek_secs; wire [31:0] rst_seek_rbn;
     // ---- the position ----
@@ -148,7 +150,8 @@ module vm_snap_tb;
         .eltm(eltm), .vobu_sptm(vobu_sptm), .stc(stc), .pgc_loaded(pgc_loaded),
         .video_live(video_live), .menu_active(menu_active), .mount(mount),
         .rst_seek_pulse(rst_seek_pulse), .rst_seek_secs(rst_seek_secs), .rst_seek_rbn(rst_seek_rbn),
-        .ui_save(ui_save), .ui_load(ui_load), .ui_slot(ui_slot), .vm_en(enable));
+        .ui_save(ui_save), .ui_load(ui_load), .ui_slot(ui_slot), .vm_en(enable),
+        .hli_arm(hli_arm), .keep_sel(keep_sel));
 
     reg drive_seen = 1'b0;
     always @(posedge clk) if (drive === 1'b1) drive_seen <= 1'b1;
@@ -577,6 +580,50 @@ module vm_snap_tb;
         check(vm.sprm1 === 16'd5 && vm.sprm2 === 16'h0043, "the write-back did not land in SPRM1 / SPRM2");
         request; wait_done(4000); nclk(4); read_all;
         check(w[HDR + 41] === 16'd5 && w[HDR + 42] === 16'h0043, "the snapshot does not carry the user's streams");
+        end_arm;
+
+        // ------------------------------------------------------------ [keep]
+        // keep_sel: the restored SPRM8 beats the landing HLI's forced select (Mad Dog's
+        // route menu, 2026-10-30). Up from the restore's jump, through its own PGC load
+        // and the landing's seek, down at the first HLI armed after that, or at any
+        // later PGC load, or a mount.
+        begin_arm("keep");
+        // [wb]'s restore never armed an HLI, so keep_sel is legitimately still up: a mount
+        // starts from nothing
+        @(negedge clk) mount = 1; @(negedge clk) mount = 0; nclk(2);
+        check(keep_sel === 1'b0, "keep_sel up after a mount, with no restore");
+        // (a) a menu landing (no time target): the landing's HLI takes it
+        ld_tm = 16'hFFFF; ld_rbn = 32'd0; menu_active = 1;
+        load(USNAP_FMT, 16'd96, sum, USNAP_WORDS); wait_rst(4000); nclk(2);
+        check(keep_sel === 1'b1, "keep_sel not up after the restore's jump");
+        @(negedge clk) hli_arm = 1; @(negedge clk) hli_arm = 0;
+        check(keep_sel === 1'b1, "an HLI before the restore's PGC loaded took keep_sel");
+        @(negedge clk) pgc_loaded = 1; @(negedge clk) pgc_loaded = 0; nclk(4);
+        check(keep_sel === 1'b1, "the restore's own PGC load dropped keep_sel");
+        @(negedge clk) hli_arm = 1; @(negedge clk) hli_arm = 0; nclk(2);
+        check(keep_sel === 1'b0, "the landing's HLI did not drop keep_sel");
+        // (b) a film landing with a target: an HLI before the seek is not the landing's
+        ld_tm = 16'd41; menu_active = 0;
+        load(USNAP_FMT, 16'd96, sum, USNAP_WORDS); wait_rst(4000);
+        @(negedge clk) pgc_loaded = 1; @(negedge clk) pgc_loaded = 0; nclk(4);
+        @(negedge clk) hli_arm = 1; @(negedge clk) hli_arm = 0; nclk(2);
+        check(keep_sel === 1'b1, "an HLI armed before the landing's seek took keep_sel");
+        @(negedge clk) pos_commit = 1; @(negedge clk) pos_commit = 0; nclk(4);
+        check(keep_sel === 1'b1, "the landing's seek dropped keep_sel");
+        @(negedge clk) hli_arm = 1; @(negedge clk) hli_arm = 0; nclk(2);
+        check(keep_sel === 1'b0, "the HLI after the landing's seek did not drop keep_sel");
+        // (c) no HLI ever: the next PGC load (another entry) drops it
+        ld_tm = 16'hFFFF; menu_active = 1;
+        load(USNAP_FMT, 16'd96, sum, USNAP_WORDS); wait_rst(4000);
+        @(negedge clk) pgc_loaded = 1; @(negedge clk) pgc_loaded = 0; nclk(4);
+        @(negedge clk) pgc_loaded = 1; @(negedge clk) pgc_loaded = 0; nclk(2);
+        check(keep_sel === 1'b0, "a later PGC load did not drop keep_sel");
+        // (d) a mount drops it
+        load(USNAP_FMT, 16'd96, sum, USNAP_WORDS); wait_rst(4000); nclk(2);
+        @(negedge clk) mount = 1; @(negedge clk) mount = 0; nclk(2);
+        check(keep_sel === 1'b0, "a mount did not drop keep_sel");
+        @(negedge clk) pgc_loaded = 1; @(negedge clk) pgc_loaded = 0;
+        menu_active = 0;
         end_arm;
 
         if (any_fail) $display("RESULT: FAIL");

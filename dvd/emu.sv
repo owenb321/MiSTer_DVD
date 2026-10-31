@@ -6448,6 +6448,7 @@ wire [9:0]  hl_x1, hl_x2, hl_y1, hl_y2;
 wire [31:0] hl_coli;
 
 wire hli_arm_w;                           // nav_pci: an HLI with buttons was promoted
+wire ss_keep_sel;                         // vm_snap: a restore's landing keeps its button
 wire [31:0] hl_sptm_w;                    // nav_pci: that HLI's start PTS (nav_trace)
 wire        hl_rj_w, hl_rj_ok_w;          // nav_pci: re-judge at a re-anchor, and its verdict (nav_trace X0)
 wire        hl_fb_promo_w;                // nav_pci: a fallback promotion (nav_trace X1)
@@ -6505,6 +6506,7 @@ nav_pci nav_pci_inst (
     .sel_force  (vm_btn_force),          // Phase 4: SetHL_BTNN / link buttons
     .sel_force_btn (vm_btn_force_val),
     .hl_btnn    (vm_hl_btnn),            // SPRM8 button: re-seed after the pipe reset
+    .keep_sel   (ss_keep_sel),           // ...and a restore's landing keeps it over fosl
                                          // (a link's button field must survive the
                                          //  flush that link fires; checked by
                                          //  tools/check_hl_btnn_wiring.py)
@@ -6688,7 +6690,9 @@ vm_snap vm_snap_inst (
     .mount        (start_streaming),
     .rst_seek_pulse (rst_seek_pulse),
     .rst_seek_secs  (rst_seek_secs),
-    .rst_seek_rbn   (rst_seek_rbn)
+    .rst_seek_rbn   (rst_seek_rbn),
+    .hli_arm        (hli_arm_w),        // the landing's HLI ends keep_sel
+    .keep_sel       (ss_keep_sel)       // -> nav_pci: the restored button beats fosl
 );
 
 // ★ NEW CELL for spu_decode's menu re-send guard (2026-09-18, Harry Potter

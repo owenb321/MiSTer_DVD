@@ -55,7 +55,7 @@ module nav_pci_rejudge_tb;
         .stc(stc), .disp_wide(1'b0), .disp_mode(2'd0),
         .video_live(1'b1), .menu_settled(1'b0), .stc_fresh(1'b1),
         .stc_reanchor(stc_reanchor),
-        .sel_force(1'b0), .sel_force_btn(6'd0), .hl_btnn(6'd0),
+        .sel_force(1'b0), .sel_force_btn(6'd0), .hl_btnn(6'd0), .keep_sel(1'b0),
         .num_sel(1'b0), .num_btn(6'd0),
         .nav_up(1'b0), .nav_dn(1'b0), .nav_lf(1'b0), .nav_rt(1'b0), .nav_act(nav_act),
         .hl_on(hl_on), .hl_x1(hl_x1), .hl_x2(hl_x2), .hl_y1(hl_y1), .hl_y2(hl_y2),

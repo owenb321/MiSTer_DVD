@@ -109,7 +109,9 @@ PYEOF
     mut "S15 applied restores not counted"       "load" \
         "rbusy <= 1'b0; verdict <= 3'd2; rcount <= rcount + 5'd1;" "rbusy <= 1'b0; verdict <= 3'd2; rcount <= rcount;"
     # ---- the exact landing (§10) ----
-    mut "S16 the seek fires before the NAV pack" "land" \
+    # S16/S19 also fail [keep]: keep_sel follows the landing (an HLI ends it only once the
+    # seek has fired), so an early seek or a refused load moves it with them
+    mut "S16 the seek fires before the NAV pack" "keep land" \
         "else if (pos_commit || (video_live && !live_d)) begin" "else begin"
     mut "S21 no picture fallback"                "land" \
         "else if (pos_commit || (video_live && !live_d)) begin" "else if (pos_commit) begin"
@@ -119,7 +121,7 @@ PYEOF
         "default: if (pgc_loaded) rs <= RS_IDLE;    // something else loaded first" "default: if (1'b0) rs <= RS_IDLE;"
     # S19: every LOAD carries the target word, so with it outside the sum every load
     # is refused, and every restore arm fails with it ([menusoff]'s "back on" load too)
-    mut "S19 the target not under the checksum"  "land load menusoff pending refuse" \
+    mut "S19 the target not under the checksum"  "keep land load menusoff pending refuse" \
         "8'd5: begin h_tm   <= io_din; h_acc <= h_acc + io_din; end" "8'd5: h_tm <= io_din;"
     mut "S20 the cell clock latched, not the PGC's" "pos" \
         "p_tm <= eltm;" "p_tm <= c_eltm;"
@@ -134,6 +136,20 @@ PYEOF
         "5'd2: dout_r <= {busy_s, vm_en, slot_l, ld_n, sv_n, len_s};" "5'd2: dout_r <= {busy_s, 1'b1, slot_l, ld_n, sv_n, len_s};"
     mut "S25 a load with Disc Menus off accepted" "menusoff" \
         "else if (!vm_en)                verdict <= 3'd7;   // Disc Menus off: never taken" "else if (1'b0)                  verdict <= 3'd7;"
+
+    # ---- the restored highlight (keep_sel -> nav_pci; Mad Dog's route menu) ----
+    mut "S31 keep_sel never set"                 "keep" \
+        "keep_sel <= 1'b1; own_pgc <= 1'b0;" "keep_sel <= 1'b0; own_pgc <= 1'b0;"
+    mut "S32 an HLI before the seek takes it"    "keep" \
+        "end else if (hli_arm && own_pgc && rs == RS_IDLE)" "end else if (hli_arm && own_pgc)"
+    mut "S33 a later PGC does not end it"        "keep" \
+        "if (own_pgc) keep_sel <= 1'b0;   // a later PGC: not the landing's" "if (1'b0) keep_sel <= 1'b0;"
+    mut "S34 the restore's own PGC ends it"      "keep" \
+        "if (own_pgc) keep_sel <= 1'b0;   // a later PGC: not the landing's" "keep_sel <= 1'b0;"
+    mut "S35 a mount does not end it"            "keep" \
+        "end else if (mount) begin
+            keep_sel <= 1'b0; own_pgc <= 1'b0;" "end else if (1'b0) begin
+            keep_sel <= 1'b0; own_pgc <= 1'b0;"
 
     # ---- the Audio / Subtitle write-back (dvd_vm.sv) ----
     vmmut() {   # like mut, on dvd/dvd_vm.sv

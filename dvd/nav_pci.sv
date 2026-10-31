@@ -169,6 +169,11 @@ module nav_pci #(
     // 0 = no VM value (legacy / nav_pci_tb default): the reset default 1 stands.
     input  wire  [5:0] hl_btnn,
 
+    // A save state's restore (vm_snap keep_sel, a level): the selection re-seeded from
+    // the restored SPRM8 beats the next HLI's forced select (fosl), so a menu loads on
+    // the button it was saved on. Every other entry keeps libdvdnav's fosl. 0 = off.
+    input  wire        keep_sel,
+
     // NUMPAD select+activate (keyboard digit key = DVD-remote number shortcut):
     // a 1-cycle pulse forces the selection to `num_btn` (1-based) AND activates it
     // once the button record is fetched, so the fired btn_cmd is the freshly-loaded
@@ -851,7 +856,12 @@ always @(posedge clk or negedge rst_n) begin
                 // hli_ss==2/3 are CONTINUATIONS of the same HLI: re-applying
                 // fosl there would fight the player's own D-pad, so they are
                 // excluded (same test the foac commit above uses).
-                if (nxt_fosl != 6'd0 && nxt_fosl <= nxt_btn_ns &&
+                // A restore's landing keeps the restored selection when it is a
+                // button of this HLI (keep_sel; Mad Dog's route menu, fosl 1, saved
+                // on button 2). Otherwise the rules below, as on any entry.
+                if (keep_sel && btn_sel != 6'd0 && btn_sel <= nxt_btn_ns)
+                    ;                                // the restored button stands
+                else if (nxt_fosl != 6'd0 && nxt_fosl <= nxt_btn_ns &&
                     (!armed || nxt_ss == 2'd1))
                     btn_sel <= nxt_fosl;             // forced select on a NEW HLI
                 else if (btn_sel == 6'd0 || btn_sel > nxt_btn_ns)

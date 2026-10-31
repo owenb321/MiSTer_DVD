@@ -41,6 +41,7 @@ module nav_pci_tb;
     // value" = the pre-2026-09-14 behaviour, so TESTS 1-18 are bit-identical;
     // sel_force is likewise only driven by TEST 19.
     logic [5:0] hl_btnn = 6'd0;
+    logic keep_sel = 0;   // vm_snap: a restore's landing keeps the restored button (TEST 20)
     logic sel_force = 0;
     logic [5:0] sel_force_btn = 6'd0;
 
@@ -66,6 +67,7 @@ module nav_pci_tb;
         .stc_reanchor(stc_reanchor),
         .sel_force(sel_force), .sel_force_btn(sel_force_btn),
         .hl_btnn(hl_btnn),
+        .keep_sel(keep_sel),
         .num_sel(num_sel), .num_btn(num_btn),
         .nav_up(nav_up), .nav_dn(nav_dn), .nav_lf(nav_lf), .nav_rt(nav_rt),
         .nav_act(nav_act),
@@ -543,6 +545,35 @@ module nav_pci_tb;
             hl_btnn = 6'd0;
         end else begin
             $display("T19: Scooby grid fixture absent -> SKIPPED (regen with tools/nav_extract.py)");
+        end
+
+        // ---- TEST 20: A SAVE STATE'S RESTORE KEEPS ITS BUTTON (2026-10-30, Mad Dog's
+        //      route menu: fosl 1, saved on button 2, loaded on button 1). With
+        //      keep_sel up, the restored SPRM8 (seeded from hl_btnn) beats the new
+        //      HLI's forced select. T19e above is the control: keep_sel low, fosl wins.
+        //      Same fosl=5 fixture as T19e (built by TEST 16).
+        if (nav[10240 + OFF_FOSL] !== 8'hXX) begin
+            nav[10240 + OFF_SS] = 8'h01;
+            keep_sel = 1'b1; hl_btnn = 6'd3;
+            rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; @(posedge clk);
+            stc = 33'd0;
+            feed_pci(10240);
+            stc = 33'd3000100;
+            repeat (160) @(posedge clk);
+            $display("T20a: armed=%b sel=%0d (restored 3, fosl 5, keep_sel 1)", btns_armed, btn_sel);
+            chk(btns_armed === 1'b1, "T20a the HLI armed");
+            chk(btn_sel == 6'd3, "T20a a restore's landing keeps the restored button over fosl");
+            // T20b: a restored button that is not one of this HLI's falls back to fosl
+            hl_btnn = 6'd40;
+            rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; @(posedge clk);
+            stc = 33'd0;
+            feed_pci(10240);
+            stc = 33'd3000100;
+            repeat (160) @(posedge clk);
+            chk(btn_sel == 6'd5, "T20b restored button 40 > btn_ns -> fosl (5), not kept");
+            keep_sel = 1'b0; hl_btnn = 6'd0;
+        end else begin
+            $display("T20: fosl fixture absent -> FAIL"); errors++;
         end
 
         if (errors == 0) $display("NAV_PCI_TB: ALL TESTS PASSED");

@@ -72,6 +72,9 @@ SNAP_PORTS = {
     # per press, the Slot row, and Disc Menus (the VM's own enable: a restore needs it)
     'ui_save': 'ss_save_edge', 'ui_load': 'ss_load_edge', 'ui_slot': 'status[54:53]',
     'vm_en': 'menus_on',
+    # the restored highlight (docs/nav_engine.md §11c): nav_pci's arms end keep_sel,
+    # which nav_pci reads (pinned on both ends below)
+    'hli_arm': 'hli_arm_w', 'keep_sel': 'ss_keep_sel',
 }
 VM_PORTS = {'snap_req': 'vm_snap_req', 'snap_we': 'vm_snap_we', 'snap_d': 'vm_snap_d',
             'snap_done': 'vm_snap_done', 'snap_fmt': 'vm_snap_fmt',
@@ -143,6 +146,8 @@ def run(txt, verbose=True):
            f'ss_{n}_edge = the rising edge of status[{b}]')
     pc = connections(em, 'nav_pci')
     pin(pc, 'nav_pci', 'vobu_sptm', 'hl_vobu_sptm_w')
+    pin(pc, 'nav_pci', 'keep_sel', 'ss_keep_sel')      # a restore's landing keeps its button
+    pin(pc, 'nav_pci', 'hli_arm', 'hli_arm_w')         # ...and the arm that ends it is nav_pci's
     ds = connections(em, 'nav_dsi')
     for port, want in DSI_PORTS.items():
         pin(ds, 'nav_dsi', port, want)
@@ -234,6 +239,9 @@ def run(txt, verbose=True):
 
 
 MUTATIONS = [
+    ('emu', ".keep_sel   (ss_keep_sel),", ".keep_sel   (1'b0),", 'nav_pci never keeps the restored button'),
+    ('emu', ".hli_arm        (hli_arm_w),        // the landing's HLI ends keep_sel",
+     ".hli_arm        (1'b0),        // the landing's HLI ends keep_sel", 'keep_sel never ends (no HLI arm)'),
     ('emu', '.nv_pck_lbn   (dsi_nv_pck_lbn),', '.nv_pck_lbn   (lin_blk_w),', 'position from the fetch pointer'),
     ('emu', '.first_ref_ea (dsi_1stref_ea),', '.first_ref_ea (dsi_vobu_ea),', 'has_video from the VOBU end'),
     ('emu', '.pos_clr      (load_flush),', ".pos_clr      (1'b0),", 'freshness never cleared'),
