@@ -1087,5 +1087,11 @@ choice; and a resume that has already happened leaves no way to start from the b
 - **Gates:** `main/tests/run_tests.sh --red` (`dvd_sstate_test` [16]/[17]; mutations `ss-auto-no-grace`,
   `-menus-off`, `-no-fresh-guard`, `-long-wait`, `-session`, `-mount-hook`, `-save-target`, `-slot-decode`,
   `-no-rename`); `run_vm_snap.sh --red` (S38/S39, `[ui]`); `check_vm_snap_wiring.py` (the Slot row, `ui_auto`).
-- **Next:** HIL on the rig (T2 mid-film -> mount another disc -> remount T2 -> Slot=Autosave -> Load Slot; a
-  core switch to the menu and back; Mad Dog's button scene), then merge.
+- **HIL (2026-11-01, `DVD_autosave_20261101_0136`, fit PASS: clk_dec 88.68 / clk_mem 100.19 MHz worst corner,
+  SEED 7, 520 M10K, 84 DSP):** T2 at its menu (fresh, >10 s after the mount) -> an MGL launch of another disc wrote
+  `DVD-474c...auto.ss` (96 words) -> remounting T2 and pressing Load Slot with Slot = Autosave logged `Loaded
+  autosave` and put the reader back at VTSM 1 PGC 1 cell 3 -> `load_core menu.rbf` rewrote the file (mtime moved, log
+  line at the core switch), so step 60 fires on a real core exit. The harness cannot press the Slot row's menu entry; the
+  Load press was `osd [56] 1/0` over `/tmp/dvd_ctl`, which is the same status bit.
+  Not yet run on the rig: a film position (exact landing) from an autosave, Mad Dog's button scene, a physical disc.
+- **Next:** by-hand check of the OSD (Slot -> Autosave) and a film autosave, then merge.
