@@ -22,6 +22,13 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **PLAIN .ISO BEHIND THE READ-AHEAD (2026-11-01, `feature/iso-readahead`; host tests green; HIL A/B
+  on the rig).** `dvd_css_open_image()` claims every `.iso` it can open, so a decrypted rip on a NAS gets
+  the ring. 20 s CIFS drop: control froze the Main 13.5 s with 12.1 s of silence and 728 lates; with the
+  ring, none of it, and one `slow read` of 13.9 s in the log. Also plays from a read-only share (control
+  black). Chapter-skip refill unchanged. Refuted on the way: a 5 s drop shows nothing even on the control
+  (CIFS `rsize` 4 MB). Design, rejected options, limitations: `physical_disc.md` "A plain .iso behind the
+  ring". **Next:** merge, then a new v0.10.0 release commit and `.rbf`; `bf15766`'s build was never shipped.
 - ✅ **AUTOSAVE AT A DISC CHANGE AND A CORE EXIT (2026-10-31, `feature/autosave`; host
   tests green; HW: menu swap + core exit + Load verified, maintainer's play-test OK; MERGED).** The Main writes `savestates/DVD/<id>_auto.ss` silently when a new disc is
   mounted, a disc is ejected (`dvd_sstate_note_mount`) and a core is switched (`fpga_load_rbf`,

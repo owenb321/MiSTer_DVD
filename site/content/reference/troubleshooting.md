@@ -12,7 +12,8 @@ read-write (`O_RDWR|O_SYNC`) whether or not anything writes to them, so a read-o
 fails and you get silence with no diagnostic. The same file plays fine from the SD card,
 which makes it look like a size or filesystem problem.
 
-**Fix:** re-mount the share read-write.
+**Fix:** re-mount the share read-write. Only an `.iso` with `MiSTer_DVDcss` installed plays
+from a read-only share, because it opens read-only.
 
 !!! note "Why there is no message"
     The absence of one is the clue. `UNSUPPORTED IMAGE` is raised only after the core has
@@ -423,22 +424,23 @@ appreciably longer than a frame, or if the picture does not recover on its own.
 Changing `Video Output` mid-title goes through the same landing sequence — see
 [Switching mid-title](../video/interlaced.md).
 
-### Playback pauses or skips for a moment on a physical disc
+### Playback pauses or skips for a moment on a physical disc or an `.iso`
 
-The player reads a disc up to about 25 seconds ahead into memory. A drive's brief
-stalls therefore don't reach the picture: the change between the layers of a
-dual-layer disc, the drive spinning back up, or a scratched sector being retried.
-The same applies to VCD/SVCD and audio CDs in the drive, and to an encrypted `.iso`.
+With `MiSTer_DVDcss` installed, the player reads up to about 25 seconds ahead into
+memory. A brief stall therefore doesn't reach the picture: the change between the layers
+of a dual-layer disc, the drive spinning back up, a scratched sector being retried, or a
+network share that stops answering. The same applies to VCD/SVCD and audio CDs in the
+drive, and to every `.iso`, encrypted or not.
 
 If a hitch still happens, look in `/tmp/dvdcss.log` over SSH, and include it in a bug report:
 
-- `slow read` lines mean the drive itself stalled at that point on the disc.
+- `slow read` lines mean the drive or the share itself stalled at that point on the disc.
 - `readahead: ring ran dry` lines mean the stall outlasted what was buffered, and
   say how long playback waited.
 - A hitch with **neither** kind of line is not a problem reading the disc.
 
-A decrypted `.iso` played from a network share is not buffered this way yet, so a
-network hiccup can still interrupt it.
+Other files on a share (`.VOB`, `.mpg`, a VCD's `.bin`), and everything on the stock Main,
+are not buffered this way, so a network hiccup can still interrupt them.
 
 ### A thin partial line across the top or bottom of the picture
 

@@ -17,6 +17,7 @@ that when something does not play, you can tell which piece is missing.
 | Analog/CRT output, closed captions, HUD, seeking | ✓ | ✓ | ✓ |
 | Gamepad or keyboard control | ✓ | ✓ | ✓ |
 | **IR / media-remote keys with nothing to map** — *stock Main passes only arrows, Enter and volume* | — | ✓ | ✓ |
+| **`.iso` read ahead into memory** — *rides out network stalls; plays from a read-only share* | — | ✓ | ✓ |
 | **Physical disc — unencrypted** | — | ✓ | ✓ |
 | **Physical disc — CSS-encrypted** *(most commercial discs)* | — | — | ✓ |
 | **CSS-encrypted ISO** — *no optical drive needed* | — | — | ✓ |

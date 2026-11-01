@@ -132,7 +132,8 @@ core cuts to black and starts the new one cleanly.
 ## If nothing happens
 
 A black screen with the core sitting idle and **no message at all** is almost always a
-**read-only network share** — see the warning in
+**read-only network share** (an `.iso` with `MiSTer_DVDcss` installed is the exception) —
+see the warning in
 [Discs and images](discs-and-images.md#where-to-keep-them). No message means the core never
 received the file; it is not the same as `UNSUPPORTED IMAGE`, which means the file was read
 and could not be played.

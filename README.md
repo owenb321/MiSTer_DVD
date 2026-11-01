@@ -115,6 +115,7 @@ Steps 2 and 3 are one-time — **updating later is just the new zip.**
 
 > **If a network share gives you a black screen and no error, it is mounted read-only.**
 > The framework opens images read-write regardless, so a read-only mount fails silently.
+> Only an `.iso` with `MiSTer_DVDcss` installed plays from one.
 
 [Full installation guide →](https://owenb321.github.io/MiSTer_DVD/getting-started/install/)
 
