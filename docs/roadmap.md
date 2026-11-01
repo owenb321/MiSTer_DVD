@@ -637,7 +637,9 @@ Follow-ups, all pre-existing and outside #176:
   against libdvdnav);
 - still unchecked by hand: a gapless in-title loop (Fairytopia), Mad Dog II, Crime Patrol.
 
-### ⏳ Save states: full save states only, in four steps (agreed 2026-10-26)
+### ✅ Save states MERGED (PR #181, #182); autosave in `feature/autosave` (`nav_engine.md` §11i; auto-resume on mount is the next step if users ask)
+
+(Original plan, four steps, agreed 2026-10-26:)
 
 The maintainer wants **full** save states (slots, any point, interactive discs included),
 not the per-disc resume of `feature/resume` on its own. The shelved design and its HW

@@ -41,7 +41,7 @@ EXPECTED = {
     'Screensaver': (47, 48),
     'Analog Dither': (8, 8),
     'Analog CSync': (46, 46),         # P1O[46]
-    'Slot': (57, 59),                 # P2O[59:57] (8 slots; 53-54 retired); Save R[55], Load R[56]
+    'Slot': (57, 60),                 # P6O[60:57] (8 slots + Autosave; 53-54 retired); Save R[55], Load R[56]
 }
 
 fails = 0

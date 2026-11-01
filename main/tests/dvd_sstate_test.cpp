@@ -21,6 +21,12 @@
 //        Menus off as it landed (7), a checksum the transfer broke (5)
 //   [12] a snapshot that never comes ends in a message at 3 s, not a hang
 //   [13] nothing happens while an MGL launch is running; the press is served after
+//   [14] eight slots    [15] buttons armed at the save: the file carries no time
+//   [16] autosave: a mount or a core switch writes <id>_auto.ss silently, atomically,
+//        and never over a slot; skipped with no identity, Disc Menus off, nothing played,
+//        inside the first seconds of a mount, another core running, or a VM that never rests;
+//        a skip leaves the old autosave alone
+//   [17] the Slot row's Autosave value: Save refuses, Load sends the autosave file
 //
 // The modules are #included, so this exercises the real code. The core is a model of
 // dvd/vm_snap.sv's 0x7D protocol (its header comment), scripted per arm.
@@ -39,11 +45,12 @@ static char log_path[64];
 #define DVD_SSTATE_LOG log_path
 static unsigned fake_now = 1000;
 #define DVD_SSTATE_NOW_MS() fake_now
+#define DVD_SSTATE_SLEEP_MS(ms) (fake_now += (ms))   // the autosave's wait spends the fake clock
 
 // ---------------------------------------------------------------- the fake core
 static int      core_present = 1;
 static uint16_t core_seq = 4, core_fmt = 0x3f84, core_w2_req = 0;   // w2 bits 13:7 (slot 13:11, load_n 10:9, save_n 8:7)
-static int      core_vm_en = 1;
+static int      core_vm_en = 1, core_auto = 0;          // core_auto: word 4 bit 3
 static int      core_busy = 0, core_busy_for = 0;      // fetches answered busy
 static int      core_len = 0;
 static uint16_t core_words[128];
@@ -85,7 +92,7 @@ static uint16_t spi_w(uint16_t x)
 		int v = core_verdict;
 		if (v == 1 && core_pending_for-- <= 0)
 			v = core_verdict = (core_verdict_override >= 0 ? core_verdict_override : 2);
-		return (uint16_t)(v << 13 | core_hdr[4]);
+		return (uint16_t)(v << 13 | (core_auto ? 8 : 0) | core_hdr[4]);
 	}
 	if (tx_k < 19) return core_hdr[tx_k];
 	int i = tx_k - 19;
@@ -113,7 +120,8 @@ static void DisableIO(void)
 static int  fake_ui_busy = 0;
 static char last_info[128];
 static int  n_info = 0;
-static int is_dvd(void) { return 1; }
+static int fake_is_dvd = 1;
+static int is_dvd(void) { return fake_is_dvd; }
 static const char *OsdCoreNameGet(void) { return "DVD dev-vmsnap 261027"; }
 static void InfoMessage(const char *m, int = 0, const char * = 0)
 {
@@ -190,6 +198,8 @@ static void tick(void) { fake_now += 25; dvd_sstate_tick(); }
 static void press(int save, int slot)
 {
 	int sv = (core_w2_req >> 7) & 3, ld = (core_w2_req >> 9) & 3;
+	core_auto = slot == DVD_SSTATE_AUTO;               // the Slot row's ninth value: word 4 bit 3
+	if (core_auto) slot = 0;
 	if (save) sv = (sv + 1) & 3; else ld = (ld + 1) & 3;
 	core_w2_req = (uint16_t)(slot << 11 | ld << 9 | sv << 7);
 }
@@ -380,6 +390,86 @@ int main(void)
 	for (int i = 0; i < 10; i++) tick();
 	check(ld_tm == 0xFFFF, "armed: the load asks for the saved cell's start (0xFFFF)");
 	core_hdr[4] &= (uint16_t)~4;
+
+
+	printf("[16] autosave\n");
+	char apath[256], bp[400]; uint8_t a1[400], a2[400];
+	snprintf(apath, sizeof(apath), "%s/DVD/%s_auto.ss", save_dir, id1);
+	snprintf(bp, sizeof(bp), "%s.tmp", apath);
+	auto slurp = [&](const char *pp, uint8_t *b) { int n = 0; FILE *ff = fopen(pp, "rb"); if (ff) { n = (int)fread(b, 1, 400, ff); fclose(ff); } return n; };
+	core_hdr[4] = 3;                                   // fresh, has video
+	core_busy_for = 0;
+	dvd_sstate_note_mount(iso);                        // a (re)mount: the grace starts now
+	int a0b = n_asks, i0 = n_info;
+	dvd_sstate_autosave_flush();
+	check(n_asks == a0b && !FileExists(apath), "inside the grace after a mount: nothing is written");
+	fake_now += 11000;
+	dvd_sstate_autosave_flush();
+	int la = slurp(apath, a1);
+	check(n_asks == a0b + 1 && la == 64 + 192, "after the grace a flush writes _auto.ss (64 + 96 words)");
+	check(!FileExists(bp), "no .tmp is left behind (renamed over the file)");
+	check(n_info == i0, "it raises no UI");
+	check(la == 64 + 192 && check_file(a1, la) == 96 && (int32_t)get32(a1 + 20) == 771,
+	      "the file is a valid snapshot of this disc, landing at the picture's second");
+	snprintf(path, sizeof(path), "%s/DVD/%s_3.ss", save_dir, id1);
+	check(FileExists(path), "the numbered slots are still there");
+
+	for (int i = 0; i < 96; i++) core_words[i] = (uint16_t)(0x2000 + i * 3);   // the player moves on
+	core_vm_en = 0;
+	dvd_sstate_autosave_flush();
+	check(slurp(apath, a2) == la && !memcmp(a1, a2, la) && n_asks == a0b + 1, "Disc Menus off: skipped, the old file kept");
+	core_vm_en = 1;
+	core_hdr[4] = 1;                                   // has video, but no NAV pack since the flush
+	dvd_sstate_autosave_flush();
+	check(slurp(apath, a2) == la && !memcmp(a1, a2, la), "nothing played (not fresh, not armed): the old file kept");
+	core_hdr[4] = 3;
+	core_busy_for = 1000000; core_busy = 0;
+	unsigned t0 = fake_now;
+	dvd_sstate_autosave_flush();
+	check(fake_now - t0 >= 300 && fake_now - t0 < 400, "a VM that never rests: waits ~300 ms and gives up");
+	check(slurp(apath, a2) == la && !memcmp(a1, a2, la), "...and the old file is kept");
+	core_busy = 0; core_busy_for = 0;
+	fake_is_dvd = 0; tick(); fake_is_dvd = 1;          // another core ran: a new session
+	fake_now += 11000;
+	int a1b = n_asks;
+	dvd_sstate_autosave_flush();
+	check(n_asks == a1b, "after another core ran, no flush until a mount (nothing to keep)");
+	dvd_sstate_note_mount(iso);
+	fake_now += 11000;
+	dvd_sstate_autosave_flush();
+	check(slurp(apath, a2) == la && memcmp(a1, a2, la) != 0, "a mount, then a flush: the autosave moves on to the new state");
+	memcpy(a1, a2, la);
+
+	for (int i = 0; i < 96; i++) core_words[i] = (uint16_t)(0x3000 + i * 5);   // moves on again
+	fake_now += 11000;
+	a1b = n_asks;
+	dvd_sstate_note_mount(rip);                        // a new mount flushes the OLD disc's place itself
+	check(n_asks == a1b + 1 && slurp(apath, a2) == la && memcmp(a1, a2, la) != 0,
+	      "a mount (no explicit flush) writes the autosave of the disc being left");
+	fake_now += 11000;
+	dvd_sstate_note_mount(vcd);                        // ...and a disc with no identity has none to keep
+	a1b = n_asks;
+	fake_now += 11000;
+	dvd_sstate_autosave_flush();
+	check(n_asks == a1b, "no disc identity: no autosave");
+	dvd_sstate_note_mount(iso);
+	for (int i = 0; i < 96; i++) core_words[i] = (uint16_t)(0x1000 + i * 7);
+
+	printf("[17] the Autosave value of the Slot row\n");
+	a1b = n_asks;
+	press(1, DVD_SSTATE_AUTO);
+	tick(); tick();
+	check(n_asks == a1b && !strcmp(last_info, "Autosave is written for you"), "Save to Slot on Autosave is refused");
+	int l17 = n_loads;
+	press(0, DVD_SSTATE_AUTO);
+	for (int i = 0; i < 10; i++) tick();
+	check(n_loads == l17 + 1 && !strcmp(last_info, "Loaded autosave"), "Load Slot on Autosave sends _auto.ss, says Loaded autosave");
+	remove(apath);
+	l17 = n_loads;
+	press(0, DVD_SSTATE_AUTO);
+	for (int i = 0; i < 4; i++) tick();
+	check(n_loads == l17 && !strcmp(last_info, "Autosave is empty"), "no autosave file: says Autosave is empty");
+	core_auto = 0;
 
 	printf(fails ? "dvd_sstate_test: %d FAILED\n" : "dvd_sstate_test: ALL GREEN\n", fails);
 	return fails ? 1 : 0;

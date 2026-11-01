@@ -94,7 +94,7 @@ module vm_snap_tb;
     reg        hli_arm = 0;   // nav_pci: an HLI with buttons armed ([keep])
     reg        hl_armed = 0;  // nav_pci btns_armed: buttons armed now ([armed])
     wire       keep_sel;
-    reg        ui_save = 0, ui_load = 0; reg [2:0] ui_slot = 0;
+    reg        ui_save = 0, ui_load = 0; reg [2:0] ui_slot = 0; reg ui_auto = 0;
     wire       rst_seek_pulse; wire [16:0] rst_seek_secs; wire [31:0] rst_seek_rbn;
     // ---- the position ----
     reg        pos_clr = 0, pos_commit = 0;
@@ -151,7 +151,7 @@ module vm_snap_tb;
         .eltm(eltm), .vobu_sptm(vobu_sptm), .stc(stc), .pgc_loaded(pgc_loaded),
         .video_live(video_live), .menu_active(menu_active), .mount(mount),
         .rst_seek_pulse(rst_seek_pulse), .rst_seek_secs(rst_seek_secs), .rst_seek_rbn(rst_seek_rbn),
-        .ui_save(ui_save), .ui_load(ui_load), .ui_slot(ui_slot), .vm_en(enable),
+        .ui_save(ui_save), .ui_load(ui_load), .ui_slot(ui_slot), .ui_auto(ui_auto), .vm_en(enable),
         .hli_arm(hli_arm), .keep_sel(keep_sel), .hl_armed_in(hl_armed));
 
     reg drive_seen = 1'b0;
@@ -318,16 +318,29 @@ module vm_snap_tb;
         @(negedge clk) ui_load = 1; @(negedge clk) ui_load = 0;
         txn(CMD, 16'd0, 4);
         check(w[2][13:11] === 3'd7, "slot 8 does not reach word 2");
+        // the Slot row's ninth value, Autosave: word 4 bit 3, latched AT the press
+        check(w[4][3] === 1'b0, "auto is set before any Autosave press");
+        ui_auto = 1;
+        @(negedge clk) ui_load = 1; @(negedge clk) ui_load = 0;
+        ui_auto = 0;                                   // moved after the press
+        txn(CMD, 16'd0, 5);
+        check(w[4][3] === 1'b1, "an Autosave press does not set word 4 bit 3");
+        check(w[2][13:11] === 3'd7 && w[2][10:9] === 2'd3, "an Autosave press disturbed word 2");
+        @(negedge clk) ui_load = 1; @(negedge clk) ui_load = 0;
+        txn(CMD, 16'd0, 5);
+        check(w[4][3] === 1'b0, "a later slot press does not clear auto");
+        check(w[4][15:5] === 11'd0, "auto disturbed word 4's other bits");
         for (i = 0; i < 3; i = i + 1) begin @(negedge clk) ui_save = 1; @(negedge clk) ui_save = 0; end
-        txn(CMD, 16'd0, 4);
+        txn(CMD, 16'd0, 5);
         check(w[2][8:7] === 2'd0, "save_n does not wrap at 4");
         check(w[2][14] === 1'b1, "vm_en is not set with enable on");
         check(w[2][15] === 1'b0 && w[2][6:0] === 7'd0, "the presses disturbed busy/len");
         end_arm;
         // put word 2's request fields back to 0 so the arms below read busy/len plainly
-        // [ui] left load_n at 2 (the slot-2 and slot-8 loads): two more wrap it to 0
-        @(negedge clk) ui_load = 1; @(negedge clk) ui_load = 0;
-        @(negedge clk) ui_load = 1; ui_slot = 3'd0; @(negedge clk) ui_load = 0;
+        // [ui] left load_n at 0 (four loads, the slot-8 ones included) with slot 8 latched:
+        // four more presses at slot 1 put the slot back and wrap load_n to 0 again
+        ui_slot = 3'd0;
+        for (i = 0; i < 4; i = i + 1) begin @(negedge clk) ui_load = 1; @(negedge clk) ui_load = 0; end
 
         // give the VM a state worth reading: distinct RAM words, SPRMs, wrapper state
         for (i = 0; i < 40; i = i + 1) vm.u_seq.dram[i] = 16'h1000 + i * 16'h0101;

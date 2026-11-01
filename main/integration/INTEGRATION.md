@@ -716,3 +716,16 @@ words per 20 ms unless a request counter moved, and it defers entirely while
 
 All three anchors are lines the overlay itself inserts, so they add no stock anchor to
 re-verify on a `MAIN_MISTER_REF` bump.
+
+## Step 60 — autosave on a core switch (`fpga_io.cpp`)
+
+`60` `dvd_sstate_autosave_flush();` at the top of `fpga_load_rbf()`, after
+`OsdDisable();\n\tstatic char path[1024];`, plus the include after the hdmi-audio one. Every
+core switch goes through that function (the OSD core browser, an MGL, the return to
+`menu.rbf`) and the DVD core is still running at its top: the flush reads the VM's
+snapshot over SPI, which is impossible after `fpga_core_reset(1)`. It is silent, bounded
+(~300 ms) and does nothing unless a DVD-Video disc has been playing. The new-mount case needs
+no step: `dvd_sstate_note_mount` (step 58) calls the flush itself. **One stock anchor**
+(`OsdDisable();` + `static char path[1024];`, unique at `7317947`): re-verify it on a
+`MAIN_MISTER_REF` bump. Power-off and the reset button never reach it. Detail:
+`docs/nav_engine.md` §11i.

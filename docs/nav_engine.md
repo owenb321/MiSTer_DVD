@@ -1037,3 +1037,61 @@ is identical every time (`PGC 11/1`, `CELL 0`, the first window's `HLI_ARM` at 0
   for menu-domain loads (a menu restore does not restore it, by design) and treats a PGC change
   between its samples as a warning, not a stuck picture.
 
+
+### 11i. Autosave at a disc change and a core exit (2026-10-31, `feature/autosave`)
+
+**Request (maintainer):** keep the place automatically when a new disc is loaded or the core is
+left. **Decision:** restore by hand (a ninth value of the Slot row, `Autosave`, with the existing
+**Load Slot**), not a silent resume on mount. Auto-resume was weighed and left out (add it if users
+ask): a mount resets the VM and the First Play chain starts, so a LOAD sent early is refused
+(verdict 6) or overtaken by First Play's own jump; a physical disc's identity may resolve late
+(`phys_pending`) and `crack_title_keys` can block the very thread that would send it; the core's own
+remount of the last image and `dvd_phys_tick`'s automount reach the same mount call as a user's
+choice; and a resume that has already happened leaves no way to start from the beginning.
+
+- **File:** `savestates/DVD/<id>_auto.ss`, the slot-file format (`DVS2`), one per disc, replaced each
+  time. `dvd_sstate_slot_path(DVD_SSTATE_AUTO = 8)`. Slots 1-8 are never touched.
+- **OSD:** `P6O[60:57],Slot,1..8,Autosave`. Value 8 is bit 60 over a zero slot; bit 60 was never
+  allocated, so a saved config reads slots 1-8 as before and no `v,N` bump is needed. `vm_snap` takes
+  `ui_auto = status[60]` and latches it WITH the slot at each press (`auto_l`), reported in header
+  **word 4 bit 3**. Word 2 is full (`slot` took `len`'s top bit in §11d), so the flag rides in word 4's
+  spare bits; MAGIC stays 0x5E03 (an older core reports bit 3 = 0 = a numbered slot, correct). The Main
+  reads it with `dvd_vmsnap_peek4`. **Save to Slot** on Autosave says `Autosave is written for you`.
+- **When it is written** (`dvd_sstate_autosave_flush`, Main only):
+  1. `dvd_sstate_note_mount`, before it forgets the old identity: a new mount, and an eject (`teardown_to_idle`
+     mounts `""`). The core has not yet seen the mount, so the old disc is still playing.
+  2. `fpga_load_rbf()` (`main/integration` **step 60**, the one door every core switch uses: OSD core
+     list, MGL, the return to `menu.rbf`). At its top the DVD core still runs; its `fpga_core_reset(1)` comes
+     after the next `.rbf` is read. **One stock anchor** (`OsdDisable();` + `static char path[1024];`).
+- **How:** one `dvd_vmsnap_ask`, then `dvd_vmsnap_fetch` polled every 10 ms for at most 300 ms
+  (`AUTO_WAIT_MS`): the old disc is gone when the hook returns, so the save cannot be spread over ticks as a
+  manual one is. It blocks the poll thread for that long, at most, and only at a mount or a core switch.
+  Written to `<file>.tmp` (`O_SYNC`) and `rename()`d over the autosave, so a power cut mid-write keeps the
+  previous one. Silent (no `InfoMessage`): a core switch has no OSD, and the MGL rule (issue #48) forbids
+  UI during a launch.
+- **Guards (each skips silently and keeps the old file; each has its own arm):**
+  - no disc identity (`slot_path` fails); Disc Menus off (`VMSNAP_VM_EN`);
+  - **grace** `AUTO_GRACE_MS` = 10 s after the mount: the core's remount of the last disc at load, then an
+    immediate core switch, must not replace the place the user left with a boot;
+  - **`dvd_sstate_tick` clears the mount record while another core runs** (`mounted = 0`), so the first mount
+    of the next DVD session (the remount at load) is not flushed;
+  - the snapshot must report **pos_fresh or hl_armed** (word 4): no NAV pack and no buttons since the last
+    flush means the VM is at a logo or idle, and its state would overwrite a good autosave;
+  - a VM that never rests: give up at 300 ms.
+- **Known limitations:** power-off, the reset button and a crash never reach the hooks (a periodic write was
+  weighed, `feature/resume` used 30 s, and left out: it adds a snapshot request every interval). A disc left
+  at its First Play logos for more than 10 s, then swapped, still overwrites a better autosave (a logo has
+  pos_fresh). A physical disc whose identity was deferred (`phys_pending`) and never resolved is skipped. The
+  flush ignores the mount index, as `dvd_sstate_note_mount` does (`boot*.vhd` on slots 0-3 at init, when
+  `is_dvd()` is false anyway). §11g still applies: a state saved with buttons armed lands at the cell start.
+- **Gates:** `main/tests/run_tests.sh --red` (`dvd_sstate_test` [16]/[17]; mutations `ss-auto-no-grace`,
+  `-menus-off`, `-no-fresh-guard`, `-long-wait`, `-session`, `-mount-hook`, `-save-target`, `-slot-decode`,
+  `-no-rename`); `run_vm_snap.sh --red` (S38/S39, `[ui]`); `check_vm_snap_wiring.py` (the Slot row, `ui_auto`).
+- **HIL (2026-11-01, `DVD_autosave_20261101_0136`, fit PASS: clk_dec 88.68 / clk_mem 100.19 MHz worst corner,
+  SEED 7, 520 M10K, 84 DSP):** T2 at its menu (fresh, >10 s after the mount) -> an MGL launch of another disc wrote
+  `DVD-474c...auto.ss` (96 words) -> remounting T2 and pressing Load Slot with Slot = Autosave logged `Loaded
+  autosave` and put the reader back at VTSM 1 PGC 1 cell 3 -> `load_core menu.rbf` rewrote the file (mtime moved, log
+  line at the core switch), so step 60 fires on a real core exit. The harness cannot press the Slot row's menu entry; the
+  Load press was `osd [56] 1/0` over `/tmp/dvd_ctl`, which is the same status bit.
+  Not yet run on the rig: a film position (exact landing) from an autosave, Mad Dog's button scene, a physical disc.
+- **Next:** by-hand check of the OSD (Slot -> Autosave) and a film autosave, then merge.

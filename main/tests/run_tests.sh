@@ -883,7 +883,44 @@ if [ "$RED" -eq 1 ]; then
     # eight slots (2026-10-30): the path builder kept the old four-slot bound
     red_case dvd_sstate.cpp dvd_sstate_test.cpp \
         "FAIL says Saved to slot 8" \
-        "s/slot >= DVD_SSTATE_SLOTS/slot > 3/" ss-four-slots
+        "s/slot > DVD_SSTATE_AUTO/slot > 3/" ss-four-slots
+    # ---- autosave (docs/nav_engine.md §11i): each guard has an arm that fails alone ----
+    # no grace: a core's own remount, then a core switch, replaces the place the user left with a boot
+    red_case dvd_sstate.cpp dvd_sstate_test.cpp \
+        "FAIL inside the grace after a mount" \
+        "s/if (!mounted || ss_now_ms() - mount_t < AUTO_GRACE_MS) return;/if (!mounted) return;/" ss-auto-no-grace
+    # Disc Menus off: the VM is not running, its snapshot is a blank
+    red_case dvd_sstate.cpp dvd_sstate_test.cpp \
+        "FAIL Disc Menus off: skipped" \
+        "s/ || !VMSNAP_VM_EN(w2)) return;/) return;/" ss-auto-menus-off
+    # nothing played: a snapshot of the boot replaces a good autosave
+    red_case dvd_sstate.cpp dvd_sstate_test.cpp \
+        "FAIL nothing played" \
+        "s/if (!VMSNAP_FRESH(h\[4\]) \&\& !VMSNAP_ARMED(h\[4\]))/if (0)/" ss-auto-no-fresh-guard
+    # an unbounded wait would hang the poll thread (and the core switch) on a VM that never rests
+    red_case dvd_sstate.cpp dvd_sstate_test.cpp \
+        "FAIL a VM that never rests" \
+        "s/#define AUTO_WAIT_MS   300 /#define AUTO_WAIT_MS   3000 /" ss-auto-long-wait
+    # another core ran: the next DVD session's first mount would count as a place worth keeping
+    red_case dvd_sstate.cpp dvd_sstate_test.cpp \
+        "FAIL after another core ran" \
+        "s/if (!is_dvd()) { mounted = 0; return; }/if (!is_dvd()) return;/" ss-auto-session
+    # a mount must flush the disc it is leaving
+    red_case dvd_sstate.cpp dvd_sstate_test.cpp \
+        "FAIL a mount (no explicit flush)" \
+        "s/^\tdvd_sstate_autosave_flush();\$/\t(void)0;/" ss-auto-mount-hook
+    # the Autosave value is not a save target
+    red_case dvd_sstate.cpp dvd_sstate_test.cpp \
+        "FAIL Save to Slot on Autosave is refused" \
+        "s/if (slot == DVD_SSTATE_AUTO) { say(\"Autosave is written for you\", slot); return; }/(void)0;/" ss-auto-save-target
+    # the Autosave value must reach the file name
+    red_case dvd_sstate.cpp dvd_sstate_test.cpp \
+        "FAIL Load Slot on Autosave" \
+        "s/int slot = VMSNAP_AUTO(w4) ? DVD_SSTATE_AUTO : VMSNAP_SLOT(w2);/int slot = VMSNAP_SLOT(w2);/" ss-auto-slot-decode
+    # written in place, not beside and renamed: a power cut leaves half a file
+    red_case dvd_sstate.cpp dvd_sstate_test.cpp \
+        "FAIL no .tmp is left behind" \
+        "s/if (wrote != (int)len || rename(a_tmp, a_dst))/if (wrote != (int)len)/" ss-auto-no-rename
     # dvd_phys records the drive AFTER the mount: the identity hook sees no device
     red_case dvd_phys.cpp dvd_phys_test.cpp \
         "\[17\] mounts whose hooks saw no device" \
