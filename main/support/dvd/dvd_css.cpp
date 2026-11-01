@@ -1025,6 +1025,11 @@ static int open_plain_image(const char *path, const char *full, uint64_t size)
 		css_log("image %s: open(%s) failed (%s) -> direct path", path, full, strerror(errno));
 		return 0;
 	}
+	// The ring is the read-ahead. The kernel's own (4 MB at a time on a CIFS mount) is
+	// a transfer a jump has to wait out for data it no longer wants, and on a disc that
+	// jumps every 2 s the ring never fills, so one is nearly always in flight. Only
+	// advice: a filesystem that ignores it still plays, just with slower jumps.
+	posix_fadvise(raw_fd, 0, 0, POSIX_FADV_RANDOM);
 	raw_rd = file_read;
 	seek_log_arm();
 	css_size = size;

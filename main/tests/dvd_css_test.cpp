@@ -93,6 +93,13 @@ void dvd_cdda_close(void) {}
 int dvd_cdda_open_source(const dvd_cdda_toc *, dvd_cdda_frames_fn, void (*)(void)) { return -1; }
 void dvd_cdda_toc_service(void) {}
 
+// What a plain image asks of the kernel: the arm scores the advice, since a host's
+// local file shows no timing difference with or without it.
+#include <fcntl.h>
+static int fadv_fd = -1, fadv_advice = -1;
+static int stub_fadvise(int fd, off_t, off_t, int advice) { fadv_fd = fd; fadv_advice = advice; return 0; }
+#define posix_fadvise stub_fadvise
+
 #include "dvd_css.cpp"
 #include "dvd_readahead.cpp"
 
@@ -1032,6 +1039,7 @@ int main(void)
         check("[30] claimed", dvd_css_open_image(img), 1);
         check("[30] active", dvd_css_active(), 1);
         check("[30] ring running", dvd_ra_active(), 1);
+        check("[30] kernel read-ahead off, on this file", fadv_fd == raw_fd && fadv_advice == POSIX_FADV_RANDOM, 1);
         check("[30] size is the file's", (long)(dvd_css_size() == size), 1);
         check("[30] a window", local::ring_read(rw, 777, 8), 8);
         check("[30] it holds the file's sector", (long)get_lba(rw), 777);

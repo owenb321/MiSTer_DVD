@@ -15,6 +15,7 @@
 // in dvd_cdda.cpp (from before this module) does not apply: nothing slow is ever done
 // under it.
 #include <pthread.h>
+#include <sched.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,8 +29,8 @@
 #define RA_CAP      16384u   // sectors: 32 MB, ~25 s at the 10.08 Mbps DVD maximum
 #endif
 #define RA_BURST       32u   // sectors per source read in steady state (64 KB)
-#define RA_FIRST        8u   // first read after a retarget: one Main window, so a
-                             // seek costs what it cost before this module
+#define RA_FIRST        8u   // first read after a retarget: one Main window, the
+                             // smallest a seek can ask for
 #define RA_BEHIND     256u   // kept behind the consumer for the reader's re-requests
 #define RA_SLACK      256u   // a request this far past the fill is "on its way"
 #define RA_RETRIES      3    // single-sector attempts before a sector is zero-filled
@@ -152,6 +153,17 @@ static int stopping_or_moved(uint32_t g)
 
 static void *worker(void *)
 {
+	// Off the poll thread's core. main() pins itself to CPU 1 and this thread inherits
+	// that, but the poll loop never sleeps, so a read that finished waited for a turn
+	// on the busy core while CPU 0 sat idle: about half the extra cost of a jump
+	// (docs/physical_disc.md "What the ring costs a jump"). CPU 0 is where the stock
+	// Main's offload thread already goes.
+	cpu_set_t set;
+	CPU_ZERO(&set);
+	CPU_SET(0, &set);
+	if (sched_setaffinity(0, sizeof(set), &set) != 0)
+		ra_log("could not move the worker to CPU 0; jumps will be slower");
+
 	pthread_mutex_lock(&mx);
 	while (!stop_req)
 	{

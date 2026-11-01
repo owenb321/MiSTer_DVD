@@ -693,6 +693,50 @@ loads, 0 fails.
 ⚠ **A stall under ~5 s proves nothing on this rig.** CIFS `rsize=4194304` gives the kernel its
 own read-ahead, and a 5 s drop showed nothing on the control either. An A/B needs a longer one.
 
+### What the ring costs a jump (2026-11-01, ✅ HIL A/B on the rig, MERGED PR #186)
+
+PR #184's A/B measured a chapter skip on a film, which did not move. The v0.10.0 smoke test
+then found what it had missed: on an interactive disc, where every move is a jump, the ring
+doubled the time from a jump to video, while every `hil_suite` check stayed green. Two causes,
+neither in the ring's logic:
+
+1. **The kernel's read-ahead on top of ours.** A disc jumping every ~2 s never fills the ring,
+   so the worker is always reading, and a CIFS mount (`rsize` 4 MB) is always mid-transfer on
+   data the jump has just made useless. `open_plain_image()` now sets `POSIX_FADV_RANDOM`.
+   Plain images only: a drive and libdvdcss do not go through this file descriptor.
+2. **The worker on the poll thread's core.** `main()` pins itself to CPU 1 and the thread
+   inherited that, but the poll loop never sleeps, so a finished read waited for a turn while
+   CPU 0 sat idle. The worker now moves itself to CPU 0, as the stock offload thread does.
+   This one applies to every ring source: drive, encrypted image and plain image.
+
+**Measured (rig, CIFS, same `.rbf`, 3 runs per arm except where noted, NAS idle):**
+
+| | No ring | Ring | Ring + 1 (2 runs) | Ring + 1 + 2 |
+|---|---|---|---|---|
+| Dragon's Lair 20th, median jump | 0.11-0.12 s | 0.25-0.29 s | 0.18-0.20 s | 0.16 s |
+| Dragon's Lair 20th, worst jump | 0.17-0.32 s | 0.45-0.48 s | 0.32-0.46 s | 0.31-0.35 s |
+| Weakest Link, median jump | 0.06 s | 0.14 s | 0.13-0.14 s | 0.08-0.09 s |
+| Weakest Link, worst jump | 0.23-0.27 s | 0.39-0.50 s | 0.35-0.39 s | 0.21-0.36 s |
+| Dragon's Lair lates per run | 252-368 | 445-533 | 284-304 | 221-394 |
+| Weakest Link answers with no write | 0 | 1-3 | 0 | 0 |
+
+The 20 s CIFS drop stays clean with both (0 lates, no gap). **Accepted, by the maintainer's
+decision:** 20-40 ms per jump remain against no ring, the price of surviving a stall, most
+likely the in-flight burst a jump must finish before its own read starts. Not pursued:
+the fix would be cancelling a read, or dropping `RA_BURST`, which costs every other read.
+
+⚠ **An open question, not a measured fact:** one Dragon's Lair run on the unfixed ring, with
+`nav_offline --jobs 8` loading the same NAS, starved through a 2 s cell (28 lates, buffer near
+empty) so its window's NAV pack arrived after the window opened; the window armed only by the
+~1 s fallback, at the cell's end, and the move was lost. It did not recur in 4 idle runs on
+that Main. So a heavily loaded share can still cost a move; the ring cannot help a share that
+delivers below the video rate just after a jump, when it is empty.
+Under the same load the fixed Main played 3 runs with no wrong move (113 right, lates 228-290,
+median jump 0.26-0.32 s). That is a small sample, so the question stays open.
+
+**Instrument:** `tools/hil_jumps.py`, on any two `hil_suite` output directories. The suite's
+checks score where a jump lands, not how long it took.
+
 **Known limitations:**
 - `.iso` only: `.VOB`, `.mpg` and a VCD's `.bin` as plain files stay on the direct path, read-write
   and unbuffered. Nobody has asked; the same seam would take them.
@@ -775,8 +819,8 @@ the worker:
 - The ring is emptied at the new LBA and `gen` is bumped.
 - The burst already in flight for the old position has to finish first, since a
   drive command cannot be cancelled. Its data is then dropped by the `gen` check.
-- The first burst at the new LBA is 8 sectors, the same as stock Main's window, so a
-  seek costs about what it did before. The ring refills behind it.
+- The first burst at the new LBA is 8 sectors, the same as stock Main's window. The ring
+  refills behind it. What a seek still costs: "What the ring costs a jump".
 - ⚠ If that in-flight burst is stuck on a bad sector, the seek waits for it. The
   retry loop re-checks `gen` between attempts, so only the one read already in
   progress is waited out.

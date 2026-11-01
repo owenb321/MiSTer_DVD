@@ -228,6 +228,12 @@ if [ "$RED" -eq 1 ]; then
         "\[31\] a window past 4 GiB" \
         "s/if (eof \&\& (got % 2048))/if (0)/" \
         iso-plain-tail
+    # The kernel's read-ahead left on: every jump on a share waits out a transfer it no
+    # longer wants (rig: Dragon's Lair lates 252-368 -> 445-533 per run).
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "\[30\] kernel read-ahead off" \
+        "/posix_fadvise(raw_fd, 0, 0, POSIX_FADV_RANDOM);/d" \
+        iso-plain-kernel-ra
     # The file reader left behind: the next physical disc would pread its block device
     # instead of READ(10), which a drive refusing plain reads turns into a black screen.
     red_case dvd_css.cpp dvd_css_test.cpp \
@@ -515,6 +521,12 @@ if [ "$RED" -eq 1 ]; then
         "FAIL Main's own window is a hit" \
         "/return 1;                          \/\/ Main's own window has it/d" \
         ra-ignores-main-window
+
+    # The worker left on the poll thread's core: it waits for a turn after every read.
+    red_case dvd_readahead.cpp dvd_readahead_test.cpp \
+        "FAIL the worker's reads are on CPU 0 only" \
+        "s/^\tCPU_SET(0, \&set);/\tCPU_SET(1, \&set);/" \
+        ra-worker-on-poll-core
 
     # ---- the support bundle's argv (issue #81) ---------------------------------
     # The shipped-until-#81 behaviour: no NAV-pack capture at all, so a highlight
