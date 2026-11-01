@@ -1,0 +1,17 @@
+{
+ "_comment": "Copy to tools/.smoke_set.json (gitignored) and fill in images from YOUR library. Paths are relative to the rig's share_root (tools/.mister_rigs.json), never absolute. null = this rig has no such image; the report then says NODATA for that row instead of skipping it silently. See .claude/skills/release-smoke/SKILL.md.",
+ "film_ac3":      "<film with a multi-track AC-3 audio and subtitles>.iso",
+ "film_pacing":   "<a film from the decode-pacing census, e.g. a 16:9 progressive feature>.iso",
+ "film_dts":      "<disc with a DTS track>.iso",
+ "film_lpcm":     "<disc with an LPCM track>.iso",
+ "film_pal":      "<a PAL disc or .vob>",
+ "menu_disc":     "<disc with a multi-level menu, chapters and a Title menu>.iso",
+ "subs_many":     "<disc with 10+ subtitle streams>.iso",
+ "sstate_menu":   "<interactive menu game that keeps progress in GPRMs>.iso",
+ "vob":           "<a loose VTS_xx_y.VOB>",
+ "mpeg1_vob":     "<an MPEG-1 program stream>.vob",
+ "vcd_bin":       "<a VCD track>.bin",
+ "vcd_cue":       "<a VCD or audio CD>.cue",
+ "svcd_mpg":      "<an SVCD>.mpg",
+ "wav":           "<a CD-DA rip>.wav"
+}
