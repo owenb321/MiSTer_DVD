@@ -123,9 +123,12 @@ would cost a second compile.
    checking out the SHA from the manifest rather than `refs/tags/`. Do not "simplify" it to
    `on: release`.
 
-6. **Smoke-test the draft, then publish.** This is the point of drafting: download the zip
-   CI attached, flash the `.rbf`, confirm the core boots, mounts a disc and plays, and that
-   the OSD About line reads `DVD v<semver> <yymmdd>`.
+6. **Smoke-test the draft, then publish.** This is the point of drafting. Run the
+   **`release-smoke` skill**: it downloads the draft's own assets, checks them against each
+   other and the manifest, flashes them, checks every feature in the release and runs the
+   regression sweep against a control build, and ends with a GO / NO-GO report plus a short
+   list of maintainer items (the OSD About line reading `DVD v<semver> <yymmdd>` is one,
+   since a screenshot cannot see the OSD). Publish only on GO and the maintainer's word.
    ```bash
    gh release view v<semver> --web        # confirm all five assets are attached
    gh release edit v<semver> --draft=false
