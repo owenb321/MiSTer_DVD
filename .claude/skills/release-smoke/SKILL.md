@@ -148,13 +148,26 @@ tools/mister.py telem --from $OUT/<cat>.jsonl
 ```
 
 PASS when:
-- the picture is not one of `dvd_explore.py`'s failure colours (black = reader wedged,
-  green = unwritten framestore, grey = misframed intra) and the two shots differ (motion),
-  or, on a menu still, the HUD decodes and buttons are armed;
-- the HUD clock advances between the shots (not on a still or a menu);
+- the picture is not one of `dvd_explore.py`'s failure colours (green = unwritten
+  framestore, grey = misframed intra, all-black = reader wedged) and the two shots differ
+  (motion), or telemetry says a menu/still is held (`flags.menu`/`flags.still`);
+- `.wav` / CD-DA shows the idle logo with the HUD (not a picture): there, PASS = the HUD
+  clock decodes and advances between the shots. It is ~97 % black by design;
+- audio is playing: `aud_play` advances across the log;
 - no failure popup (`LINK FAIL`, `CSS ENCRYPTED`, unsupported image/audio);
-- telemetry: `drops` 0, `lates_per_s` ~0 outside the boot/menu window
-  (`docs/decode_pacing.md` §2c: a held still counts one late per refresh), `vid_err` 0.
+- telemetry: `drops` 0, `lates` ~0 outside a menu/still (`docs/decode_pacing.md` §2c: a
+  held still counts one late per refresh).
+
+⚠ **Score counter *increments* from the JSONL yourself; do not trust `telem --from`'s
+summary on a `launch --telem-log` file.** Its first row can be a stale sample from before
+the core loaded (seen 2026-10-31: `t` ~1000 s before the rest), which turns every rate in
+the summary into garbage. Drop a first row more than 30 s before the second.
+⚠ **Ignore the JSON's `vid_err`.** Word 5 was retired to `aud_disc` (`dvd/dvd_telem.sv`
+header), but `dvd_ctl.cpp` still prints it under the old name; it reads 256, 768, 65280 on
+healthy playback.
+
+A scorer that does all of this is the next thing to commit (`tools/smoke_matrix.py`); until
+then write it inline, and keep its rules equal to the list above.
 
 **Then the output modes**, on `film_pacing`: `tools/mister.py osd "Video Output=Progressive"`,
 `telem --watch 60`; repeat for `Interlaced`. Lates/drops must be ≤ the control's
