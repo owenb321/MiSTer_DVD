@@ -17,7 +17,9 @@ model comparable without a cycle model of the wrapper:
     pm  <index> <value>            a program-map byte
     pulse <name>[=<value>] ...     one-cycle pulses, together in one cycle:
         loaded error cellcmd=<nr> pgcend btn=<16 hex> menu title return cmenu
-        chedge=<dir> start tick stir=<value> agl=<value>
+        chedge=<dir> start tick stir=<value> agl=<value> snap
+        restore    put back the LAST snapshot completed when the restore runs (the blob
+                   vm_snap would hold; zeros before any)
     timeout                        the wait timer expires (only while waiting)
     # ...                          a comment
 
@@ -25,6 +27,8 @@ After each line the model runs to quiescence and appends to its log:
     P <step> <pulse> <fields>      an output pulse, in order
     L <step> <reg> <value>         a change of SPRM1/2/3/8 (each register in order)
     S <step> <name>=<hex> ...      the state at quiescence (after pulse/timeout/settle)
+    N <step> <hex> ...             a completed state snapshot, its words in order
+    P <step> RSTDONE / JHINT <ttn> a restore issued its jump / that jump's ttn is a hint
 The A/B (tools/vm_ab.py) compares these against the same script run on the RTL.
 """
 import os
@@ -44,7 +48,7 @@ INPUTS = {   # name: (width, reset value). The cfg defaults are libdvdnav's cons
     'btn_sel': (6, 0), 'btns_armed': (1, 0), 'wait_hold': (1, 0),
 }
 PULSES = ['loaded', 'error', 'cellcmd', 'pgcend', 'btn', 'menu', 'title', 'return',
-          'cmenu', 'chedge', 'start', 'tick', 'stir', 'agl', 'ptt']
+          'cmenu', 'chedge', 'start', 'tick', 'stir', 'agl', 'ptt', 'snap', 'restore']
 DOM_VMGM, DOM_VTSM, DOM_TT = 1, 2, 3
 EVB = N.EV
 
@@ -98,6 +102,8 @@ class Shell:
         self.lm_v = False
         self.flags = 0
         self.timeout = False
+        self.rst_active = False           # a mount aborts a running restore
+        self.j_hint = 0
 
     def power_on(self):
         self._mount_hw()
@@ -107,6 +113,11 @@ class Shell:
         self.btnf_val = 1
         self.lf_pgcn = 0
         self.pre_armed = False
+        self.snap_pend = False
+        self.snap_buf = []
+        self.last_snap = None             # the blob a restore puts back
+        self.rst_pend = self.rst_active = False
+        self.rst_ra = self.rst_wi = 0
         self.cc_nr = 0
         self.btn_cmd = 0
         self.chedge_dir = 0
@@ -158,6 +169,10 @@ class Shell:
     # ------------------------------------------------------------ the machine's I/O
     def inp(self, p):
         L = self.inp_lv
+        if p == N.IN['RSTQ']:
+            if not self.rst_active:
+                return 0
+            return self.last_snap[self.rst_ra] if self.last_snap and self.rst_ra < len(self.last_snap) else 0
         if p >= 32:
             n = p - 32
             if n in (0, 16, 18):
@@ -191,7 +206,7 @@ class Shell:
                 'VM_DOM': self.vm_dom, 'VM_VTS': self.vm_vts,
                 'MENU_SEEN': int(self.menu_seen), 'LM_V': int(self.lm_v),
                 'LM_DOM': self.lm[0], 'LM_VTS': self.lm[1], 'LM_PGCN': self.lm[2],
-                'JPGCN': self.j['pgcn'], 'EVENTS': self.events, 'ZERO27': 0}[name]
+                'JPGCN': self.j['pgcn'], 'EVENTS': self.events}[name]
 
     def out(self, p, v):
         name = N.OUT_PORTS[p]
@@ -203,6 +218,7 @@ class Shell:
             self.j['pgcn'] = v
         elif name == 'J_TTN':
             self.j['ttn'] = v & 0x7F
+            self.j_hint = (v >> 15) & 1
         elif name == 'J_PGN':
             self.j['pgn'] = v & 0xFF
         elif name == 'J_PTT':
@@ -231,6 +247,29 @@ class Shell:
             self.events &= ~v
         elif name == 'EVSET':
             self.events |= v & ((1 << len(N.EVENTS)) - 1)
+        elif name == 'SNAP':
+            self.snap_buf.append(v & 0xFFFF)
+        elif name == 'RSTA':
+            self.rst_ra = v & 0x7F
+        elif name == 'RSTW':
+            k = N.RSTW_PORTS[self.rst_wi & 7]
+            if k == 'LFSR':
+                self.lfsr = v & 0xFFFF
+            elif k == 'VM_DOM':
+                self.vm_dom = v & 3
+            elif k == 'VM_VTS':
+                self.vm_vts = v & 0xFF
+            elif k == 'MENU_SEEN':
+                self.menu_seen = bool(v & 1)
+            elif k == 'LM_V':
+                self.lm_v = bool(v & 1)
+            elif k == 'LM_DOM':
+                self.lm = (v & 3, self.lm[1], self.lm[2])
+            elif k == 'LM_VTS':
+                self.lm = (self.lm[0], v & 0xFF, self.lm[2])
+            else:
+                self.lm = (self.lm[0], self.lm[1], v & 0xFFFF)
+            self.rst_wi = (self.rst_wi + 1) & 7
         elif name == 'PULSE':
             if v & N.PB['BTNF']:
                 self._emit('BTNF', self.btnf_val)
@@ -240,6 +279,8 @@ class Shell:
                 j = self.j
                 self._emit('JUMP', j['dom'], j['vts'], j['pgcn'], j['entry'], j['ttn'],
                            j['pgn'], j['ptt'], j['cell'], self._from_wait())
+                if self.j_hint:
+                    self._emit('JHINT', j['ttn'])
             if v & N.PB['SEEK']:
                 self._emit('SEEK', self.seek_cell, self._from_wait())
             if v & N.PB['REPLAY']:
@@ -254,6 +295,15 @@ class Shell:
                 self.timeout = False
             if v & N.PB['TICKDONE']:
                 self.tick_pending = False
+            if v & N.PB['FRZ8']:
+                self.frozen = True
+            if v & N.PB['RSTDONE']:
+                self.rst_active = False
+                self._emit('RSTDONE')
+            if v & N.PB['SNAPDONE']:
+                self.log.append('N %d ' % self.step_no + ' '.join('%04x' % w for w in self.snap_buf))
+                self.last_snap = self.snap_buf
+                self.snap_buf = []
         else:
             raise N.SeqError(f'output port {p}')
 
@@ -274,6 +324,13 @@ class Shell:
                 if self.events & EVB[n]:
                     self.events &= ~EVB[n]
                     return i + 2
+            if self.snap_pend and not self.ptt_pend:   # last: a VM at rest, its part landed
+                self.snap_pend = False
+                return N.WEV_IDLE.index('SNAP')
+            if self.rst_pend and self.inp_lv['enable'] and not self.ptt_pend:
+                self.rst_pend = False
+                self.rst_active, self.rst_wi = True, 0
+                return N.WEV_IDLE.index('RESTORE')
             return None
         if self.events & EVB['LOADED']:
             return 0
@@ -312,6 +369,10 @@ class Shell:
             self.ptt_pend, self.ptt_q = True, ps['ptt'] & 0x7FF
         if 'tick' in ps:
             self.tick_pending = True
+        if 'snap' in ps:
+            self.snap_pend = True
+        if 'restore' in ps:
+            self.rst_pend = True
         if 'loaded' in ps:
             self.pre_armed = True
         if L['enable']:
@@ -347,6 +408,10 @@ class Shell:
     def run(self):
         self.m.run()
         self._ptt_apply()     # the RTL lands a held part once the VM is at rest
+        if ((self.snap_pend or (self.rst_pend and self.inp_lv['enable'])) and
+                not self.ptt_pend and self.m.waiting == 0):
+            self.m.run()      # a snapshot or restore waits for that landing, then runs
+            self._ptt_apply()
         self._shadow()
 
     def dump(self):

@@ -233,7 +233,12 @@ module nav_pci #(
     output wire        dbg_rj,
     output wire        dbg_rj_ok,
     output wire        dbg_fb_promo,
-    output wire [31:0] dbg_nxt_sptm
+    output wire [31:0] dbg_nxt_sptm,
+    // The newest PCI's vobu_s_ptm: the start PTS of the VOBU the demux front just
+    // parsed. The VM snapshot latches it with the STC, so the host can take the demux
+    // lead off the HUD clock and save the DISPLAYED picture's time (docs/nav_engine.md
+    // §10). A debug-style read port: nothing in nav_pci changes.
+    output wire [31:0] vobu_sptm
 );
 
 // =========================================================================
@@ -377,6 +382,7 @@ assign btns_pend  = (nxt_v && (nxt_btn_ns != 6'd0)) || (nx2_v && (nx2_btn_ns != 
 assign dbg_btn_ns = h_btn_ns;
 assign dbg_h_sptm = h_sptm;
 assign dbg_nxt_sptm  = nxt_sptm;
+assign vobu_sptm     = f_vptm;
 // early multi-button-menu detect: pending (parsed, pre-promote) OR committed.
 assign hli_seen   = (nxt_v && (nxt_btn_ns > 6'd1)) || (armed && (h_btn_ns > 6'd1));
 

@@ -176,7 +176,7 @@ module iso_reader_menu_tb;
         .pm_we(), .pm_waddr(), .pm_wdata(), .cmd_nr_pgm(),
         .seek_pulse(1'b0), .seek_natural(1'b0), .seek_cell(8'd0), .seek_ack(seek_ack),
         .cur_cell(), .cell_ready(),
-        .jump_pulse(jump_pulse), .jump_natural(1'b0), .jump_domain(jump_domain), .jump_vts(jump_vts),
+        .jump_pulse(jump_pulse), .jump_natural(1'b0), .jump_ttn_hint(1'b0), .jump_domain(jump_domain), .jump_vts(jump_vts),
         .jump_pgcn(jump_pgcn), .jump_entry(jump_entry), .jump_cell(jump_cell),
         .jump_ack(jump_ack), .keep_vbuf(keep_vbuf), .pgc_loaded(pgc_loaded), .pgc_error(pgc_error),
         .menu_active(menu_active), .still_active(still_active), .cur_vts(cur_vts),

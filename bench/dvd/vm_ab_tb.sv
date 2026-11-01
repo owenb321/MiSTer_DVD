@@ -11,13 +11,17 @@
 //   1 set     a = input index (nav_shell.INPUTS order), b = value
 //   2 cmd     a = command index, b = the 8 bytes
 //   3 pm      a = index, b = value
-//   4 pulse   a = mask (nav_shell.PULSES order), with the args from op 7
+//   4 pulse   a = mask (nav_shell.PULSES order), with the args from op 7; bit 15 =
+//             snap, a state-snapshot request (the old FSM has none: a no-op there);
+//             bit 16 = restore, put back the last completed snapshot (VM_NEW only:
+//             vm_ab.py --restore runs those scripts without the old FSM)
 //   5 timeout
 //   6 settle
 //   7 arg     a = 0 cellcmd nr, 1 btn command, 2 chedge dir, 3 stir value, 4 agl value,
 //             5 ptt value (the reader's part of the playing cell)
 // Every op but 7 is a step; after each the bench waits for quiescence and, for all
-// but cmd/pm, prints the state. Pulses and SPRM changes are printed as they happen.
+// but cmd/pm, prints the state. Pulses and SPRM changes are printed as they happen,
+// and (VM_NEW) each completed snapshot as one N line of its words.
 // A step that never settles is a [hang] and fatal.
 `timescale 1ns/1ps
 `default_nettype none
@@ -61,6 +65,10 @@ module vm_ab_tb;
     reg [3:0]  agl_set_val = 0;
     reg        ptt_upd = 0;
     reg [10:0] ptt_val = 0;
+    reg        snap_req = 0, restore_req = 0;
+    wire       snap_we, snap_done; wire [15:0] snap_d, snap_fmt;
+    wire       rst_done, jump_ttn_hint; wire [6:0] rst_ra;
+    reg [15:0] rst_q = 16'd0;
 
     wire        btn_force; wire [5:0] btn_force_val; wire [5:0] hl_btnn;
     wire        jump_pulse; wire [1:0] jump_domain; wire [7:0] jump_vts; wire [15:0] jump_pgcn;
@@ -100,6 +108,11 @@ module vm_ab_tb;
         .sprm_astn(sprm_astn), .sprm_spstn(sprm_spstn), .sprm_agln(sprm_agln),
         .pre_done(pre_done), .agl_set(agl_set), .agl_set_val(agl_set_val),
         .ptt_upd(ptt_upd), .ptt_val(ptt_val),
+`ifdef VM_NEW
+        .snap_req(snap_req), .snap_we(snap_we), .snap_d(snap_d), .snap_done(snap_done),
+        .snap_fmt(snap_fmt), .restore_req(restore_req), .rst_ra(rst_ra), .rst_q(rst_q),
+        .rst_done(rst_done), .jump_ttn_hint(jump_ttn_hint), .ast_set(1'b0), .ast_set_val(8'd0), .spst_set(1'b0), .spst_set_val(8'd0),
+`endif
         .dbg_state(dbg_state), .dbg_g3(dbg_g3), .dbg_g14_9(dbg_g14_9), .dbg_rsm(dbg_rsm),
         .dbg_deadend(dbg_deadend), .link_fail(link_fail), .link_fail_pgcn(link_fail_pgcn));
 
@@ -184,10 +197,34 @@ module vm_ab_tb;
         if (jump_pulse) $fwrite(fo, "P %0d JUMP %0d %0d %0d %0d %0d %0d %0d %0d %0d\n", step,
                                 jump_domain, jump_vts, jump_pgcn, jump_entry, jump_ttn,
                                 jump_pgn, jump_ptt, jump_cell, vm_from_wait);
+`ifdef VM_NEW
+        if (jump_pulse && jump_ttn_hint) $fwrite(fo, "P %0d JHINT %0d\n", step, jump_ttn);
+        if (rst_done)   $fwrite(fo, "P %0d RSTDONE\n", step);
+`endif
         if (seek_pulse) $fwrite(fo, "P %0d SEEK %0d %0d\n", step, seek_cell, vm_from_wait);
         if (vm_replay)  $fwrite(fo, "P %0d REPLAY\n", step);
         if (vm_adv)     $fwrite(fo, "P %0d ADV\n", step);
     end
+
+`ifdef VM_NEW
+    // the snapshot stream: one N line per completed snapshot, as nav_shell logs it
+    reg [15:0] snapw [0:255];
+    reg [15:0] blob  [0:127];               // the last completed snapshot: vm_snap's buffer
+    integer    snapn = 0, si;
+    initial for (si = 0; si < 128; si = si + 1) blob[si] = 16'd0;
+    always @(negedge clk) if (rst_n) begin
+        if (snap_we) begin snapw[snapn[7:0]] = snap_d; snapn = snapn + 1; end
+        if (snap_done) begin
+            $fwrite(fo, "N %0d", step);
+            for (si = 0; si < snapn; si = si + 1) $fwrite(fo, " %04h", snapw[si]);
+            $fwrite(fo, "\n");
+            for (si = 0; si < 128; si = si + 1) blob[si] = (si < snapn) ? snapw[si] : 16'd0;
+            snapn = 0;
+        end
+    end
+    // vm_snap's registered M10K read
+    always @(posedge clk) rst_q <= blob[rst_ra];
+`endif
 
 `ifdef VM_NEW
     // the sequencer's own trace (tools/nav_isa.py Machine.trace) and its busy
@@ -327,10 +364,11 @@ module vm_ab_tb;
                     entropy_stir = a[12]; entropy_val = arg[3];
                     agl_set = a[13]; agl_set_val = arg[4];
                     ptt_upd = a[14]; ptt_val = arg[5];
+                    snap_req = a[15]; restore_req = a[16];
                     @(negedge clk);
                     {pgc_loaded, pgc_error, vm_cell_cmd, vm_pgc_end, btn_cmd_valid, key_menu,
                      key_title, key_return, key_cmenu, key_chedge, start, sec_tick,
-                     entropy_stir, agl_set, ptt_upd} = 0;
+                     entropy_stir, agl_set, ptt_upd, snap_req, restore_req} = 0;
                     settle; dump;
                 end
                 5: begin

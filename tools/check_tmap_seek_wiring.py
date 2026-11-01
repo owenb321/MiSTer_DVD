@@ -14,7 +14,11 @@ passes every module bench, and quietly breaks the feature:
   * dpad_tm_v set outside a DVD title (a linear file, a menu): a time map that is
     not the playing title's, or none;
   * seek_time's bar left ungated / the HUD mux not holding the answer: after the
-    fire the preview becomes an interpolation of the fallback sector again.
+    fire the preview becomes an interpolation of the fallback sector again;
+  * a save-state restore's landing seek (dvd/vm_snap.sv rst_seek_pulse,
+    docs/nav_engine.md §10) not ORed in on ITS OWN pulse, its time not the one sent
+    with it, not through mode_realign's arbitration, or popping the HUD as if the
+    user had pressed a key.
 
 Reads the connections out of dvd/emu.sv with the comment-stripping parser of
 tools/check_hl_btnn_wiring.py (a grep would match the comments quoting them).
@@ -61,12 +65,33 @@ def check(path):
     req = port_expr(rd, 'seek_tm_req')
     if req is None:
         return ['dvd_iso_reader has no .seek_tm_req: no seek is ever a time seek']
-    if toks(req) != {'scrub_seek_pulse', 'dpad_tm_v', 'scrub_tm_req'}:
-        bad.append("dvd_iso_reader .seek_tm_req is '%s' -- must be scrub_seek_pulse & (dpad_tm_v | "
-                   "scrub_tm_req) (seek_rbn_pulse also carries mode_realign's sector seeks)" % req)
-    if port_expr(rd, 'seek_tm_secs') != 'dpad_tm_v ? dpad_tm_s : scrub_tgt_secs':
-        bad.append("dvd_iso_reader .seek_tm_secs is '%s', must be dpad_tm_v ? dpad_tm_s : scrub_tgt_secs"
-                   % port_expr(rd, 'seek_tm_secs'))
+    want_req = '(scrub_seek_pulse & (dpad_tm_v | scrub_tm_req)) | rst_seek_pulse'
+    if req != want_req:
+        bad.append("dvd_iso_reader .seek_tm_req is '%s' -- must be %s (seek_rbn_pulse also "
+                   "carries mode_realign's sector seeks)" % (req, want_req))
+    want_secs = 'rst_seek_pulse ? rst_seek_secs : dpad_tm_v ? dpad_tm_s : scrub_tgt_secs'
+    if port_expr(rd, 'seek_tm_secs') != want_secs:
+        bad.append("dvd_iso_reader .seek_tm_secs is '%s', must be %s"
+                   % (port_expr(rd, 'seek_tm_secs'), want_secs))
+    # the restore's landing seek rides the scrub's arbitration (mode_realign), on its own
+    # pulse with its own sector, and is not a user event for the HUD
+    mr = instantiation_body(src, 'mode_realign')
+    if port_expr(mr, 'scrub_pulse') != 'seek_any_pulse' or port_expr(mr, 'scrub_rbn') != 'seek_any_rbn':
+        bad.append('mode_realign .scrub_pulse/.scrub_rbn must be seek_any_pulse/seek_any_rbn')
+    m1 = re.search(r'wire\s+seek_any_pulse\s*=\s*([^;]*);', src)
+    m2 = re.search(r'wire\s+\[31:0\]\s+seek_any_rbn\s*=\s*([^;]*);', src)
+    if not m1 or ' '.join(m1.group(1).split()) != 'scrub_seek_pulse | rst_seek_pulse':
+        bad.append('seek_any_pulse must be scrub_seek_pulse | rst_seek_pulse')
+    if not m2 or ' '.join(m2.group(1).split()) != 'rst_seek_pulse ? rst_seek_rbn : scrub_seek_rbn':
+        bad.append('seek_any_rbn must be rst_seek_pulse ? rst_seek_rbn : scrub_seek_rbn')
+    m3 = re.search(r'wire\s+hud_user_evt\s*=\s*([^;]*);', src)
+    if not m3 or 'rst_seek_pulse' in m3.group(1) or 'seek_any_pulse' in m3.group(1):
+        bad.append('hud_user_evt must not include the restore\'s seek (not a user press)')
+    vs = instantiation_body(src, 'vm_snap')
+    for port, want in (('rst_seek_pulse', 'rst_seek_pulse'), ('rst_seek_secs', 'rst_seek_secs'),
+                       ('rst_seek_rbn', 'rst_seek_rbn')):
+        if port_expr(vs, port) != want:
+            bad.append('vm_snap .%s must drive %s' % (port, want))
     sc = instantiation_body(src, 'scrub_ctrl')
     if port_expr(sc, 'tm_title') != 'cell_ready':
         bad.append("scrub_ctrl .tm_title is '%s', must be cell_ready (DVD titles only)" % port_expr(sc, 'tm_title'))
@@ -115,8 +140,19 @@ def red():
     except subprocess.CalledProcessError:
         pass
     muts = [
-        ('R1 qualifier on the arbitrated pulse', '.seek_tm_req    (scrub_seek_pulse & (dpad_tm_v | scrub_tm_req)),',
-         '.seek_tm_req    (seek_rbn_pulse & (dpad_tm_v | scrub_tm_req)),'),
+        ('R1 qualifier on the arbitrated pulse',
+         '.seek_tm_req    ((scrub_seek_pulse & (dpad_tm_v | scrub_tm_req)) | rst_seek_pulse),',
+         '.seek_tm_req    ((seek_rbn_pulse & (dpad_tm_v | scrub_tm_req)) | rst_seek_pulse),'),
+        ('R9 a restore is not a time seek',
+         '.seek_tm_req    ((scrub_seek_pulse & (dpad_tm_v | scrub_tm_req)) | rst_seek_pulse),',
+         '.seek_tm_req    (scrub_seek_pulse & (dpad_tm_v | scrub_tm_req)),'),
+        ('R10 the restore seeks to the D-pad\'s time',
+         '.seek_tm_secs   (rst_seek_pulse ? rst_seek_secs : dpad_tm_v ? dpad_tm_s : scrub_tgt_secs),',
+         '.seek_tm_secs   (dpad_tm_v ? dpad_tm_s : scrub_tgt_secs),'),
+        ('R11 the restore bypasses mode_realign', '.scrub_pulse     (seek_any_pulse),',
+         '.scrub_pulse     (scrub_seek_pulse),'),
+        ('R12 the restore pops the HUD', '                  | scrub_seek_pulse\n                  | dpad_pend_evt;',
+         '                  | seek_any_pulse\n                  | dpad_pend_evt;'),
         ('R2 the time is not seek_time\'s', 'dpad_tm_s     <= seek_prev_secs_w;', 'dpad_tm_s     <= 17\'d0;'),
         ('R3 time seeks outside a DVD title', 'dpad_tm_v     <= cell_ready && !menu_active && seek_prev_ok_w;',
          'dpad_tm_v     <= seek_prev_ok_w;'),
@@ -134,8 +170,8 @@ def red():
             continue
         cases.append((label, emu.replace(a, b)))
     cases.append(('R6 connection only in a comment',
-                  emu.replace('.seek_tm_req    (scrub_seek_pulse & (dpad_tm_v | scrub_tm_req)),',
-                              ".seek_tm_req    (1'b0), // was (scrub_seek_pulse & (dpad_tm_v | scrub_tm_req))")))
+                  emu.replace('.seek_tm_req    ((scrub_seek_pulse & (dpad_tm_v | scrub_tm_req)) | rst_seek_pulse),',
+                              ".seek_tm_req    (1'b0), // was ((scrub_seek_pulse & (dpad_tm_v | scrub_tm_req)) | rst_seek_pulse)")))
     for label, text in cases:
         with tempfile.NamedTemporaryFile('w', suffix='.sv', delete=False) as f:
             f.write(text)
@@ -155,7 +191,7 @@ def main():
     if bad:
         print('\n'.join('FAIL: ' + b for b in bad))
         return 1
-    print('OK: D-pad time seeks reach the reader on the scrub pulse, and the HUD holds their time')
+    print('OK: D-pad and restore time seeks reach the reader on their own pulses, and the HUD holds the D-pad\'s time')
     return 0
 
 

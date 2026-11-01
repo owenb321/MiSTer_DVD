@@ -16,6 +16,23 @@
 //   * Dropped and merged events are cumulative wrapping counters in the header;
 //     an increase is reported as its own LOST line, never silently.
 //
+// And the VM state snapshot (0x7D, dvd/vm_snap.sv; docs/nav_engine.md "State
+// snapshot"), [6]..[11]:
+//   * The request carries control word 1 and nothing else; a core without the
+//     snapshot gets one {"absent":true} file and no wait.
+//   * While the core says busy, or seq has not moved, only the 13 header words are
+//     clocked -- never a payload, never a file -- and polls are rate-limited.
+//   * A complete snapshot is written whole (via rename), with the position decoded
+//     and at most 128 words read whatever len claims; a request that never
+//     completes ends in a {"timeout":true} file, not a hang.
+//
+// And the restore's `vmload <file>` (save states step 3), [12]..[15]:
+//   * the file vmsnap wrote is read back: control word 2, then fmt, len, the 16-bit
+//     sum of the words, and the words, in one transaction;
+//   * a pending verdict is not a result; applied and every refusal are, named.
+//   * the landing time sent is the snapshot's displayed time ([16]: the demux lead taken
+//     off the clock, -1 when it cannot be trusted), 0xFFFF when it has none.
+//
 // The module is #included, so this exercises the real code.
 
 #include <stdio.h>
@@ -27,30 +44,38 @@
 
 static char nt_log_path[64];
 static char ctl_log_path[64];
+static char vs_path[64];
+static char vl_path[64];
 #define DVD_NAVTRACE_LOG nt_log_path
 #define DVD_CTL_LOG      ctl_log_path
+#define DVD_VMSNAP_FILE  vs_path
+#define DVD_VMLOAD_FILE  vl_path
 
 // ---------------------------------------------------------------- fake world
 static uint16_t reply[2048];
 static int      reply_len = 0, reply_pos = 0;
 static int      n_cmd = 0, n_words = 0, n_disable = 0;
 static uint16_t last_cmd = 0;
+static uint16_t reply_cmd = 0x7C;                   // the command the fake core answers
+static uint16_t sent[2048];                         // what the host clocked out, per word
 
 static uint16_t spi_uio_cmd_cont(uint16_t cmd)
 {
 	n_cmd++; last_cmd = cmd; reply_pos = 1;
-	return (cmd == 0x7C && reply_len > 0) ? reply[0] : 0;
+	return (cmd == reply_cmd && reply_len > 0) ? reply[0] : 0;
 }
-static uint16_t spi_w(uint16_t)
+static uint16_t spi_w(uint16_t x)
 {
+	if (n_words < 2048) sent[n_words] = x;
 	n_words++;
-	return (last_cmd == 0x7C && reply_pos < reply_len) ? reply[reply_pos++] : 0;
+	return (last_cmd == reply_cmd && reply_pos < reply_len) ? reply[reply_pos++] : 0;
 }
 static void DisableIO(void)                         { n_disable++; }
 static int  is_dvd(void)                            { return 1; }
 static void user_io_status_set(const char *, uint32_t) {}
 static void user_io_file_mount(const char *, int)   {}
 
+#include "dvd_vmsnap.cpp"
 #include "dvd_ctl.cpp"
 
 // ---------------------------------------------------------------- helpers
@@ -192,6 +217,165 @@ int main(void)
 	tev = num(line(1), "\"t_ev\":");
 	check(tev > 19.9923 && tev < 19.9926, "t_ev 679 ticks (7.5 ms) before the drain");
 
+	// ------------------------------------------------------------ the VM snapshot
+	snprintf(vs_path, sizeof(vs_path), "/tmp/dvd_ctl_test_vs_%d.json", (int)getpid());
+	static char vsbuf[8192];
+	#define READ_VS() do { vsbuf[0] = 0; FILE *vf = fopen(vs_path, "r"); \
+		if (vf) { size_t vn = fread(vsbuf, 1, sizeof(vsbuf) - 1, vf); vsbuf[vn] = 0; fclose(vf); } } while (0)
+
+	printf("[6] vmsnap on a core without the snapshot\n");
+	fresh(); reply_cmd = 0x7D; unlink(vs_path);
+	vmsnap_request();
+	READ_VS();
+	check(strstr(vsbuf, "\"absent\":true") != NULL, "one {\"absent\":true} file");
+	check(!vs_wait, "no wait for an absent core");
+
+	printf("[7] the request\n");
+	fresh(); reply_cmd = 0x7D;
+	reply[0] = 0x5E02; reply[1] = 4; reply_len = 2;
+	vmsnap_request();
+	check(n_cmd == 1 && n_words == 1 && n_disable == 1, "one transaction: command + one word");
+	check(sent[0] == 1, "control word 1 (take a snapshot when this transaction ends)");
+	check(vs_wait && vs_seq0 == 4, "waits for seq to move from 4");
+	READ_VS();
+	check(vsbuf[0] == 0, "a stale snapshot file is removed at the request");
+
+	printf("[8] polls while busy, or before seq moves\n");
+	unsigned t0 = vs_t0;
+	reply[0] = 0x5E02; reply[1] = 5; reply[2] = 0x8060; reply_len = 2048;   // seq moved, but busy
+	n_words = 0;
+	vmsnap_poll(t0 + 5);
+	check(n_words == 0, "a poll within 20 ms of the last does nothing");
+	vmsnap_poll(t0 + 25);
+	check(n_words == 18, "busy: only the 19 header words are clocked");
+	reply[1] = 4; reply[2] = 0x0060;                      // not busy, but seq still 4
+	n_words = 0;
+	vmsnap_poll(t0 + 50);
+	check(n_words == 18, "seq unchanged: only the header");
+	READ_VS();
+	check(vsbuf[0] == 0 && vs_wait, "no file yet, still waiting");
+
+	printf("[9] a complete snapshot\n");
+	reply[1] = 5; reply[2] = 96; reply[3] = 0xC7D5; reply[4] = 0x0002;     // fresh, no video
+	reply[5] = 0x0001; reply[6] = 0x5513; reply[7] = 0xBFFF; reply[8] = 0xFF3C;
+	reply[9] = 0x0001; reply[10] = 0x1823; reply[11] = 7; reply[12] = 4;
+	// the clock 0:12:51 + 10 frames at 30 fps, its VOBU 0.8 s ahead of the screen
+	reply[13] = 0x0012; reply[14] = 0x51D0;
+	reply[15] = 0x0001; reply[16] = 0x1940;                // sptm = 72000 + 90000
+	reply[17] = 0x0001; reply[18] = 0x5F90 - 0x4650;       // stc  = sptm - 72000 (0.8 s)
+	for (int i = 0; i < 96; i++) reply[19 + i] = (uint16_t)(0x1000 + i);
+	reply[19 + 96] = 0xDEAD;                              // past len: must not be read
+	n_words = 0;
+	vmsnap_poll(t0 + 75);
+	check(n_words == 18 + 96, "header + exactly len words");
+	check(!vs_wait, "done");
+	READ_VS();
+	check(strstr(vsbuf, "\"seq\":5,\"fmt\":51157,\"pos_fresh\":1,\"has_video\":0,") != NULL,
+	      "seq, fmt, flags");
+	check(strstr(vsbuf, "\"nv_pck_lbn\":87315,\"prev_video\":3221225276,\"c_eltm\":71715,"
+	             "\"vob_idn\":7,\"c_idn\":4,") != NULL, "the position");
+	check(strstr(vsbuf, "\"words\":[4096,4097,") != NULL && strstr(vsbuf, ",4191]}") != NULL,
+	      "the 96 words, in order");
+	// no picture in that VOBU (reply[4] bit 0 = 0): no displayed time, land at the cell
+	check(strstr(vsbuf, "\"disp_secs\":-1,") != NULL, "a VOBU without a picture has no displayed time");
+	check(strstr(vsbuf, "57005") == NULL, "nothing past len");
+
+	printf("[10] a reply claiming more words than the buffer\n");
+	vs_wait = 1; vs_seq0 = 5; vs_t0 = vs_last = t0;
+	reply[1] = 6; reply[2] = 200;
+	n_words = 0;
+	vmsnap_poll(t0 + 100);
+	check(n_words == 18 + 128, "reads at most 128 words");
+
+	printf("[11] a request that never completes\n");
+	vs_wait = 1; vs_seq0 = 6; vs_t0 = vs_last = t0; unlink(vs_path);
+	reply[1] = 6; reply[2] = 0x8060;
+	vmsnap_poll(t0 + 1000);
+	check(vs_wait, "still waiting at 1 s");
+	vmsnap_poll(t0 + 3100);
+	READ_VS();
+	check(!vs_wait && strstr(vsbuf, "\"timeout\":true,\"busy\":1") != NULL, "times out at 3 s, says busy");
+
+	// ------------------------------------------------------------ the restore
+	snprintf(vl_path, sizeof(vl_path), "/tmp/dvd_ctl_test_vl_%d.json", (int)getpid());
+	static char vlbuf[512];
+	#define READ_VL() do { vlbuf[0] = 0; FILE *lf = fopen(vl_path, "r"); \
+		if (lf) { size_t ln_ = fread(vlbuf, 1, sizeof(vlbuf) - 1, lf); vlbuf[ln_] = 0; fclose(lf); } } while (0)
+
+	printf("[12] vmload of a file that is not a snapshot\n");
+	fresh(); reply_cmd = 0x7D;
+	vmload_request("/nonexistent/snap.json");
+	READ_VL();
+	check(strstr(vlbuf, "\"unreadable\":true") != NULL && n_cmd == 0, "refused before any SPI");
+
+	printf("[13] vmload sends the snapshot back\n");
+	// a snapshot file as vmsnap writes it: fmt 51157, words 4096..4191
+	{
+		FILE *sf = fopen(vs_path, "w");
+		fprintf(sf, "{\"t\":1.0,\"seq\":5,\"fmt\":51157,\"pos_fresh\":1,\"nv_pck_lbn\":87315,"
+		        "\"disp_secs\":770,\"words\":[");
+		for (int i = 0; i < 96; i++) fprintf(sf, "%s%d", i ? "," : "", 0x1000 + i);
+		fprintf(sf, "]}\n");
+		fclose(sf);
+	}
+	fresh(); reply_cmd = 0x7D; reply[0] = 0x5E02; reply_len = 2048;
+	vmload_request(vs_path);
+	unsigned want_sum = 770 + 0x0001 + 0x5513;            // tm + the fallback RBN's halves
+	for (int i = 0; i < 96; i++) want_sum += 0x1000 + i;
+	check(n_cmd == 1 && n_disable == 1, "one transaction");
+	check(n_words == 7 + 96, "control + fmt + len + sum + tm + rbn x2 + 96 words");
+	check(sent[0] == 2, "control word 2 (LOAD)");
+	check(sent[1] == 51157 && sent[2] == 96, "fmt and len from the file");
+	check(sent[3] == (uint16_t)want_sum, "the checksum is the 16-bit sum of the words");
+	check(sent[4] == 770, "the landing time is the file's displayed time");
+	check(sent[5] == 0x0001 && sent[6] == 0x5513, "the fallback sector is the file's nv_pck_lbn");
+	check(sent[7] == 0x1000 && sent[102] == 0x105F, "the words, in order");
+	check(vl_wait, "waits for the verdict");
+	{
+		// a snapshot with no displayed time lands at the cell start
+		FILE *sf = fopen(vs_path, "w");
+		fprintf(sf, "{\"fmt\":51157,\"nv_pck_lbn\":5,\"disp_secs\":-1,\"words\":[1,2,3]}\n");
+		fclose(sf);
+		fresh(); reply_cmd = 0x7D; reply[0] = 0x5E02; reply_len = 2048;
+		vmload_request(vs_path);
+		check(sent[4] == 0xFFFF, "no displayed time: tm 0xFFFF (the cell start)");
+	}
+
+	printf("[14] the verdict: pending is not a result, applied is\n");
+	unsigned l0 = vl_t0;
+	unlink(vl_path);
+	reply[4] = (1u << 13);                                // pending
+	vmload_poll(l0 + 25);
+	READ_VL();
+	check(vl_wait && vlbuf[0] == 0, "pending: still waiting, no file");
+	reply[4] = (2u << 13) | (1u << 8);                    // applied, count 1
+	vmload_poll(l0 + 50);
+	READ_VL();
+	check(!vl_wait && strstr(vlbuf, "\"verdict\":2,\"result\":\"applied\"") != NULL, "applied");
+
+	printf("[15] a refusal is named\n");
+	vl_wait = 1; vl_t0 = vl_last = l0;
+	reply[4] = (5u << 13);
+	vmload_poll(l0 + 25);
+	READ_VL();
+	check(!vl_wait && strstr(vlbuf, "\"result\":\"refused: checksum\"") != NULL, "refused: checksum");
+
+	printf("[16] the displayed picture's time\n");
+	// 0:12:51 + 10 frames (30 fps) at the demux front, which is 0.8 s ahead: 770.53 s -> 771
+	check(dvd_vmsnap_disp_secs(0x001251D0, 162000, 90000, 1, 1) == 771, "front time minus the lead, to the nearest second");
+	check(dvd_vmsnap_disp_secs(0x001251D0, 90000 + 45000, 90000, 1, 1) == 771, "770.83 s rounds up, not down");
+	check(dvd_vmsnap_disp_secs(0x001251D0, 90000, 90000, 1, 1) == 771, "no lead: the front time");
+	check(dvd_vmsnap_disp_secs(0x00125150, 90000, 90000, 1, 1) == 771, "25 fps frames (rate bits 01)");
+	check(dvd_vmsnap_disp_secs(0x001251D0, 90000, 162000, 1, 1) == 772, "a small negative lead: the picture is into the front VOBU");
+	check(dvd_vmsnap_disp_secs(0x001251D0, 90000, 270000, 1, 1) == -1, "a lead below -1.5 s (a PTS discontinuity)");
+	check(dvd_vmsnap_disp_secs(0x001251D0, 90000 + 31 * 90000, 90000, 1, 1) == -1, "a lead over 30 s");
+	check(dvd_vmsnap_disp_secs(0x001251D0, 162000, 90000, 0, 1) == -1, "a stale position (no NAV since a flush)");
+	check(dvd_vmsnap_disp_secs(0x001251D0, 162000, 90000, 1, 0) == -1, "a VOBU without a picture");
+	check(dvd_vmsnap_disp_secs(0x00000000, 162000, 90000, 1, 1) == 0, "a lead past the clock clamps to 0");
+	check(dvd_vmsnap_disp_secs(0x001261D0, 90000, 90000, 1, 1) == -1, "a malformed clock (61 s)");
+
+	unlink(vl_path);
+	unlink(vs_path);
 	unlink(nt_log_path);
 	unlink(ctl_log_path);
 	printf(fails ? "dvd_ctl_test: %d FAILURE(S)\n" : "dvd_ctl_test: ALL GREEN\n", fails);

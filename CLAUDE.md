@@ -379,6 +379,7 @@ otherwise; `--red` runs its mutation arms).
 | Title key on a disc with no Title menu is a no-op (audit 10b): mount-time VMGM probe, `emu.sv` key gate | ✅ HW A/B vs `main` (SPIDER-MAN_2, PANIC_ROOM; T2 positive control), MERGED PR #173 | `dvd_vm.md` "Title key on a disc with no Title menu" | `run_title_probe.sh --red`, `check_title_key_wiring.py` |
 | A title cell command with buttons up runs at the displayed cell end (issue #176), angle blocks included; windows arm at their authored start; in-title menus hide expired SPU units (purple blip) | ✅ HIL suite vs `main` (10 fixed, 0 regressions) + maintainer's play-test, MERGED PR #179 | `dvd_nav.md` "A cell command with buttons up", `subpicture.md` | `run_cmd_hold.sh --red`, `run_spu_window.sh --red`, `check_cmd_hold_wiring.py`, `check_spu_title_menu_wiring.py` |
 | HIL play harness + `hil_suite` regression gate (nav event FIFO `dvd/nav_trace.sv`, PR #179) | ✅ HW-proven (5 games, control arms), MERGED PR #180 | `hil_play_harness.md` | `run_nav_trace.sh --red`, `tools/hil_suite.py` |
+| Save states (steps 2-4): VM snapshot + restore (`vm_snap.sv` 0x7D, `E_SNAP`/`E_RST`, exact film landing) and the OSD rows `Slot` / `Save to Slot` / `Load Slot` → `savestates/DVD/<disc id>_N.ss` (`dvd_sstate.cpp`); Audio/Subtitle steps write SPRM1/2 back | ✅ HW-checked (T2 menu/film/tracks, Scooby-Doo 2 across a boot); `feature/vm-snapshot`, unmerged: merges only with a stacked logic reclaim | `nav_engine.md` §8-§11 | `run_vm_snap.sh --red`, `run_vm_ab.sh --red`, `main/tests/run_tests.sh --red`, `check_vm_snap_wiring.py --red` |
 
 ### Transport, HUD and input
 
@@ -507,7 +508,9 @@ Each of these cost at least one hardware round. The story is in `docs/status_log
   module parameter named `INIT_FILE` leaks into the module's OTHER inferred RAMs.
 - **Benches:** `$fatal`, not `$finish` (vvp exits 0 otherwise); runners require the PASS
   marker; assert against the *consumer's* contract, not the producer's belief; every claim
-  gets a mutation that must fail *exactly* its own arm.
+  gets a mutation that must fail *exactly* its own arm. Don't run many `--red` gates at once:
+  runners `timeout` their mutants, and under load a cut-off run drops its last arms' FAILs
+  (2026-10-27: a false `run_cmd_hold` regression, bisected for nothing).
 - **An instrument derived from its subject reports health when the subject is absent.**
   Prefer counters that can say "nothing real happened".
 - **A disc field is a claim an authoring tool wrote, not a measurement**

@@ -38,6 +38,8 @@ tools/mister.py restore         # stock Main, harness files gone, saved settings
 | `mister.py key menu down select` | press transport keys (names derived from `kbd_map.sv`) |
 | `mister.py shot --decode` | screenshot + decode the HUD to structured state |
 | `mister.py telem --watch 120` | the decoder's pacing counters, as rates |
+| `mister.py snap [-o x.json]` | the DVD VM's whole state by name: GPRMs, SPRMs, RSM, domain, the playhead (needs a core with `dvd/vm_snap.sv` and the harness Main; `docs/nav_engine.md` §8) |
+| `mister.py vmload x.json` | restore a `snap -o` file: the VM's state comes back and it jumps to the saved PGC and cell (Disc Menus on, same disc; `docs/nav_engine.md` §9) |
 | `mister.py osd "A/V Offset=+50ms"` | change a setting LIVE, no relaunch |
 | `mister.py options` | every OSD option and key name, derived from the RTL |
 | `hud_read.py read/blocks <png>` | decode a screenshot's HUD / `O[2]` diagnostic blocks |
@@ -106,6 +108,13 @@ deliberately unreadable sectors; each read costs the drive's ~30 s timeout, with
 blocked in state D (no screenshots, no telemetry). Seen on OZ (#112) at `VTS_08_1.VOB`
 RBN ~2000. Recovery: eject the tray (pending reads then fail fast), then `restore`. Check
 `dmesg | grep sr1` before blaming the core.
+
+**★ Do not hand-restore `[DVD] main=` to the Main you found.** `deploy --main` deletes every
+`MiSTer_DVDcss_hil_*` that is not running at that moment -- including the rig owner's,
+once your own earlier deploy is the running one. Pointing the ini back at it by name
+then names a file that is gone, and the next core load starts no Main. Check `ls
+/media/fat/MiSTer_DVDcss_hil_*` first; if it is gone, rebuild that Main from its commit
+(its `.json` names it) and `deploy --main` it (2026-10-26).
 
 **★ Never overwrite the running `MiSTer_DVDcss`.** It reboots the box (`execl` on a
 deleted exe → `app_restart` → `reboot(1)`). `deploy --main` handles this; it installs under

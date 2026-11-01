@@ -704,7 +704,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-cellcmdhold13"
+`define CORE_VERSION "dev-vmsnap"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -1050,6 +1050,22 @@ parameter CONF_STR = {
     // ⚠ Re-ordering an option's value list REMAPS every saved setting, so the
     // "v,N" config version below is bumped with it. See docs/av_sync.md.
     "P1O[23:21],A/V Offset,0ms,-200ms,-100ms,-50ms,+50ms,+100ms,+150ms,+200ms;",
+
+    // ---- Save State (page 2; save states step 4, docs/nav_engine.md §11) ----------
+    // Four slots per DISC. A save state is the VM's whole navigation state plus the
+    // displayed picture's time (dvd/vm_snap.sv); the custom Main writes it to
+    // savestates/DVD/ and pushes it back on a load. With stock Main nothing answers
+    // and the rows do nothing (no core can write a file).
+    // ★ `R` is the framework's momentary row (Main's menu.cpp: "'R' covers every
+    // momentary option ... the PSX core also uses it for Save state, Restore state"),
+    // and it closes the OSD after the press. vm_snap counts the presses and latches
+    // the Slot row AT each one, so moving the row afterwards cannot redirect it.
+    // ⚠ Bits 53-56 were never allocated: no "v,N" bump, nobody's settings reset. It
+    // IS a CONF_STR edit, so it re-rolls the pinned fitter SEED.
+    "P2,Save State;",
+    "P2O[54:53],Slot,1,2,3,4;",
+    "P2R[55],Save to Slot;",
+    "P2R[56],Load Slot;",
     "R0,Reset;",
     // Saved-settings version (lowercase v = user_io.cpp config_ver, DISTINCT
     // from the display-only uppercase V line below): the framework persists
@@ -1203,13 +1219,16 @@ hps_io #(.CONF_STR(CONF_STR), .BLKSZ(4)) hps_io_inst (
 wire [35:0] ext_bus;
 wire        telem_drive;
 wire [15:0] telem_dout;
-// The nav event FIFO (dvd/nav_trace.sv, command 0x7C) answers on the same bus.
-// The two never drive at once: dvd_telem takes the bus only for 0x7A/0x7B and
-// nav_trace only for 0x7C, each decided on the transaction's first strobe.
+// The nav event FIFO (dvd/nav_trace.sv, command 0x7C) and the VM state snapshot
+// (dvd/vm_snap.sv, command 0x7D) answer on the same bus. No two ever drive at once:
+// dvd_telem takes the bus only for 0x7A/0x7B, nav_trace only for 0x7C and vm_snap
+// only for 0x7D, each decided on the transaction's first strobe.
 wire        trc_drive;
 wire [15:0] trc_dout;
-assign ext_bus[32]   = telem_drive | trc_drive;
-assign ext_bus[15:0] = trc_drive ? trc_dout : telem_dout;
+wire        snap_drive;
+wire [15:0] snap_dout;
+assign ext_bus[32]   = telem_drive | trc_drive | snap_drive;
+assign ext_bus[15:0] = trc_drive ? trc_dout : snap_drive ? snap_dout : telem_dout;
 
 // the audio engine's words (25..30): declared here, above their users below
 // (Verilog declaration order). cb_* is the DTS codebook copy (dts_cb_mem, further down).
@@ -1628,6 +1647,15 @@ wire        cdda_tracks_on = cdda_mode_w && cdda_toc_valid_w;
 // outputs; seek_rbn_pulse/seek_rbn are what reaches dvd_iso_reader.
 wire       scrub_seek_pulse;         // pulse: time scrub (from scrub_ctrl)
 wire [31:0] scrub_seek_rbn;          // its target RBN (2048-sector, VTSTT_VOBS-rel)
+// A restore's exact landing (dvd/vm_snap.sv, docs/nav_engine.md §10): ONE time seek
+// after the restored PGC has loaded and shows a picture. It rides the scrub's seek --
+// the same arbitration (mode_realign) and the same time-map path as a D-pad gesture --
+// but not the HUD's user-event (a restore is not a user transport press).
+wire        rst_seek_pulse;
+wire [16:0] rst_seek_secs;
+wire [31:0] rst_seek_rbn;
+wire        seek_any_pulse = scrub_seek_pulse | rst_seek_pulse;
+wire [31:0] seek_any_rbn   = rst_seek_pulse ? rst_seek_rbn : scrub_seek_rbn;
 wire       seek_rbn_pulse;           // pulse: arbitrated raw-RBN seek -> reader
 wire [31:0] seek_rbn;                // its target RBN (2048-sector, VTSTT_VOBS-rel)
 reg        angle_pulse;              // pulse: cycle camera angle (Phase 9) -> reader
@@ -1644,6 +1672,7 @@ wire [7:0]  vm_jump_vts, vm_jump_cell, vm_jump_pgn;
 wire [15:0] vm_jump_pgcn;    // 15-bit DVD PGCN field
 wire [3:0]  vm_jump_entry;
 wire [6:0]  vm_jump_ttn;
+wire        vm_jump_ttn_hint;   // a restore's jump: the ttn is a hint (reader jhint_l)
 wire [9:0]  vm_jump_ptt;      // Phase 6: exact chapter/PTT part (JumpVTS_PTT)
 wire        vm_seek_pulse;
 wire [7:0]  vm_seek_cell;
@@ -2272,6 +2301,8 @@ end
 // of the wrap rule, which is the "bench that agrees with a copy of the thing"
 // failure in register form.
 reg        angle_pulse_q;
+reg        ast_wb, spst_wb;                  // Audio / Subtitle write-back (below sub_on_eff)
+reg  [7:0] ast_wb_val, spst_wb_val;
 reg        angle_wb;
 reg  [3:0] angle_wb_val;
 always @(posedge clk_sys or negedge reset_n) begin
@@ -2798,6 +2829,15 @@ player_regs player_regs_inst (
     .rmask_all_prohibited (pr_rmask_allp)
 );
 
+// the VM state snapshot's seam (dvd/vm_snap.sv, below nav_dsi): declared ahead of
+// dvd_vm, which reads the request. Gated by tools/check_vm_snap_wiring.py.
+wire        vm_snap_req, vm_snap_we, vm_snap_done;
+wire [15:0] vm_snap_d, vm_snap_fmt;
+// ...and the restore's (save states step 3, docs/nav_engine.md §9)
+wire        vm_rst_req, vm_rst_done;
+wire [6:0]  vm_rst_ra;
+wire [15:0] vm_rst_q;
+
 dvd_vm dvd_vm_inst (
     .clk           (clk_sys),
     .rst_n         (reset_n),
@@ -2878,6 +2918,10 @@ dvd_vm dvd_vm_inst (
     .pre_done      (vm_pre_done),         // PRE resolved -> the angle is settled
     .agl_set       (angle_wb),            // B6 press: write the user's angle back
     .agl_set_val   (angle_wb_val),
+    .ast_set       (ast_wb),              // Audio step: SPRM1 = the stream now playing
+    .ast_set_val   (ast_wb_val),
+    .spst_set      (spst_wb),             // Subtitle step: SPRM2 = {display, stream}
+    .spst_set_val  (spst_wb_val),
     .ptt_upd       (ptt_upd_w),           // SPRM7 follows playback (the reader's part)
     .ptt_val       (ptt_cur_w),
     .dbg_state     (),
@@ -2890,7 +2934,18 @@ dvd_vm dvd_vm_inst (
     // every GPRM write, for the nav event log (dvd/nav_trace.sv)
     .trc_gprm_we   (trc_gprm_we),
     .trc_gprm_a    (trc_gprm_a),
-    .trc_gprm_d    (trc_gprm_d)
+    .trc_gprm_d    (trc_gprm_d),
+    // the state snapshot (docs/nav_engine.md "State snapshot")
+    .snap_req      (vm_snap_req),
+    .snap_we       (vm_snap_we),
+    .snap_d        (vm_snap_d),
+    .snap_done     (vm_snap_done),
+    .snap_fmt      (vm_snap_fmt),
+    .restore_req   (vm_rst_req),
+    .rst_ra        (vm_rst_ra),
+    .rst_q         (vm_rst_q),
+    .rst_done      (vm_rst_done),
+    .jump_ttn_hint (vm_jump_ttn_hint)
 );
 
 // Transport / VM seek mux (the VM's LinkCN/LinkPGN cell seeks share the
@@ -2981,6 +3036,14 @@ always @(posedge clk_sys or negedge reset_n) begin
         aud_cur <= 3'd0; sub_on <= 1'b0; sub_idx <= 5'd0;
     end else if (start_streaming) begin
         aud_cur <= 3'd0; sub_on <= 1'b0; sub_idx <= 5'd0;  // default: track 0, subs off
+    end else if (vm_rst_done) begin
+        // A save state's restore wrote SPRM1/SPRM2 (E_RST, before RSTDONE): the user's
+        // side follows them, so the saved track plays whether or not the write moved
+        // the VM's value (an unchanged SPRM claims nothing: vm_owns_* below).
+        // 62/63 (bit 5) are "none"/"forced", not streams: subtitles off.
+        aud_cur <= (vm_astn < 8'd8) ? vm_astn[2:0] : 3'd0;
+        sub_on  <= vm_spstn[6] & ~vm_spstn[5];
+        sub_idx <= vm_spstn[5] ? 5'd0 : vm_spstn[4:0];
     end else begin
         if (aud_step_w)
             aud_cur <= (({1'b0,aud_log} + 4'd1) >= audio_ntracks_w) ? 3'd0 : aud_log + 3'd1;
@@ -3154,6 +3217,31 @@ assign     sp_sel = (menus_on && vm_owns_sp && vm_spstn[6]) ? vm_spstn[4:0] : su
 // sub_on OR a menu SetSTN display-on that still owns the selection (the same two
 // terms sp_route_en carries for the title).
 assign     sub_on_eff = sub_on | (menus_on && vm_owns_sp && vm_spstn[6]);
+
+// ---- the user's Audio / Subtitle choice written back to SPRM1 / SPRM2 ----------
+// As angle_wb does for SPRM3: a set-top player's stream change IS a write of SPRM1/2,
+// and both a disc command reading it and a save state (docs/nav_engine.md §11) need
+// the stream playing, not the one the disc last set. Taken one cycle after the step,
+// from the EFFECTIVE selection (aud_log / sp_sel, after the step released the VM's
+// claim), never a predicted value. The write moves vm_astn/vm_spstn, which re-claims
+// the selection for the VM -- with the same value, so nothing audible changes.
+// Subtitles OFF keep SPRM2's stream number and clear bit 6, as libdvdnav does: the
+// forced-subtitle fallback reads that stream (docs/subpicture.md).
+reg aud_step_q, sub_step_q;
+always @(posedge clk_sys or negedge reset_n) begin
+    if (!reset_n) begin
+        aud_step_q <= 1'b0; sub_step_q <= 1'b0;
+        ast_wb <= 1'b0; spst_wb <= 1'b0; ast_wb_val <= 8'd0; spst_wb_val <= 8'd62;
+    end else begin
+        aud_step_q <= aud_step_w; sub_step_q <= sub_step_w;
+        ast_wb <= 1'b0; spst_wb <= 1'b0;
+        if (aud_step_q) begin ast_wb <= 1'b1; ast_wb_val <= {5'd0, aud_log}; end
+        if (sub_step_q) begin
+            spst_wb     <= 1'b1;
+            spst_wb_val <= sub_on_eff ? {2'b01, 1'b0, sp_sel} : {2'b00, vm_spstn[5:0]};
+        end
+    end
+end
 
 // ---- DVD subpicture display-mode substream mapping (in-title HLI buttons) ----
 // A VM SetSTN (SPRM2) selects a LOGICAL subpicture stream; the PHYSICAL substream
@@ -3447,8 +3535,8 @@ mode_realign mode_realign_i (
     .start_streaming (start_streaming),
     .video_live      (video_live_s2),   // clears the blank on the first new-mode frame
     .blank_en        (media_seen),      // never blank the boot idle screen
-    .scrub_pulse     (scrub_seek_pulse),
-    .scrub_rbn       (scrub_seek_rbn),
+    .scrub_pulse     (seek_any_pulse),  // the scrub's seek, or a restore's landing (§10)
+    .scrub_rbn       (seek_any_rbn),
     .seek_rbn_pulse  (seek_rbn_pulse),  // -> dvd_iso_reader (arbitrated)
     .seek_rbn        (seek_rbn),
     .mode_switch     (mode_switch),
@@ -3704,8 +3792,8 @@ dvd_iso_reader dvd_iso_reader_inst (
     // ...qualified as a TIME seek when it is a fired D-pad gesture's (issue #127).
     // scrub_seek_pulse, NOT seek_rbn_pulse: mode_realign's own re-align seeks share
     // that output and are sector seeks.
-    .seek_tm_req    (scrub_seek_pulse & (dpad_tm_v | scrub_tm_req)),
-    .seek_tm_secs   (dpad_tm_v ? dpad_tm_s : scrub_tgt_secs),
+    .seek_tm_req    ((scrub_seek_pulse & (dpad_tm_v | scrub_tm_req)) | rst_seek_pulse),
+    .seek_tm_secs   (rst_seek_pulse ? rst_seek_secs : dpad_tm_v ? dpad_tm_s : scrub_tgt_secs),
     .tmap_used      (tmap_used_w),
     .tmap_fell      (tmap_fell_w),
     .ifo_bup_vmg    (ifo_bup_vmg_w),
@@ -3741,6 +3829,7 @@ dvd_iso_reader dvd_iso_reader_inst (
     .jump_pgn       (vm_jump_pgn),
     .jump_ptt       (vm_jump_ptt),
     .jump_natural   (vm_from_wait_w),     // Phase B: VM CELL/POST-verdict jump
+    .jump_ttn_hint  (vm_jump_ttn_hint),   // a restore: keep the PGCN, take the title's map
     .jump_ack       (jump_ack),
     .keep_vbuf      (keep_vbuf),
     .jump_cross     (jump_cross),      // menu<->title crossing -> flush_ctl.soft_flush
@@ -6363,6 +6452,9 @@ wire [31:0] hl_sptm_w;                    // nav_pci: that HLI's start PTS (nav_
 wire        hl_rj_w, hl_rj_ok_w;          // nav_pci: re-judge at a re-anchor, and its verdict (nav_trace X0)
 wire        hl_fb_promo_w;                // nav_pci: a fallback promotion (nav_trace X1)
 wire [31:0] hl_nxt_sptm_w;                // nav_pci: the parked HLI's start PTS (X1 payload)
+wire [31:0] hl_vobu_sptm_w;               // nav_pci: the front VOBU's start PTS (vm_snap)
+wire [31:0] whole_eltm_w;                 // the HUD clock (declared ahead of vm_snap; driven
+                                          // by hud_time_add, Phase 11 below)
 nav_pci nav_pci_inst (
     .hli_arm    (hli_arm_w),
     .clk        (clk_sys),
@@ -6438,7 +6530,8 @@ nav_pci nav_pci_inst (
     .dbg_rj        (hl_rj_w),        // -> nav_trace X0 (issue #176): re-judge at a re-anchor
     .dbg_rj_ok     (hl_rj_ok_w),
     .dbg_fb_promo  (hl_fb_promo_w),  // -> nav_trace X1: a FALLBACK promotion
-    .dbg_nxt_sptm  (hl_nxt_sptm_w)
+    .dbg_nxt_sptm  (hl_nxt_sptm_w),
+    .vobu_sptm     (hl_vobu_sptm_w)      // -> vm_snap: the front VOBU's start PTS
 );
 
 // =========================================================================
@@ -6515,6 +6608,7 @@ wire [15:0] dsi_vob_idn;
 // {hh,mm,ss} = dsi_c_eltm[31:8]; BCD 0..4 s = 24'h000000..24'h000004.
 assign chap_at_start = (dsi_c_eltm[31:8] <= 24'h000004);
 wire [31:0] dsi_nv_pck_lbn, dsi_vobu_ea, dsi_next_vobu, dsi_prev_vobu;
+wire [31:0] dsi_1stref_ea, dsi_prev_video;   // the VM snapshot's position (vm_snap)
 wire        dsi_commit;
 
 nav_dsi nav_dsi_inst (
@@ -6525,18 +6619,76 @@ nav_dsi nav_dsi_inst (
     .dsi_frame_start (ps_dsi_frame_start),
     .dsi_nv_pck_lbn (dsi_nv_pck_lbn),
     .dsi_vobu_ea    (dsi_vobu_ea),
-    .dsi_1stref_ea  (),
+    .dsi_1stref_ea  (dsi_1stref_ea),
     .dsi_vob_idn    (dsi_vob_idn),
     .dsi_c_idn      (dsi_c_idn),
     .dsi_c_eltm     (dsi_c_eltm),
     .dsi_next_vobu  (dsi_next_vobu),
     .dsi_prev_vobu  (dsi_prev_vobu),
     .dsi_next_video (),
-    .dsi_prev_video (),
+    .dsi_prev_video (dsi_prev_video),
     .dsi_commit     (dsi_commit),
     // seek/angle table read port -> Phase-8 time scrub (fwda/bwda[9] = +/-10 s)
     .tbl_raddr  (dsi_tbl_raddr),
     .tbl_rdata  (dsi_tbl_rdata)
+);
+
+// =========================================================================
+// VM STATE SNAPSHOT (dvd/vm_snap.sv; docs/nav_engine.md "State snapshot"). The HPS
+// asks over EXT_BUS 0x7D; dvd_vm's microcode streams the VM's whole state here the
+// next time it is at rest, and the playhead's position is latched with it. Save
+// states step 2: read-only, it changes nothing the VM does (run_vm_ab.sh). Placed
+// below nav_dsi, whose fields it latches. Gated by tools/check_vm_snap_wiring.py.
+// =========================================================================
+// The OSD's Save State rows -> one-cycle edges. Main holds an `R` bit for many
+// clk_sys cycles, so an edge is what turns a press into ONE request.
+reg ss_save_q, ss_load_q;
+always @(posedge clk_sys or negedge reset_n) begin
+    if (!reset_n) begin ss_save_q <= 1'b0; ss_load_q <= 1'b0; end
+    else begin ss_save_q <= status[55]; ss_load_q <= status[56]; end
+end
+wire ss_save_edge = status[55] & ~ss_save_q;
+wire ss_load_edge = status[56] & ~ss_load_q;
+
+vm_snap vm_snap_inst (
+    .clk          (clk_sys),
+    .rst_n        (reset_n),
+    .io_enable    (ext_bus[34]),
+    .io_strobe    (ext_bus[33]),
+    .io_din       (ext_bus[31:16]),
+    .drive        (snap_drive),
+    .dout         (snap_dout),
+    .snap_req     (vm_snap_req),
+    .snap_we      (vm_snap_we),
+    .snap_d       (vm_snap_d),
+    .snap_done    (vm_snap_done),
+    .snap_fmt     (vm_snap_fmt),
+    .restore_req  (vm_rst_req),
+    .rst_ra       (vm_rst_ra),
+    .rst_q        (vm_rst_q),
+    .rst_done     (vm_rst_done),
+    .pos_clr      (load_flush),
+    .pos_commit   (dsi_commit),
+    .nv_pck_lbn   (dsi_nv_pck_lbn),
+    .first_ref_ea (dsi_1stref_ea),
+    .prev_video   (dsi_prev_video),
+    .c_eltm       (dsi_c_eltm),
+    .vob_idn      (dsi_vob_idn),
+    .c_idn        (dsi_c_idn),
+    .eltm         (whole_eltm_w),       // the HUD clock, at the demux front
+    .vobu_sptm    (hl_vobu_sptm_w),     // ...that VOBU's start PTS
+    .stc          (av_stc),             // ...and the displayed picture's PTS
+    .ui_save      (ss_save_edge),       // the OSD's "Save to Slot"
+    .ui_load      (ss_load_edge),       // the OSD's "Load Slot"
+    .ui_slot      (status[54:53]),      // the Slot row
+    .vm_en        (menus_on),           // = dvd_vm's enable
+    .pgc_loaded   (pgc_loaded),
+    .video_live   (video_live_s2),
+    .menu_active  (menu_active),
+    .mount        (start_streaming),
+    .rst_seek_pulse (rst_seek_pulse),
+    .rst_seek_secs  (rst_seek_secs),
+    .rst_seek_rbn   (rst_seek_rbn)
 );
 
 // ★ NEW CELL for spu_decode's menu re-send guard (2026-09-18, Harry Potter
@@ -6628,8 +6780,7 @@ wire [3:0]  hud_alpha_w;
 // add (rate-aware frame carry). Falls back to the bare cell-relative time
 // when no cell list is loaded (linear .VOB fallback). Known Phase-7
 // characteristic: c_eltm is parse-front-timed, so the readout leads the
-// picture by the VBUF depth (~1 s).
-wire [31:0] whole_eltm_w;
+// picture by the VBUF depth (~1 s). (whole_eltm_w is declared beside nav_pci.)
 bcd_time_add hud_time_add (
     .a   (cur_cell_start_w),
     .b   (dsi_c_eltm),

@@ -126,7 +126,7 @@ module iso_reader_celldur_tb;
         .cmd_nr_pgm(nr_pgm_w),
         .seek_pulse(vm_seek_pulse), .seek_natural(1'b0), .seek_cell(vm_seek_cell), .seek_ack(seek_ack),
         .cur_cell(cur_cell), .cell_ready(cell_ready),
-        .jump_pulse(vm_jump_pulse), .jump_natural(1'b0), .jump_domain(vm_jump_domain),
+        .jump_pulse(vm_jump_pulse), .jump_natural(1'b0), .jump_ttn_hint(1'b0), .jump_domain(vm_jump_domain),
         .jump_vts(vm_jump_vts), .jump_pgcn(vm_jump_pgcn),
         .jump_entry(vm_jump_entry), .jump_cell(vm_jump_cell),
         .jump_ack(jump_ack), .pgc_loaded(pgc_loaded), .pgc_error(pgc_error),
@@ -151,8 +151,8 @@ module iso_reader_celldur_tb;
         // player parameters: the pre-player_regs constants (feature/player-regs)
         .cfg_lang(16'h656E), .cfg_sprm14(16'h0100), .cfg_sprm15(16'h7CFC), .cfg_sprm20(16'h0001),
         // new VM ports tied off (a floating input is X).
-        .agl_set(1'b0), .agl_set_val(4'd1),
-        .ptt_upd(ptt_upd_w), .ptt_val(ptt_cur_w),
+        .agl_set(1'b0), .agl_set_val(4'd1), .ast_set(1'b0), .ast_set_val(8'd0), .spst_set(1'b0), .spst_set_val(8'd0),
+        .ptt_upd(ptt_upd_w), .ptt_val(ptt_cur_w), .snap_req(1'b0), .restore_req(1'b0), .rst_q(16'd0),
         .clk(clk), .rst_n(rst_n), .enable(1'b1), .start(start),
         .rnd_seed(16'hACE1), .sec_tick(1'b0),
         .entropy_stir(1'b0), .entropy_val(16'd0),

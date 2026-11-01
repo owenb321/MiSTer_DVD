@@ -813,3 +813,42 @@ top of every page names which one. Check it against
 [the version line the OSD shows](../getting-started/install.md#checking-what-you-are-running).
 If they differ you are running an older core, or a test build handed out before a release;
 [install the latest release](../getting-started/install.md).
+
+## Save states
+
+**The Save State rows do nothing.** Save files are written to the SD card, which only the
+MiSTer Main can do. Install **MiSTer_DVDcss**, the same Main physical discs and CSS need.
+See [Install](../getting-started/install.md).
+
+**`Save states need Disc Menus on`.** A save state is the disc's own program, which runs
+only with Disc Menus set to On. Set it to On, then save or load again.
+
+**`This disc has no save slots`.** VCDs, SVCDs and plain video files get no slots: there is
+no disc identity to key them to. Use the seek controls instead.
+
+**`That save is from a different disc`.** The file was copied or renamed from another
+disc. Each save records which disc it came from, because a disc's navigation variables
+mean something different on every disc: loading one into another would jump somewhere
+arbitrary rather than fail politely.
+
+**`That save file is damaged`.** The file is truncated or corrupted. It is refused rather
+than half-applied; save again.
+
+**`That save is from another version of the core`.** The core was updated in a way that
+changed the layout of the state a save holds, so older saves cannot be loaded. Save again
+from this version.
+
+**`Could not save: the player stayed busy. Try again`.** The disc was in the middle of a
+jump (a menu waiting for its next scene to load, say) for the whole three seconds the
+player waited. Try again a moment later.
+
+**`Could not write the save file`.** The SD card is full or mounted read-only, or
+`savestates/DVD/` cannot be created.
+
+**Loading a film rewinds or skips a little.** That is expected. A restore re-seeks the disc
+the way a chapter skip does, and lands within about a second of the saved picture. See
+[Save states](../playback/save-states.md).
+
+**Saves disappeared after renaming a rip.** They should not: the disc is identified by
+reading it, not by its filename. If they really are gone, check `savestates/DVD/` on the
+SD card.

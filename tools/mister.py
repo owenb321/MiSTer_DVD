@@ -1135,6 +1135,56 @@ def cmd_log(args):
     print(out.rstrip())
 
 
+def cmd_snap(args):
+    """Take a VM state snapshot on the rig (dvd_ctl `vmsnap`, EXT_BUS 0x7D) and print
+    it by name (tools/vm_snap.py; docs/nav_engine.md "State snapshot"). Needs the
+    harness Main and a core with dvd/vm_snap.sv."""
+    import vm_snap
+    _, out = ssh('''
+rm -f /tmp/dvd_vmsnap.json
+echo vmsnap > /tmp/dvd_ctl
+i=0
+while [ ! -s /tmp/dvd_vmsnap.json ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+cat /tmp/dvd_vmsnap.json 2>/dev/null || true
+''')
+    out = out.strip()
+    if not out:
+        sys.exit('mister: no snapshot file -- is the harness Main running (deploy --main)?')
+    if args.out:
+        open(args.out, 'w').write(out + '\n')
+    try:
+        d = vm_snap.decode(json.loads(out))
+    except ValueError as e:
+        sys.exit(f'mister: {e}')
+    vm_snap.show(d)
+    return 0
+
+
+def cmd_vmload(args):
+    """Put a snapshot back on the rig (dvd_ctl `vmload`, EXT_BUS 0x7D LOAD; save states
+    step 3, docs/nav_engine.md §9): the VM restores it at its next rest and jumps to the
+    saved PGC and cell. Needs the harness Main, Disc Menus on, and the same disc."""
+    import vm_snap
+    try:
+        vm_snap.decode(json.load(open(args.file)))      # this tree's format, or refuse here
+    except (ValueError, KeyError) as e:
+        sys.exit(f'mister: {args.file}: {e}')
+    scp(args.file, '/tmp/dvd_vmload_in.json')
+    _, out = ssh('''
+rm -f /tmp/dvd_vmload.json
+echo "vmload /tmp/dvd_vmload_in.json" > /tmp/dvd_ctl
+i=0
+while [ ! -s /tmp/dvd_vmload.json ] && [ $i -lt 50 ]; do sleep 0.1; i=$((i+1)); done
+cat /tmp/dvd_vmload.json 2>/dev/null || true
+''')
+    out = out.strip()
+    if not out:
+        sys.exit('mister: no verdict -- is the harness Main running (deploy --main)?')
+    r = json.loads(out)
+    print('vmload: ' + r.get('result', ', '.join(k for k in r)))
+    return 0 if r.get('verdict') == 2 else 1
+
+
 def cmd_options(args):
     print('OSD options (from dvd/emu.sv CONF_STR):')
     for label, s, e, vals in options():
@@ -1233,6 +1283,14 @@ def main():
     p.add_argument('--afmt', choices=('alsa', 'pulse'),
                    help='ffmpeg audio input format (auto-detected)')
     p.set_defaults(fn=cmd_capture)
+
+    p = sub.add_parser('snap', help="the VM's whole state, by name (EXT_BUS 0x7D)")
+    p.add_argument('-o', '--out', help='also keep the raw JSON here')
+    p.set_defaults(fn=cmd_snap)
+
+    p = sub.add_parser('vmload', help='restore a snapshot taken by `snap -o` (EXT_BUS 0x7D)')
+    p.add_argument('file')
+    p.set_defaults(fn=cmd_vmload)
 
     p = sub.add_parser('log')
     p.add_argument('-n', type=int, default=20)

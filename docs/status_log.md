@@ -22,6 +22,89 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ✅ **SAVE STATES FROM THE OSD (save states step 4, 2026-10-27, branch
+  `feature/vm-snapshot`; sim-proven, fitted, HW-checked on the rig; not merged).** OSD page 2:
+  `Slot`, `Save to Slot`, `Load Slot` (`O[54:53]`, `R[55]`, `R[56]`). `vm_snap` counts the
+  presses and latches the slot in header word 2 with `vm_en`; the Main
+  (`main/support/dvd/dvd_sstate.cpp`, transport `dvd_vmsnap.cpp`) writes
+  `savestates/DVD/<disc id>_N.ss` and loads it back. Rig: T2 menu and film (landing within
+  a second; tracks restored), Scooby-Doo 2 saved in a menu with GPRMs set and loaded from a
+  fresh boot, refusals named.
+  - **Found on the rig:** the Audio/Subtitle steps never wrote SPRM1/SPRM2 back to the VM
+    (only Angle did), so a save lost the user's track and disc commands read a stale
+    stream. Fixed: `ast_set` / `spst_set`, and a restore syncs the user side.
+  - **Not a bug:** a menu restore highlights the menu's forced-select button (T2's timeline
+    menu authors `fosl_btnn = 1`), as libdvdnav does.
+  - **Decided:** Disc Menus off → no save states (the restore is the VM); the RNG is
+    restored exactly but re-stirred by input timing, so outcomes after a load are not a
+    replay. `docs/nav_engine.md` §11.
+  - Cost: +17 ALUTs, 0 M10K; device 98 % (merge gate: a stacked logic reclaim).
+  - Gates: `run_vm_snap.sh --red` ([ui] [menusoff] [wb], S22-S27),
+    `check_vm_snap_wiring.py --red`, `main/tests/run_tests.sh --red` (`dvd_sstate_test`,
+    `ss-*`), `test_status_bits.py`, `docs_check.py`, `mkdocs build --strict`.
+    `run_track_show.sh`'s M10 arm had been stale since PR #152; its anchor is fixed.
+
+- ✅ **EXACT LANDING — a restore resumes a film at its picture (2026-10-26, branch
+  `feature/vm-snapshot`; sim-proven, fitted, HW-measured).** Rig, Scooby-Doo 2's film,
+  measured with the nav FIFO: landings +0.24, +0.17, +0.56, −0.80 s from the saved
+  picture. Found on the rig: a slightly NEGATIVE demux lead is normal just after a seek
+  (−26 ms), and rounding down biased landings early; both fixed in the Main.
+  +109 ALM in `vm_snap`; the device is at 98 %.
+  - **No flash (§10a):** the seek fired on the landing's first picture, so the cell start
+    showed for 40 ms. It now fires at the landing's first NAV pack: four rig trials, no
+    picture between the two flushes (11-12 ms apart); the same instrument reports the old
+    build's flash in all four of its trials.
+  - **ROM split (2026-10-27):** the 1,280-word ROM as 1,024 + 256-word arrays: 536 → 533
+    M10K (+23 ALM); rig smoke incl. the Menu key's CallSS from the high array. The snapshot latches the HUD clock,
+  the front VOBU's `vobu_s_ptm` and the STC; the Main computes the displayed picture's PGC
+  time (clock − lead) or −1 (no picture in the VOBU, stale, lead out of 0..30 s); the
+  restore lands at the cell, then fires ONE time seek through the D-pad's path after the
+  landing's first picture. `docs/nav_engine.md` §10. Gates: `run_vm_snap.sh` [land]
+  S16–S20, `check_tmap_seek_wiring.py` R9–R12, `dvd_ctl_test` [16] + 3 arms.
+
+- 🔧 **VM STATE RESTORE — save states, step 3 (2026-10-26, branch `feature/vm-snapshot`;
+  sim-proven, fitted, ✅ HW-checked on the rig).** `mister.py vmload <snap.json>` puts a snapshot back: the
+  VM's RAM, SPRMs and wrapper state are restored and it jumps to the saved PGC and cell,
+  PRE skipped. HIL-only. Design: `docs/nav_engine.md` §9.
+  - The blob is checked (format, length, checksum) in `vm_snap` before anything reaches
+    the VM; a verdict is readable. The reader gained `jump_ttn_hint` (a restored title
+    keeps its chapter map). The ROM grew to 1,280 words (fifth M10K).
+  - **Found:** a restored `tt_resolve` let the landing overwrite the restored SPRM5 with
+    the reader's live value; the restore now clears it (`vm_restore_check.py`, `rstttr`).
+  - Gates: `vm_ab.py --restore` (py = RTL), `vm_restore_check.py` (round trips + 5 arms),
+    W11–W13, `run_vm_snap.sh` [refuse] [load] [pending] + S11–S15, Main [12]–[15];
+    `run_reader_regress.sh` IDENTICAL to the step-2 commit.
+  - **HW (rig):** Scooby-Doo 2's minigame restored from the menu and during the boot logo
+    (the §5g case): lands, plays, no freeze; the state after equals the snapshot but for
+    four words playback itself moves. Cost ~98 ALM; ⚠ +4 M10K (the 1,280-word ROM rounds
+    to 2,048 deep; a split would give 3 back).
+
+- 🔧 **VM STATE SNAPSHOT — save states, step 2 (2026-10-26, branch `feature/vm-snapshot`;
+  sim-proven, fitted, ✅ HW-checked on the rig).** `tools/mister.py snap` reads the DVD VM's whole state out
+  of the running core, consistently: data RAM (GPRMs, counter modes, RSM, fallback chain),
+  all 24 SPRMs as a command reads them, the wrapper's state, the reader's read-backs, and
+  the playhead (LBN, has-a-picture, `prev_video`, cell time). Read-only.
+  - **How:** a microcode handler (`vm.uasm` `E_SNAP`, 24 ROM words, 996 / 1,024 used)
+    streams 96 words through a new output port when the VM is at rest; `dvd/vm_snap.sv`
+    buffers them (1 M10K) for EXT_BUS `0x7D`; the custom Main's `vmsnap` writes
+    `/tmp/dvd_vmsnap.json`; `tools/vm_snap.py` names the words and refuses a format
+    (`snap_fmt`) that does not match the tree. Design: `docs/nav_engine.md` §8.
+  - **Found by the A/B:** the snapshot could see a held SPRM7 part or not, depending on
+    a one-cycle race with `pre_armed`. It now waits for the part to land (arm W9).
+  - **Gates:** `run_vm_ab.sh --red` now interleaves `pulse snap` steps, so old FSM = new RTL
+    proves a snapshot changes nothing (150 × 120, 23,810 pulses; 929 snapshots compared
+    word for word py = RTL on 120 × 120); `run_vm_snap.sh --red` (8 arms, S1–S10, 12
+    wiring mutations); `main/tests/run_tests.sh --red` (`dvd_ctl_test` [6]–[11],
+    `ctl-vs-*`); `check_nav_trace_wiring.py` updated for the three-way reply bus.
+  - **Cost, measured** (full fit, SEED 7, `DVD_vmsnap_20261026_1540.rbf`): `vm_snap` 125 ALM /
+    220 regs / 1 M10K, `dvd_vm` +17 ALM: ~142 ALM + 1 M10K. Timing passes; `clk_dec`'s cold
+    corner is thin (86.81 against 86.0). Detail: `docs/nav_engine.md` §8.
+  - **HW (rig):** Scooby-Doo 2 at the main menu and in the HQ minigame: all 16 GPRMs equal
+    the nav FIFO's last logged write each (46 / 62 writes); a log missing one write is
+    caught. ⚠ The latched position is the last NAV pack DEMUXED, which led the screen by a
+    cell in the minigame: step 3 must save the displayed picture's position.
+  - **Next:** step 3 (`docs/roadmap.md` "Save states").
+
 - ✅ **HIL PLAY HARNESS: ANSWERING AND TIMED MOVES (2026-10-24; HW-proven on the capture
   rig; ✅ MERGED PR #180).** The harness now plays two more game types
   from keys derived in the core's own VM, each confirmed by a control arm that must fail.

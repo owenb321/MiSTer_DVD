@@ -637,6 +637,58 @@ Follow-ups, all pre-existing and outside #176:
   against libdvdnav);
 - still unchecked by hand: a gapless in-title loop (Fairytopia), Mad Dog II, Crime Patrol.
 
+### ⏳ Save states: full save states only, in four steps (agreed 2026-10-26)
+
+The maintainer wants **full** save states (slots, any point, interactive discs included),
+not the per-disc resume of `feature/resume` on its own. The shelved design and its HW
+round are `docs/save_states.md` on branch `feature/save-states` (not on `main`). The
+microcoded VM (PR #168) moved nearly all VM state into one data RAM, which is what makes
+a cheap rebuild possible. Each step is useful on its own:
+
+1. ✅ **The Scooby-Doo 2 freeze, diagnosed (2026-10-26, HIL).** Not a boot-chain bug and
+   not reachable on `main`: the minigame's still+audio cells carry their only picture in
+   the cell's first VOBU (the other 59 are AC-3 only), and a restore's RBN seek landed in
+   one of the audio-only ones. **Rule for step 3: never land a restore in a VOBU without
+   a picture; snap back to `prev_video` or the cell start.** Record: `docs/save_states.md`
+   §5g on `feature/save-states` (commit ce43e35).
+2. ✅ **A read-only VM state snapshot** (`feature/vm-snapshot`: sim-proven, fitted at
+   ~142 ALM + 1 M10K, HW-checked on the rig; not yet merged): microcode handler `E_SNAP` +
+   `dvd/vm_snap.sv` on EXT_BUS `0x7D` + `mister.py snap`. `docs/nav_engine.md` §8.
+   ⚠ Its position is the last NAV pack demuxed, which can lead the screen by seconds:
+   step 3 must save the displayed picture's position instead.
+3. ✅ **Restore, exposed only to the HIL harness** (`feature/vm-snapshot`: sim-proven,
+   fitted at ~98 ALM + 4 M10K, HW-checked; not yet merged): `mister.py vmload`,
+   `vm.uasm` `E_RST`, `vm_snap` LOAD checked before it is applied, the reader's
+   `jump_ttn_hint`; a 1,280-word ROM. `docs/nav_engine.md` §9. Lands at the saved
+   CELL's start. On the rig: a minigame snapshot restored from the menu and from the
+   boot logo (the §5g case) lands and plays, the state matching the snapshot.
+   **Next:** let `hil_suite` start mid-game from a snapshot. (The ROM split took the 3
+   M10K back, 2026-10-27: 533 / 553.)
+   ✅ **3b. Exact landing for films** (same branch: sim-proven, fitted at +109 ALM,
+   HW-measured): the snapshot records the displayed picture's PGC time (the demux lead
+   taken off the HUD clock), and the restore time-seeks there after its cell landing.
+   Within ±1 s of the saved picture on the rig, and since §10a one visible transition
+   (the seek fires at the landing's first NAV pack: no flash of the cell start, measured).
+   `docs/nav_engine.md` §10. ⚠ The device is at 98 % ALM. Open for films: the displayed picture's position (step 2's finding)
+   and the no-picture VOBU rule (step 1's).
+4. ✅ **The user-facing feature** (`feature/vm-snapshot`: sim-proven, HW-checked on the rig
+   2026-10-27; not yet merged): OSD page 2 `Slot` / `Save to Slot` / `Load Slot`, slot files
+   `savestates/DVD/<disc id>_N.ss` keyed on `VIDEO_TS.IFO` (the shelved branch's identity),
+   `main/support/dvd/dvd_sstate.cpp`; Disc Menus off refuses both. The HW round found the
+   Audio/Subtitle steps never wrote SPRM1/2 back; they do now. `docs/nav_engine.md` §11.
+   ⏳ A physical disc; the maintainer's play-test. **Next: the logic reclaim stacked on
+   this branch (merge gate below).**
+
+**★ Merge gate (user decision, 2026-10-27): save states merge only together with a
+logic reclaim.** The device is at 98 % ALM on `feature/vm-snapshot`, against 92 % for v0.9.1.
+So once step 4 is done, the reclaim work in `docs/logic_reclaim.md` §10 goes on a
+branch stacked on top of it. Start with `mult22x16` (§10d). Then, if needed, the AC-3 IMDCT
+on the audio engine (§10a), paid for in M10K by the subtitle bitmap packing (§6). **Neither
+branch is pushed or merged until the reclaim succeeds.** If it fails, both stay local. The
+proposed bar for success is to win back at least what save states cost, about 370 ALM. Measure it
+in ALUTs and by entity, not with the device "ALMs needed" line, which moves several points
+with fitter packing. M10K must not go up overall, and timing must pass.
+
 ### ⏳ 2026-10-01 spec-audit: DVD Demystified 3rd-edition follow-ups (items 1–8 and 10b ✅; the rest re-ranked 2026-10-06, PR #165)
 
 The audit, with evidence and the user's decisions, is in

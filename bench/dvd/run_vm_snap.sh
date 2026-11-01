@@ -1,0 +1,165 @@
+#!/usr/bin/env bash
+# run_vm_snap.sh -- the VM state snapshot (dvd/vm_snap.sv + dvd_vm's E_SNAP;
+# docs/nav_engine.md "State snapshot"). Save states, step 2.
+#
+#   GREEN  bench/dvd/vm_snap_tb.sv: arms [absent] [empty] [req] [words] [nochange]
+#          [pos] [reread] [busy], the restore's [refuse] [load] [pending] [land], and the
+#          OSD rows' [ui] [menusoff] (save states step 4) all PASS --
+#          the real microcode and vm_snap together
+#          tools/check_vm_snap_wiring.py: the emu.sv / dvd_vm / nav_dsi / qsf /
+#          dvd_ctl.cpp seams (emu.sv has no bench)
+#   RED    (--red) every mutation of dvd/vm_snap.sv must fail EXACTLY the arms listed
+#          beside it, and the wiring check must catch each wiring mutation.
+#
+# The microcode's own side -- a snapshot changes nothing the VM does, its words equal
+# the Python model's, and its ;MUT / wrapper arms -- is bench/dvd/run_vm_ab.sh. The
+# Main's side is main/tests/run_tests.sh (dvd_ctl_test [6]..[11], ctl-vs-* arms).
+#
+# vvp exits 0 on a bench that only prints FAIL, so the verdict is the bench's own
+# PASS/FAIL lines plus its RESULT marker, never the exit code alone.
+set -u
+cd "$(dirname "$0")/../.."
+fail=0
+TB=bench/dvd/vm_snap_tb.sv
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+# sim <vm_snap.sv> -> prints the sorted FAIL arm list ("-" when none), or BUILD/NOVERDICT
+sim() {
+    local dut=$1 log="$tmp/log"
+    if ! iverilog -g2012 -I dvd -o "$tmp/sim" dvd/dvd_vm.sv "$dut" "$TB" > "$tmp/build" 2>&1; then
+        echo BUILD; return; fi
+    vvp "$tmp/sim" > "$log" 2>&1
+    if ! grep -q "^RESULT: " "$log"; then echo NOVERDICT; return; fi
+    local arms; arms=$(grep -oE '^FAIL \[[a-z]+\]' "$log" | sed 's/FAIL \[\(.*\)\]/\1/' | sort -u | tr '\n' ' ')
+    echo "${arms:--}"
+}
+
+echo "== GREEN"
+iverilog -g2012 -I dvd -o "$tmp/g" dvd/dvd_vm.sv dvd/vm_snap.sv "$TB" && vvp "$tmp/g" > "$tmp/glog" 2>&1
+if grep -q "^RESULT: PASS" "$tmp/glog" && ! grep -q "^FAIL" "$tmp/glog"; then
+    echo "  PASS vm_snap_tb"; grep "^PASS \[" "$tmp/glog" | sed 's/^/      /'
+else
+    echo "  FAIL vm_snap_tb"; tail -20 "$tmp/glog" | sed 's/^/      /'; fail=1
+fi
+if python3 tools/check_vm_snap_wiring.py > "$tmp/wlog" 2>&1; then
+    echo "  PASS check_vm_snap_wiring"
+else
+    echo "  FAIL check_vm_snap_wiring"; grep FAIL "$tmp/wlog" | sed 's/^/      /'; fail=1
+fi
+
+if [ "${1:-}" = "--red" ]; then
+    echo "== RED (RTL: each must fail exactly its arms)"
+    # mut <name> <expected arms, space separated> <old> <new> [<old2> <new2>]
+    mut() {
+        local name=$1 want=$2; shift 2
+        python3 - "$tmp/m.sv" "$@" <<'PYEOF'
+import sys
+dst, *pairs = sys.argv[1:]
+s = open('dvd/vm_snap.sv').read()
+for old, new in zip(pairs[0::2], pairs[1::2]):
+    if s.count(old) != 1:
+        sys.exit(f'anchor count {s.count(old)} != 1: {old!r}')
+    s = s.replace(old, new)
+open(dst, 'w').write(s)
+PYEOF
+        if [ $? != 0 ]; then echo "  FAIL $name: mutation did not apply -- its arm is VOID"; fail=1; return; fi
+        local got; got=$(sim "$tmp/m.sv"); got=$(echo "$got" | xargs)
+        if [ "$got" = "$want" ]; then echo "  ok   $name -> [$got]"
+        else echo "  FAIL $name: failed [$got], must fail exactly [$want]"; fail=1; fi
+    }
+    mut "S1 command decoded on its low byte"     "absent" \
+        "active <= (io_din == CMD);" "active <= (io_din[7:0] == CMD[7:0]);"
+    # S2 re-fires every cycle the request bit is held, so it also restarts the stream
+    # over and over: the words, the re-read and the VM's rest are disturbed with it
+    mut "S2 request fires mid-transaction"       "nochange req reread words" \
+        "if (!io_enable && req_l && !rbusy) begin" "if (req_l && !rbusy) begin"
+    mut "S3 len one short"                       "busy req words" \
+        "len  <= {1'b0, wa};" "len  <= {1'b0, wa} - 8'd1;"
+    mut "S4 seq never moves"                     "busy req" \
+        "busy <= 1'b0; seq <= seq + 16'd1;" "busy <= 1'b0; seq <= seq;"
+    mut "S5 has_video stuck at 1"                "pos" \
+        "p_video <= |first_ref_ea;" "p_video <= 1'b1;"
+    mut "S6 freshness survives a flush"          "pos" \
+        "if (pos_clr)         fresh <= 1'b0;" "if (1'b0)            fresh <= 1'b0;"
+    # S7 also corrupts the reference blob the restore arms read back, and [wb]'s read
+    mut "S7 no read-ahead restart"               "load refuse reread wb" \
+        "begin dout_r <= p_stc[15:0]; raddr <= 7'd0; end" "begin dout_r <= p_stc[15:0]; end"
+    mut "S8 a busy buffer streamed"              "busy" \
+        "left   <= busy ? 8'd0 : len;" "left   <= len;"
+    mut "S9 position latched live, not at done"  "pos" \
+        "p_lbn <= nv_pck_lbn; p_prev <= prev_video;" "p_prev <= prev_video;" \
+        "5'd5: dout_r <= p_lbn[31:16];" "5'd5: dout_r <= nv_pck_lbn[31:16] ^ 16'h0001;"
+    mut "S10 words past len not zero"            "busy empty words" \
+        "end else dout_r <= 16'd0;
+                endcase" "end else dout_r <= q;
+                endcase"
+    # ---- the restore (save states step 3) ----
+    # The restore arms share one VM in sequence: a blob wrongly ACCEPTED in [refuse] is
+    # really applied, so the restore count [load] checks (and the state [pending] needs)
+    # moves with it. Those extra arms are this mutation's own consequence.
+    mut "S11 the checksum is never checked"      "load refuse" \
+        "else if (h_acc != h_sum)        verdict <= 3'd5;" "else if (1'b0)                  verdict <= 3'd5;"
+    mut "S12 a refused format still restores"    "land load pending refuse" \
+        "else if (h_fmt != snap_fmt)     verdict <= 3'd3;" "else if (h_fmt != snap_fmt)     begin verdict <= 3'd3; rbusy <= 1'b1; restore_req <= 1'b1; end"
+    mut "S13 a load overwrites a pending blob"   "pending" \
+        "if (bcnt >= 8'd8 && h_cnt < WORDS && !rbusy && !busy) begin" "if (bcnt >= 8'd8 && h_cnt < WORDS && !busy) begin"
+    mut "S14 the VM reads the host's address"    "load" \
+        "q <= buf_m[rbusy ? rst_ra : raddr];" "q <= buf_m[raddr];"
+    mut "S15 applied restores not counted"       "load" \
+        "rbusy <= 1'b0; verdict <= 3'd2; rcount <= rcount + 5'd1;" "rbusy <= 1'b0; verdict <= 3'd2; rcount <= rcount;"
+    # ---- the exact landing (§10) ----
+    mut "S16 the seek fires before the NAV pack" "land" \
+        "else if (pos_commit || (video_live && !live_d)) begin" "else begin"
+    mut "S21 no picture fallback"                "land" \
+        "else if (pos_commit || (video_live && !live_d)) begin" "else if (pos_commit) begin"
+    mut "S17 a menu landing seeks"               "land" \
+        "RS_LOAD: if (pgc_loaded) rs <= menu_active ? RS_IDLE : RS_LIVE;" "RS_LOAD: if (pgc_loaded) rs <= RS_LIVE;"
+    mut "S18 another load does not abandon it"   "land" \
+        "default: if (pgc_loaded) rs <= RS_IDLE;    // something else loaded first" "default: if (1'b0) rs <= RS_IDLE;"
+    # S19: every LOAD carries the target word, so with it outside the sum every load
+    # is refused, and every restore arm fails with it ([menusoff]'s "back on" load too)
+    mut "S19 the target not under the checksum"  "land load menusoff pending refuse" \
+        "8'd5: begin h_tm   <= io_din; h_acc <= h_acc + io_din; end" "8'd5: h_tm <= io_din;"
+    mut "S20 the cell clock latched, not the PGC's" "pos" \
+        "p_tm <= eltm;" "p_tm <= c_eltm;"
+
+    # ---- the OSD's Save State rows (save states step 4) ----
+    mut "S22 the slot read live, not at the press" "ui" \
+        "if (ui_save | ui_load) slot_l <= ui_slot;" "slot_l <= ui_slot;"
+    mut "S23 a load press counted as a save"     "ui" \
+        "if (ui_load) ld_n <= ld_n + 2'd1;" "if (ui_load) sv_n <= sv_n + 2'd1;"
+    # [ui] runs with enable on, so a constant 1 only shows once Disc Menus goes off
+    mut "S24 vm_en not reported"                 "menusoff" \
+        "5'd2: dout_r <= {busy_s, vm_en, slot_l, ld_n, sv_n, len_s};" "5'd2: dout_r <= {busy_s, 1'b1, slot_l, ld_n, sv_n, len_s};"
+    mut "S25 a load with Disc Menus off accepted" "menusoff" \
+        "else if (!vm_en)                verdict <= 3'd7;   // Disc Menus off: never taken" "else if (1'b0)                  verdict <= 3'd7;"
+
+    # ---- the Audio / Subtitle write-back (dvd_vm.sv) ----
+    vmmut() {   # like mut, on dvd/dvd_vm.sv
+        local name=$1 want=$2 old=$3 new=$4
+        python3 - "$tmp/v.sv" "$old" "$new" <<'PYEOF'
+import sys
+dst, old, new = sys.argv[1:]
+s = open('dvd/dvd_vm.sv').read()
+if s.count(old) != 1: sys.exit(f'anchor count {s.count(old)} != 1')
+open(dst, 'w').write(s.replace(old, new))
+PYEOF
+        [ $? != 0 ] && { echo "  FAIL $name: mutation did not apply"; fail=1; return; }
+        local log="$tmp/vlog" arms
+        if ! iverilog -g2012 -I dvd -o "$tmp/vsim" "$tmp/v.sv" dvd/vm_snap.sv "$TB" > "$tmp/vb" 2>&1; then arms=BUILD
+        else vvp "$tmp/vsim" > "$log" 2>&1
+             arms=$(grep -oE '^FAIL \[[a-z]+\]' "$log" | sed 's/FAIL \[\(.*\)\]/\1/' | sort -u | tr '\n' ' ' | xargs); fi
+        if [ "${arms:--}" = "$want" ]; then echo "  ok   $name -> [$arms]"
+        else echo "  FAIL $name: failed [${arms:--}], must fail exactly [$want]"; fail=1; fi
+    }
+    vmmut "S26 the audio write-back dropped" "wb" \
+        "if (ast_set) sprm1 <= {8'd0, ast_set_val};" "if (1'b0) sprm1 <= {8'd0, ast_set_val};"
+    vmmut "S27 the subtitle write-back dropped" "wb" \
+        "if (spst_set) sprm2 <= {8'd0, spst_set_val};" "if (1'b0) sprm2 <= {8'd0, spst_set_val};"
+
+    echo "== RED (wiring: the checker must catch each)"
+    python3 tools/check_vm_snap_wiring.py --red || fail=1
+fi
+
+[ $fail = 0 ] && echo "run_vm_snap: ALL PASS" || { echo "run_vm_snap: FAILURES"; exit 1; }

@@ -79,6 +79,8 @@ ITAB:       jmp  E_TICK
             jmp  E_TITLE
             jmp  E_CMENU
             jmp  E_RETURN
+            jmp  E_SNAP
+            jmp  E_RST
 
 ; WAIT (old V_WAIT): a jump was issued; the reader answers with pgc_loaded or
 ; pgc_error, or the wrapper's timer gives up (~0.62 s, frozen by wait_hold).
@@ -271,6 +273,114 @@ E_DISABLED: in   t1, P_EVENTS
             andi t1, t1, EV_CELLCMD | EV_PGCEND
             beqi t1, 0, IDLE
             jmp  ADV_IDLE
+
+; SNAP: stream the VM's state out through O_SNAP (docs/nav_engine.md "State
+; snapshot"). The wrapper offers it last, so it runs only with nothing pending: the
+; snapshot is of a VM at rest, and nothing can change between its words. It writes no
+; RAM and no output but O_SNAP, so the VM is untouched (vm_ab's old-FSM arm proves it:
+; a `snap` step is a no-op there). The walk flag makes it count as idle to the wrapper,
+; as the tick does, so a stir or a pre_done landing meanwhile is not held off.
+; The word order is tools/nav_isa.py snap_layout(): never reorder it without that.
+E_SNAP:     ori  blkf, blkf, F_WALK
+            out  O_FLAGS, blkf
+            li   t1, 0
+ES1:        ld   t2, M_GPRM[t1]          ; data RAM 0x00 .. SNAP_RAM_END-1
+            out  O_SNAP, t2
+            addi t1, t1, 1
+            bltui t1, SNAP_RAM_END, ES1  ;MUT snapram: bltui t1, SNAP_RAM_END - 1, ES1
+            li   t1, 0
+ES2:        ld   t2, M_SPRMI[t1]         ; SPRM n as a command reads it: image | window
+            in   t3, P_SPRMW[t1]
+            or   t2, t2, t3              ;MUT snapsprm: mov t2, t2
+            out  O_SNAP, t2
+            addi t1, t1, 1
+            bltui t1, SNAP_SPRMS, ES2
+            li   t1, 0
+ES3:        in   t2, P_CUR_VTS[t1]       ; input ports 0 .. SNAP_INS-1
+            out  O_SNAP, t2
+            addi t1, t1, 1
+            bltui t1, SNAP_INS, ES3
+            outi O_PULSE, PB_SNAPDONE
+            andi blkf, blkf, NOT_WALK
+            out  O_FLAGS, blkf
+            jmp  IDLE
+
+; RESTORE: put a snapshot back and land where it was taken (save states step 3,
+; docs/nav_engine.md §9). The blob is a snapshot (tools/nav_isa.py snap_layout()) that
+; dvd/vm_snap.sv has already checked (format, length, checksum): nothing here runs on an
+; unchecked one. Offered like SNAP, last and only at rest, so no chain is cut short.
+;   - data RAM 0x00..0x27 and the RAM-resident SPRMs come back word for word;
+;   - the wrapper's SPRMs through their own ports; SPRM8 frozen first, or the menu
+;     shadow would take the live selection back the next cycle (save_states.md §5f);
+;   - LFSR, domain, VTS, menu_seen and the last-menu latch through O_RSTW, in order;
+;   - then a jump to the saved PGC and cell, PRE skipped as LinkRSM's is (the PRE
+;     would re-initialise the very GPRMs just restored). A title's VTS is the reader's,
+;     a menu's the VM's (§5f), and a title passes its VTS_TTN as a HINT so the reader
+;     keeps that title's chapter map without scanning for a PGC.
+; The landing is the saved CELL's start: within-cell position is not restored yet
+; (the stream position leads the picture, and may be a VOBU with no picture, §8).
+E_RST:      li   t4, 0
+ER1:        call RDW                     ; t2 = blob[t4]
+            bgeui t4, SNAP_RAM_END, ER2
+            st   t2, M_GPRM[t4]          ;MUT rstram: nop
+            jmp  ER4
+ER2:        subi t3, t4, SNAP_RAM_END
+            bgeui t3, 16, ER3            ; the RAM-resident SPRMs are all below 16
+            li   t5, SPRM_RAM_MASK
+            shr  t5, t5, t3
+            bbc  t5, 0, ER3
+            st   t2, M_SPRMI[t3]
+ER3:        bltui t4, RSTW_FIRST, ER4
+            bgeui t4, RSTW_FIRST + RSTW_N, ER4
+            out  O_RSTW, t2              ;MUT rstw: nop
+ER4:        addi t4, t4, 1
+            bltui t4, SNAP_WORDS, ER1
+            call UPRO                    ; a new activation: fuse, chain, blk = BTN
+            li   t4, SNAP_RAM_END + 1
+            call RDW
+            out  O_SPRM1, t2
+            li   t4, SNAP_RAM_END + 2
+            call RDW
+            out  O_SPRM2, t2
+            li   t4, SNAP_RAM_END + 3
+            call RDW
+            out  O_SPRM3, t2
+            li   t4, SNAP_RAM_END + 6
+            call RDW
+            out  O_SPRM6, t2
+            li   t4, SNAP_RAM_END + 7
+            call RDW
+            out  O_SPRM7, t2
+            li   t4, SNAP_RAM_END + 8
+            call RDW
+            outi O_PULSE, PB_FRZ8        ;MUT rstfrz: nop
+            out  O_SPRM8, t2
+            li   t4, SNAP_IN0 + P_CUR_PGCN
+            call RDW
+            mov  t3, t2
+            in   t1, P_VM_DOM            ; restored above
+            in   t2, P_VM_VTS
+            bnei t1, DOM_TT, ER5
+            li   t4, SNAP_IN0 + P_CUR_VTS
+            call RDW                     ; a title: the reader's VTS
+ER5:        call JSET
+            li   t4, SNAP_IN0 + P_CUR_CELL
+            call RDW
+            out  O_J_CELL, t2
+            bnei t1, DOM_TT, ER6
+            ld   t2, M_SPRMI+5           ; VTS_TTN, as a hint (bit 15)
+            ori  t2, t2, 0x8000          ;MUT rsthint: ori t2, t2, 0
+            out  O_J_TTN, t2
+ER6:        li   t1, 1
+            st   t1, M_SKIP_PRE
+            st   r0, M_TT_RESOLVE        ; a jump's pending SPRM5: not the restored one's ;MUT rstttr: nop
+            outi O_PULSE, PB_RSTDONE
+            jmp  JGO0
+; RDW: t2 = blob[t4] (the buffer's read is registered: one instruction between)
+RDW:        out  O_RSTA, t4
+            nop
+            in   t2, P_RSTQ
+            ret
 
 ; BOOT: run the First Play PGC
 E_BOOT:     call UPRO

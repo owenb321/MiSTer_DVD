@@ -272,6 +272,15 @@ module dvd_iso_reader #(
     // Menu-domain sources bypass (their tail rides keep_vbuf; menus stay
     // snappy); user/boot jumps arrive with 0 (the VM's BLK_BTN discipline).
     input             jump_natural,
+    // SAVE-STATE RESTORE (dvd_vm E_RST, docs/nav_engine.md §9): jump_ttn is a HINT,
+    // not a title-entry scan. A title-entry scan and an exact PGCN are otherwise
+    // mutually exclusive (want_pgcn is forced to 0 for a non-zero ttn), while want_ttn
+    // is the only thing that sets cur_ttn, which picks the PTT/chapter map. A restore
+    // names an exact PGCN -- a game title's PGC is reached by LinkPGCN, not the one
+    // the PTT table would pick -- and must still keep ITS title's chapter map. Set,
+    // the ttn feeds want_ttn and want_pgcn is left alone; clear (every other jump),
+    // everything below is as before. (Ported from feature/save-states.)
+    input             jump_ttn_hint,
     output reg        jump_ack,      // pulse: jump latched + executing (flush now)
     // MENU-TRANSITION VBUF HOLD (Phase-5): valid on the seek_ack/jump_ack cycle.
     // 1 = this seek/jump stays WITHIN a menu (menu->menu transition: LinkPGN cell
@@ -1236,6 +1245,7 @@ reg [7:0]  jvts_l, jcell_l;
 reg [15:0] jpgcn_l;                   // 15-bit DVD PGCN field
 reg [3:0]  jentry_l;
 reg [6:0]  jttn_l;                    // Phase-4: TT title-entry scan target
+reg        jhint_l;                   // ...but as a HINT: feed want_ttn, keep want_pgcn
 reg [7:0]  jpgn_l;                    // Phase-4: TT start program (pm walk latch)
 reg [10:0] jptt_l;                    // Phase-6: exact PTT part to resolve (0/1 = PTT[0]).
                                       // 11-bit: the VM operand is 10-bit (part <= 1023)
@@ -2790,6 +2800,7 @@ always @(posedge clk or negedge rst_n) begin
         still_act    <= 1'b0;
         adv_pend     <= 1'b0;
         jttn_l       <= 7'd0;
+        jhint_l      <= 1'b0;
         jpgn_l       <= 8'd0;
         jptt_l       <= 11'd0;
         vm_cell_cmd  <= 1'b0;
@@ -3165,6 +3176,7 @@ always @(posedge clk or negedge rst_n) begin
                     jentry_l <= 4'd0;
                     jcell_l  <= 8'd0;
                     jttn_l   <= cur_ttn;
+                    jhint_l  <= 1'b0;            // a real PTT resolve, not a restore hint
                     jpgn_l   <= 8'd0;            // S_PTT_PGC sets the start pgn
                     jptt_l   <= {1'b0, g_t} + 11'd1;
                     chap_st  <= CH_IDLE;
@@ -3201,6 +3213,7 @@ always @(posedge clk or negedge rst_n) begin
             jentry_l <= jump_entry;
             jcell_l  <= jump_cell;
             jttn_l   <= jump_ttn;
+            jhint_l  <= jump_ttn_hint;
             jpgn_l   <= jump_pgn;
             jptt_l   <= {1'b0, jump_ptt};
         end
@@ -3294,6 +3307,7 @@ always @(posedge clk or negedge rst_n) begin
             adv_pend        <= 1'b0;
             follow_cnt      <= 2'd0;
             jttn_l          <= 7'd0;
+            jhint_l         <= 1'b0;
             jpgn_l          <= 8'd0;
             jptt_l          <= 11'd0;
             vmw_pgc_pend    <= 1'b0;
@@ -3427,7 +3441,7 @@ always @(posedge clk or negedge rst_n) begin
                     sel_i       <= 7'd0;
                     sel_ret     <= 1'b0;
                     play_vtsn   <= jvts_l;
-                    want_pgcn   <= (jttn_l != 7'd0) ? 16'd0
+                    want_pgcn   <= (jttn_l != 7'd0 && !jhint_l) ? 16'd0
                                    : ((jpgcn_l == 16'd0) ? 16'd1 : jpgcn_l);
                     ttn_pick    <= (jttn_l == 7'd0);    // no title named: find its owner
                     ptt_hit     <= 1'b0;   // ...unless title 1's table names it (P_PTT)

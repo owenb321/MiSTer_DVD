@@ -786,6 +786,99 @@ if [ "$RED" -eq 1 ]; then
     red_case dvd_ctl.cpp dvd_ctl_test.cpp \
         "reads exactly 64 entries" \
         "s/? DVD_NAVTRACE_MAXN : h\[1\];/? DVD_NAVTRACE_MAXN - 1 : h[1];/" ctl-nt-cap-short
+
+    # ---- dvd_ctl + dvd_vmsnap: the VM state snapshot (0x7D, dvd/vm_snap.sv) ----
+    # The request without its control word: the core is asked nothing, and every
+    # vmsnap ends in a timeout.
+    red_case dvd_vmsnap.cpp dvd_ctl_test.cpp \
+        "FAIL control word 1" \
+        "s/uint16_t cur = spi_w(1);/uint16_t cur = spi_w(0);/" ctl-vs-no-request
+    # A busy buffer read: words the core is still writing, handed out as a snapshot.
+    red_case dvd_vmsnap.cpp dvd_ctl_test.cpp \
+        "FAIL busy: only the 19 header words" \
+        "s/int ready = h\[0\] == DVD_VMSNAP_MAGIC \&\& !busy \&\&/int ready = h[0] == DVD_VMSNAP_MAGIC \&\&/" ctl-vs-busy-read
+    # The buffer cap off by one: the last word of a full reply is left on the bus.
+    red_case dvd_vmsnap.cpp dvd_ctl_test.cpp \
+        "FAIL reads at most 128 words" \
+        "s/if (len > DVD_VMSNAP_MAXW) len = DVD_VMSNAP_MAXW;/if (len > DVD_VMSNAP_MAXW) len = DVD_VMSNAP_MAXW - 1;/" ctl-vs-cap-short
+    # No timeout: a VM that never comes to rest leaves the host waiting forever.
+    red_case dvd_ctl.cpp dvd_ctl_test.cpp \
+        "FAIL times out at 3 s" \
+        "s/if (now - vs_t0 > DVD_VMSNAP_TIMEOUT)/if (0)/" ctl-vs-no-timeout
+    # vmload without its checksum: every load refused by the core.
+    red_case dvd_vmsnap.cpp dvd_ctl_test.cpp \
+        "FAIL the checksum is the 16-bit sum" \
+        "s/^\tspi_w(sum);$/\tspi_w(0);/" ctl-vl-no-sum
+    # a pending verdict taken as the result: the host reports before the VM has restored.
+    red_case dvd_ctl.cpp dvd_ctl_test.cpp \
+        "FAIL pending: still waiting" \
+        "s/if (verdict == 1 || verdict == 0)/if (verdict == 0)/" ctl-vl-pending-final
+    # the lead added instead of taken off: a resume lands seconds AFTER the picture
+    red_case dvd_vmsnap.cpp dvd_ctl_test.cpp \
+        "FAIL front time minus the lead" \
+        "s/(int64_t)ff \* 90000 \/ fps - lead;/(int64_t)ff * 90000 \/ fps + lead;/" ctl-vl-lead-added
+    # no bound on the lead: a PTS restart between the demux and the screen lands anywhere
+    red_case dvd_vmsnap.cpp dvd_ctl_test.cpp \
+        "FAIL a lead below -1.5 s" \
+        "s/if (lead < -135000 || lead > 30 \* 90000) return -1;/if (lead > 30 * 90000) return -1;/" ctl-vl-lead-unbounded
+    # the old rule: any negative lead refused -- a snapshot just after a seek loses its time
+    red_case dvd_vmsnap.cpp dvd_ctl_test.cpp \
+        "FAIL a small negative lead" \
+        "s/if (lead < -135000 || lead > 30 \* 90000) return -1;/if (lead < 0 || lead > 30 * 90000) return -1;/" ctl-vl-lead-positive-only
+    # rounded down again: every landing biased early by up to a second
+    red_case dvd_vmsnap.cpp dvd_ctl_test.cpp \
+        "FAIL 770.83 s rounds up" \
+        "s/(int)((ticks + 45000) \/ 90000)/(int)(ticks \/ 90000)/" ctl-vl-floor
+    # a no-picture VOBU given a time: the step-1 freeze, by seek instead of by restore
+    red_case dvd_vmsnap.cpp dvd_ctl_test.cpp \
+        "FAIL a VOBU without a picture" \
+        "s/if (!fresh || !video || !sptm) return -1;/if (!fresh || !sptm) return -1;/" ctl-vl-no-video-timed
+
+    # ---- dvd_sstate: the OSD's save states (docs/nav_engine.md §11) ----------
+    # no baseline: a core loaded with its counters already moved saves or loads at once
+    red_case dvd_sstate.cpp dvd_sstate_test.cpp \
+        "FAIL counters already set do nothing" \
+        "s/have_ref = 1; ref_save = sv; ref_load = ld;/have_ref = 1;/" ss-no-baseline
+    # another disc's file accepted: its GPRMs jump into PGCs that mean something else
+    red_case dvd_sstate.cpp dvd_sstate_test.cpp \
+        "FAIL refused, nothing sent" \
+        "s/if (buf\[12 + i\] != (uint8_t)(dh >> (8 \* i))) return -1;/(void)0;/" ss-other-disc
+    # the file's own checksum unchecked: a flipped word goes to the core
+    red_case dvd_sstate.cpp dvd_sstate_test.cpp \
+        "FAIL a flipped word: refused" \
+        "s/if (sum != get16(buf + 10)) return 0;/(void)sum;/" ss-no-file-sum
+    # Disc Menus off not checked: a save state of a VM that is not running
+    red_case dvd_sstate.cpp dvd_sstate_test.cpp \
+        "FAIL a save is not attempted" \
+        "s/if (!VMSNAP_VM_EN(w2))/if (0)/" ss-menus-off
+    # the landing time dropped: every load lands at the cell start
+    red_case dvd_sstate.cpp dvd_sstate_test.cpp \
+        "FAIL the landing time and RBN" \
+        "s/uint16_t tm = (disp >= 0 \&\& disp < 0xFFFF) ? (uint16_t)disp : 0xFFFF;/uint16_t tm = 0xFFFF;/" ss-no-landing
+    # a pending verdict taken as the result: "Loaded" before the VM has restored
+    red_case dvd_sstate.cpp dvd_sstate_test.cpp \
+        "FAIL pending: nothing said yet" \
+        "s/if (v == VL_PENDING || v <= VL_NONE)/if (v <= VL_NONE)/; s/case VL_APPLIED: /case VL_PENDING: case VL_APPLIED: /" ss-pending-final
+    # the FNV offset basis one digit short again (the shelved branch's first version)
+    red_case dvd_sstate.cpp dvd_sstate_test.cpp \
+        "FAIL offset basis" \
+        "s/14695981039346656037ULL/1469598103934665603ULL/" ss-fnv-basis
+    # slot numbering off by one: the OSD says slot 3 and the file is _2
+    red_case dvd_sstate.cpp dvd_sstate_test.cpp \
+        "FAIL says Saved to slot 3\\|FAIL the file is" \
+        "s/disc_id, slot + 1);/disc_id, slot);/" ss-slot-off-by-one
+    # no timeout: a VM that never rests leaves the save waiting forever, every later press ignored
+    red_case dvd_sstate.cpp dvd_sstate_test.cpp \
+        "FAIL gives up at 3 s" \
+        "s/if (n < 0 || now - op_t0 > SS_TIMEOUT_MS)/if (n < 0)/" ss-no-timeout
+    # UI raised during an MGL launch: pins the menu FSM (docs/mgl_launch.md)
+    red_case dvd_sstate.cpp dvd_sstate_test.cpp \
+        "FAIL nothing while the launch runs" \
+        "s/if (dvd_launch_ui_busy()) return;/(void)0;/" ss-ui-during-launch
+    # dvd_phys records the drive AFTER the mount: the identity hook sees no device
+    red_case dvd_phys.cpp dvd_phys_test.cpp \
+        "\[17\] mounts whose hooks saw no device" \
+        "s/^\tsnprintf(mounted_dev, sizeof(mounted_dev), \"%s\", dev);$/\t(void)0;/" phys-dev-after-mount
     echo
 fi
 

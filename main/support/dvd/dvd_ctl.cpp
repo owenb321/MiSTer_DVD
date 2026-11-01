@@ -14,6 +14,7 @@
 #include "../../spi.h"
 #include "../../hardware.h"
 #include "dvd_ctl.h"
+#include "dvd_vmsnap.h"
 
 // Presence of this file ARMS the channel. Absent -- the shipped default -- this
 // module does nothing at all: no SPI, no file writes, no FIFO.
@@ -81,6 +82,25 @@
 #define DVD_NAVTRACE_MAXN  64
 #ifndef DVD_NAVTRACE_LOG
 #define DVD_NAVTRACE_LOG   "/tmp/dvd_navtrace.jsonl"
+#endif
+
+// VM STATE SNAPSHOT (dvd/vm_snap.sv, docs/nav_engine.md "State snapshot"). `vmsnap`
+// on the command FIFO asks the core for one; the next ticks poll until it is complete
+// and write it to DVD_VMSNAP_FILE: the raw words plus the position, decoded on the
+// host by tools/vm_snap.py (the layout's names live there, keyed by `fmt`). Must match
+// dvd/vm_snap.sv; the transport (one SPI transaction per call) is dvd_vmsnap.cpp,
+// shared with the OSD's save states (dvd_sstate.cpp).
+#define DVD_VMSNAP_TIMEOUT  3000
+#define DVD_VMSNAP_POLL_MS  20
+#ifndef DVD_VMSNAP_FILE
+#define DVD_VMSNAP_FILE     "/tmp/dvd_vmsnap.json"
+#endif
+// RESTORE (save states step 3, docs/nav_engine.md §9): `vmload <file>` sends a snapshot
+// file back as a LOAD (control bit 1: fmt, len, checksum, words); the core checks it
+// and the VM restores it at its next rest. The verdict (header word 4 [15:13]) is
+// polled into DVD_VMLOAD_FILE. HIL-armed only, like vmsnap: not a user feature yet.
+#ifndef DVD_VMLOAD_FILE
+#define DVD_VMLOAD_FILE     "/tmp/dvd_vmload.json"
 #endif
 
 static int  ctl_fd = -1;
@@ -390,6 +410,175 @@ static void navtrace_drain(double t)
 }
 
 // ---------------------------------------------------------------------------
+// VM state snapshot
+// ---------------------------------------------------------------------------
+static int      vs_wait = 0;          // a request is outstanding
+static uint16_t vs_seq0;              // the core's seq when we asked
+static unsigned vs_t0, vs_last;
+
+static void vmsnap_request()
+{
+	uint16_t seq = 0;
+	if (!dvd_vmsnap_ask(&seq))
+	{
+		ctl_log("DVD_CTL: core has no VM snapshot (0x7D)");
+		FILE *f = fopen(DVD_VMSNAP_FILE, "w");
+		if (f) { fprintf(f, "{\"absent\":true}\n"); fclose(f); }
+		return;
+	}
+	unlink(DVD_VMSNAP_FILE);
+	vs_seq0 = seq;
+	vs_wait = 1;
+	vs_t0 = vs_last = now_ms();
+	ctl_log("DVD_CTL: vmsnap requested (seq %u)", seq);
+}
+
+static void vmsnap_poll(unsigned now)
+{
+	if (now - vs_last < DVD_VMSNAP_POLL_MS) return;
+	vs_last = now;
+	uint16_t h[DVD_VMSNAP_HDR];
+	static uint16_t w[DVD_VMSNAP_MAXW];
+	int len = dvd_vmsnap_fetch(vs_seq0, h, w);
+	if (len <= 0)
+	{
+		if (now - vs_t0 > DVD_VMSNAP_TIMEOUT)
+		{
+			int busy = h[2] >> 15;
+			vs_wait = 0;
+			ctl_log("DVD_CTL: vmsnap timed out (busy %d) -- the VM never came to rest", busy);
+			FILE *f = fopen(DVD_VMSNAP_FILE, "w");
+			if (f) { fprintf(f, "{\"timeout\":true,\"busy\":%d}\n", busy); fclose(f); }
+		}
+		return;
+	}
+	vs_wait = 0;
+	struct timespec ts;
+	clock_gettime(CLOCK_MONOTONIC, &ts);
+	char tmp[256];
+	snprintf(tmp, sizeof(tmp), "%s.tmp", DVD_VMSNAP_FILE);
+	FILE *f = fopen(tmp, "w");
+	if (!f) return;
+	uint32_t eltm = ((uint32_t)h[13] << 16) | h[14];
+	uint32_t sptm = ((uint32_t)h[15] << 16) | h[16];
+	uint32_t stc  = ((uint32_t)h[17] << 16) | h[18];
+	fprintf(f, "{\"t\":%.6f,\"seq\":%u,\"fmt\":%u,\"pos_fresh\":%u,\"has_video\":%u,"
+	        "\"nv_pck_lbn\":%u,\"prev_video\":%u,\"c_eltm\":%u,\"vob_idn\":%u,\"c_idn\":%u,"
+	        "\"eltm\":%u,\"sptm\":%u,\"stc\":%u,\"disp_secs\":%d,"
+	        "\"words\":[",
+	        ts.tv_sec + ts.tv_nsec / 1e9, h[1], h[3], (h[4] >> 1) & 1, h[4] & 1,
+	        ((unsigned)h[5] << 16) | h[6], ((unsigned)h[7] << 16) | h[8],
+	        ((unsigned)h[9] << 16) | h[10], h[11], h[12] & 0xFF,
+	        eltm, sptm, stc, dvd_vmsnap_disp_secs_h(h));
+	for (int i = 0; i < len; i++) fprintf(f, "%s%u", i ? "," : "", w[i]);
+	fprintf(f, "]}\n");
+	fclose(f);
+	rename(tmp, DVD_VMSNAP_FILE);                      // a reader never sees half a file
+	ctl_log("DVD_CTL: vmsnap seq %u, %d words, fmt %04x", h[1], len, h[3]);
+}
+
+// ---------------------------------------------------------------------------
+// VM state restore
+// ---------------------------------------------------------------------------
+static int      vl_wait = 0;          // a load is outstanding
+static unsigned vl_t0, vl_last;
+static const char *vl_names[8] = { "none", "pending", "applied", "refused: format",
+                                   "refused: length", "refused: checksum",
+                                   "refused: busy", "refused: Disc Menus off" };
+
+static void vmload_result(const char *what, int verdict)
+{
+	FILE *f = fopen(DVD_VMLOAD_FILE, "w");
+	if (!f) return;
+	if (verdict < 0) fprintf(f, "{\"%s\":true}\n", what);
+	else fprintf(f, "{\"verdict\":%d,\"result\":\"%s\"}\n", verdict, vl_names[verdict & 7]);
+	fclose(f);
+}
+
+// Parse a vmsnap file: "fmt":N, "words":[a,b,...], and the landing: "disp_secs" (-1 or
+// absent = the saved cell's start) and "nv_pck_lbn" (the time map's fallback sector).
+// -> the word count, or -1.
+static int vmload_parse(const char *path, uint16_t *fmt, uint16_t *w, int maxw,
+                        int *tm, uint32_t *rbn)
+{
+	static char buf[8192];
+	FILE *f = fopen(path, "r");
+	if (!f) return -1;
+	size_t n = fread(buf, 1, sizeof(buf) - 1, f);
+	fclose(f);
+	buf[n] = 0;
+	const char *p = strstr(buf, "\"fmt\":");
+	const char *q = strstr(buf, "\"words\":[");
+	if (!p || !q) return -1;
+	*fmt = (uint16_t)strtoul(p + 6, NULL, 10);
+	const char *d = strstr(buf, "\"disp_secs\":");
+	const char *r = strstr(buf, "\"nv_pck_lbn\":");
+	*tm  = d ? (int)strtol(d + 12, NULL, 10) : -1;
+	*rbn = r ? (uint32_t)strtoul(r + 13, NULL, 10) : 0;
+	q += 9;
+	int k = 0;
+	while (*q && *q != ']' && k < maxw)
+	{
+		char *e;
+		unsigned long v = strtoul(q, &e, 10);
+		if (e == q) return -1;
+		w[k++] = (uint16_t)v;
+		q = e;
+		while (*q == ',' || *q == ' ') q++;
+	}
+	return (*q == ']') ? k : -1;
+}
+
+static void vmload_request(const char *path)
+{
+	static uint16_t w[DVD_VMSNAP_MAXW];
+	uint16_t fmt = 0;
+	int disp = -1;
+	uint32_t rbn = 0;
+	int n = vmload_parse(path, &fmt, w, DVD_VMSNAP_MAXW, &disp, &rbn);
+	if (n <= 0)
+	{
+		ctl_log("DVD_CTL: vmload: cannot read a snapshot from %s", path);
+		vmload_result("unreadable", -1);
+		return;
+	}
+	// the landing: a time (PGC seconds) or 0xFFFF = the saved cell's start
+	uint16_t tm = (disp >= 0 && disp < 0xFFFF) ? (uint16_t)disp : 0xFFFF;
+	if (!dvd_vmload_send(fmt, w, n, tm, rbn))
+	{
+		ctl_log("DVD_CTL: core has no VM snapshot (0x7D)");
+		vmload_result("absent", -1);
+		return;
+	}
+	unlink(DVD_VMLOAD_FILE);
+	vl_wait = 1;
+	vl_t0 = vl_last = now_ms();
+	ctl_log("DVD_CTL: vmload %s: %d words, fmt %04x, land at %s%d", path, n, fmt,
+	        tm == 0xFFFF ? "the cell start " : "", tm == 0xFFFF ? -1 : tm);
+}
+
+static void vmload_poll(unsigned now)
+{
+	if (now - vl_last < DVD_VMSNAP_POLL_MS) return;
+	vl_last = now;
+	int verdict = dvd_vmload_verdict();
+	if (verdict < 0) verdict = 0;
+	if (verdict == 1 || verdict == 0)
+	{
+		if (now - vl_t0 > DVD_VMSNAP_TIMEOUT)
+		{
+			vl_wait = 0;
+			ctl_log("DVD_CTL: vmload still pending at 3 s -- the VM never came to rest");
+			vmload_result("timeout", -1);
+		}
+		return;
+	}
+	vl_wait = 0;
+	ctl_log("DVD_CTL: vmload %s", vl_names[verdict]);
+	vmload_result(NULL, verdict);
+}
+
+// ---------------------------------------------------------------------------
 // command FIFO
 // ---------------------------------------------------------------------------
 static void ctl_open()
@@ -429,6 +618,14 @@ static void ctl_exec(char *line)
 	else if (!strcmp(line, "ping"))
 	{
 		ctl_log("DVD_CTL: ping");
+	}
+	else if (!strcmp(line, "vmsnap"))
+	{
+		vmsnap_request();
+	}
+	else if (!strncmp(line, "vmload ", 7))
+	{
+		vmload_request(line + 7);
 	}
 	else
 	{
@@ -507,6 +704,8 @@ void dvd_ctl_tick()
 	}
 
 	unsigned t = now_ms();
+	if (vs_wait) vmsnap_poll(t);
+	if (vl_wait) vmload_poll(t);
 	if (t - last_telem_ms >= telem_period_ms)
 	{
 		last_telem_ms = t;

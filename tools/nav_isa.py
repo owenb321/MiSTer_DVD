@@ -61,7 +61,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
 NDIR = os.path.join(REPO, 'dvd', 'nav')
 UASM = os.path.join(NDIR, 'vm.uasm')
-UMEM = os.path.join(NDIR, 'nav_ucode.mem')
+UMEM = os.path.join(NDIR, 'nav_ucode.mem')         # ROM words 0..1023 (4 M10K)
+UMEMH = os.path.join(NDIR, 'nav_ucode_hi.mem')     # ROM words 1024..1279 (1 M10K)
 USVH = os.path.join(NDIR, 'nav_ucode.svh')
 VMSV = os.path.join(REPO, 'dvd', 'dvd_vm.sv')   # its GENERATED blocks
 PEEK = os.path.join(REPO, 'bench', 'dvd', 'dvd_vm_peek.svh')
@@ -76,7 +77,10 @@ FNS = ['add', 'sub', 'and', 'or', 'xor', 'shl', 'shr', 'sadd', 'ssub',
 FN = {n: i for i, n in enumerate(FNS)}
 CONDS = ['eq', 'ne', 'ltu', 'geu']
 STACK_DEPTH = 4
-UC_DEPTH = 1024                  # 4 M10K at 40 bits (256 x 40 each)
+UC_DEPTH = 1280                  # 5 M10K at 40 bits (256 x 40 each); the pc is 11 bits
+UC_LO = 1024                     # ...as TWO arrays, 1,024 + 256 words: one 1,280-deep array
+                                 # is rounded up to 2,048 deep by Quartus = 8 M10K, not 5
+PC_MASK = 0x7FF
 RAM_WORDS = 256
 CMD_WORDS = 2048                 # 4096 bytes = 512 commands, the reader's table
 PMAP_BYTES = 128
@@ -87,18 +91,27 @@ IN_PORTS = [
     'CUR_VTS', 'CUR_PGCN', 'CUR_CELL', 'CELL_COUNT', 'NEXT_PGCN', 'PREV_PGCN', 'GOUP_PGCN',
     'NR_PRE', 'NR_POST', 'NR_CELL', 'NR_PGMS', 'AUTO_VTS', 'BEST_MENU_VTS', 'RES_TTN',
     'MENU_ACTIVE', 'CC_NR', 'CHEDGE_DIR', 'LFSR', 'VM_DOM', 'VM_VTS', 'MENU_SEEN',
-    'LM_V', 'LM_DOM', 'LM_VTS', 'LM_PGCN', 'JPGCN', 'EVENTS', 'ZERO27',
+    'LM_V', 'LM_DOM', 'LM_VTS', 'LM_PGCN', 'JPGCN', 'EVENTS', 'RSTQ',
     'BTN0', 'BTN1', 'BTN2', 'BTN3']
 IN = {n: i for i, n in enumerate(IN_PORTS)}
 IN['SPRMW'] = 32                 # 32..63: the live-SPRM window (0 for RAM-resident SPRMs)
+# RSTQ (27, once ZERO27): the restore blob's word at the RSTA address (dvd/vm_snap.sv's
+# buffer, a registered read: `out O_RSTA` then one instruction before `in`). It reads 0
+# unless a restore is running, so a snapshot's copy of it is always 0.
+# RSTW writes the wrapper's registers whose ports are input ports LFSR..LM_PGCN, in that
+# order (the wrapper counts them): it relies on these eight being contiguous.
+RSTW_PORTS = ['LFSR', 'VM_DOM', 'VM_VTS', 'MENU_SEEN', 'LM_V', 'LM_DOM', 'LM_VTS', 'LM_PGCN']
+assert IN_PORTS[IN['LFSR']:IN['LFSR'] + len(RSTW_PORTS)] == RSTW_PORTS
 # Outputs (out / outi). J_DE = {entry[3:0], 2'b0, dom[1:0]} (entry << 4 | dom).
 OUT_PORTS = [
     'J_DE', 'J_VTS', 'J_PGCN', 'RSV3', 'J_TTN', 'J_PGN', 'J_PTT', 'J_CELL',
     'SEEK_CELL', 'PULSE', 'BTNF_VAL', 'LF_PGCN', 'SPRM1', 'SPRM2', 'SPRM3', 'SPRM8',
-    'VM_DOM', 'VM_VTS', 'FLAGS', 'EVCLR', 'EVSET', 'SPRM6', 'SPRM7']
+    'VM_DOM', 'VM_VTS', 'FLAGS', 'EVCLR', 'EVSET', 'SPRM6', 'SPRM7', 'SNAP', 'RSTA',
+    'RSTW']
 OUT = {n: i for i, n in enumerate(OUT_PORTS)}
 # PULSE bits
-PULSE_BITS = ['JUMP', 'SEEK', 'REPLAY', 'ADV', 'BTNF', 'LINKFAIL', 'LFSTEP', 'WARM', 'TICKDONE']
+PULSE_BITS = ['JUMP', 'SEEK', 'REPLAY', 'ADV', 'BTNF', 'LINKFAIL', 'LFSTEP', 'WARM', 'TICKDONE',
+              'SNAPDONE', 'RSTDONE', 'FRZ8']
 PB = {n: 1 << i for i, n in enumerate(PULSE_BITS)}
 # FLAGS bits: blk[1:0], nat_src, usr_edge, walk (the tick walk counts as V_IDLE)
 FLAG_BITS = {'BLK': 0, 'NAT': 2, 'USR': 3, 'WALK': 4}     # bit positions; blk is 2 bits
@@ -106,8 +119,10 @@ FLAG_BITS = {'BLK': 0, 'NAT': 2, 'USR': 3, 'WALK': 4}     # bit positions; blk i
 EVENTS = ['BOOT', 'ERROR', 'LOADED', 'BTN', 'CELLCMD', 'PGCEND', 'CHEDGE',
           'MENU', 'TITLE', 'CMENU', 'RETURN']
 EV = {n: 1 << i for i, n in enumerate(EVENTS)}
-# WEV indices
-WEV_IDLE = ['TICK', 'DISABLED'] + EVENTS
+# WEV indices. SNAP is not an event latch: the wrapper keeps the request apart from
+# `ev` (E_DISABLED clears every latch) and offers it last, only when nothing else is
+# pending -- so a snapshot is always of a VM at rest.
+WEV_IDLE = ['TICK', 'DISABLED'] + EVENTS + ['SNAP', 'RESTORE']
 WEV_WAIT = ['LOADED', 'ERROR', 'TIMEOUT']
 
 # ------------------------------------------------------------------ the data RAM map
@@ -131,6 +146,47 @@ RAM_MAP = {
     'T0': 0x28,          # 0x28..0x2F handler scratch
     'SPRMI': 0x40,       # 0x40..0x5F the SPRM image: 4..7, 9, 10, 13 live here
 }
+# The VM state snapshot (vm.uasm E_SNAP; docs/nav_engine.md "State snapshot"): the
+# words the handler streams out through O_SNAP, in order. ★ This list IS the format --
+# the RTL handler, the Python model and every decoder (tools/vm_snap.py) read it from
+# here, and SNAP_FMT, a hash of it and of the maps it indexes, is what a reader checks
+# before trusting a word's name. Change the RAM map or the input ports and the hash
+# changes with them, so an old snapshot is refused rather than read against a new map.
+SNAP_RAM_END = 0x28                   # data RAM 0x00..0x27: everything below the scratch
+SNAP_SPRMS = 24                       # SPRM 0..23 as the VM reads them (RAM image | window)
+SNAP_INS = 32                         # input ports 0..31: the wrapper's state, the reader's
+SPRM_RAM = (4, 5, 9, 10, 13)          # the SPRMs whose only copy is the data RAM's image
+
+
+def snap_layout():
+    """-> the snapshot's word names, in stream order."""
+    ram = {}
+    for k, a in RAM_MAP.items():
+        if k in ('MOUNT_CLR', 'T0', 'SPRMI'):
+            continue
+        ram.setdefault(a, k.lower())
+    names = []
+    for a in range(SNAP_RAM_END):
+        if a < 16:
+            names.append('g%d' % a)
+        else:
+            names.append(ram.get(a, 'ram%02x' % a))
+    names += ['sprm%d' % n for n in range(SNAP_SPRMS)]
+    names += ['in_' + n.lower() for n in IN_PORTS[:SNAP_INS]]
+    return names
+
+
+def snap_fmt():
+    """A 16-bit id of the snapshot format: CRC-16/CCITT of the layout and the maps."""
+    text = '|'.join(snap_layout()) + '|' + repr(sorted(RAM_MAP.items())) + '|' + ','.join(IN_PORTS)
+    crc = 0xFFFF
+    for ch in text.encode():
+        crc ^= ch << 8
+        for _ in range(8):
+            crc = ((crc << 1) ^ 0x1021) & 0xFFFF if crc & 0x8000 else (crc << 1) & 0xFFFF
+    return crc
+
+
 FB_CODES = {'FB_NONE': 0, 'FB_FP': 1, 'FB_VTSM': 2, 'FB_VTSM2': 3, 'FB_VMGM': 4,
             'FB_TITLE': 5, 'FB_GAVEUP': 6, 'FB_BOOTM': 7}
 DOM_CODES = {'DOM_FP': 0, 'DOM_VMGM': 1, 'DOM_VTSM': 2, 'DOM_TT': 3}
@@ -157,6 +213,14 @@ def base_equ():
     equ.update({'FBIT_' + k: v for k, v in FLAG_BITS.items() if k != 'BLK'})
     equ.update({'EV_' + k: v for k, v in EV.items()})
     equ['EV_ALL'] = (1 << len(EVENTS)) - 1
+    equ['SNAP_RAM_END'] = SNAP_RAM_END
+    equ['SNAP_SPRMS'] = SNAP_SPRMS
+    equ['SNAP_INS'] = SNAP_INS
+    equ['SNAP_IN0'] = SNAP_RAM_END + SNAP_SPRMS       # the first input-port word
+    equ['SNAP_WORDS'] = SNAP_RAM_END + SNAP_SPRMS + SNAP_INS
+    equ['SPRM_RAM_MASK'] = sum(1 << n for n in SPRM_RAM)
+    equ['RSTW_FIRST'] = SNAP_RAM_END + SNAP_SPRMS + IN['LFSR']
+    equ['RSTW_N'] = len(RSTW_PORTS)
     equ.update({'M_' + k: v for k, v in RAM_MAP.items()})
     equ.update(FB_CODES)
     equ.update(DOM_CODES)
@@ -440,7 +504,7 @@ class Machine:
                 raise SeqError(f'ret with an empty stack at pc {self.pc}')
             npc = self.stack.pop()
         elif op == 'jr':
-            npc = (imm + R[rs]) & (UC_DEPTH - 1)
+            npc = (imm + R[rs]) & PC_MASK
         elif op == 'wev':
             idx = self.io.wev(aux)
             if idx is None:
@@ -489,6 +553,10 @@ def ucode_svh(words, labels):
     for i, n in enumerate(EVENTS):
         lines.append(f'localparam integer UEV_{n} = {i};')
     lines.append(f'localparam integer UEV_N = {len(EVENTS)};')
+    lines.append(f"localparam [3:0] UWEV_SNAP = 4'd{WEV_IDLE.index('SNAP')};")
+    lines.append(f"localparam [3:0] UWEV_RST = 4'd{WEV_IDLE.index('RESTORE')};")
+    lines.append(f'localparam integer USNAP_WORDS = {len(snap_layout())};')
+    lines.append(f"localparam [15:0] USNAP_FMT = 16'h{snap_fmt():04x};")
     for n, a in RAM_MAP.items():
         lines.append(f"localparam [7:0] UM_{n} = 8'h{a:02x};")
     for n, v in FB_CODES.items():
@@ -529,10 +597,17 @@ def stamp_rtl(svh):
     return pat.sub(lambda m: block, text).splitlines()
 
 
+def rom_images(words):
+    """-> (the low image, words 0..UC_LO-1; the high image, UC_LO..UC_DEPTH-1)."""
+    full = [f'{w:010x}' for w in words] + ['0000000000'] * (UC_DEPTH - len(words))
+    return full[:UC_LO], full[UC_LO:]
+
+
 def write_mems(check=False):
     words, labels, _ = load_program()
     svh = ucode_svh(words, labels)
-    files = {UMEM: [f'{w:010x}' for w in words] + ['0000000000'] * (UC_DEPTH - len(words)),
+    lo, hi = rom_images(words)
+    files = {UMEM: lo, UMEMH: hi,
              USVH: svh, VMSV: stamp_rtl(svh), PEEK: peek_svh()}
     bad = []
     for path, lines in files.items():
@@ -580,19 +655,26 @@ def main():
         # dvd/dvd_vm.sv whose ROM loads that image. Prints the .sv path.
         os.makedirs(a.mutant[1], exist_ok=True)
         mem = os.path.abspath(os.path.join(a.mutant[1], a.mutant[0] + '.mem'))
+        memh = os.path.abspath(os.path.join(a.mutant[1], a.mutant[0] + '_hi.mem'))
         words, _, _ = load_program(a.mutant[0])
-        open(mem, 'w').write('\n'.join([f'{w:010x}' for w in words] +
-                                       ['0000000000'] * (UC_DEPTH - len(words))) + '\n')
+        lo, hi = rom_images(words)
+        open(mem, 'w').write('\n'.join(lo) + '\n')
+        open(memh, 'w').write('\n'.join(hi) + '\n')
         sv = os.path.join(a.mutant[1], f'dvd_vm_{a.mutant[0]}.sv')
         text = open(VMSV).read()
         assert text.count('"dvd/nav/nav_ucode.mem"') == 1
-        open(sv, 'w').write(text.replace('"dvd/nav/nav_ucode.mem"', f'"{mem}"'))
+        assert text.count('"dvd/nav/nav_ucode_hi.mem"') == 1
+        text = text.replace('"dvd/nav/nav_ucode.mem"', f'"{mem}"')
+        open(sv, 'w').write(text.replace('"dvd/nav/nav_ucode_hi.mem"', f'"{memh}"'))
         print(sv)
         return 0
     if a.mem_out:
+        # two images: MEM_OUT (words 0..1023) and MEM_OUT with _hi before its extension
         words, _, _ = load_program(a.mutate)
-        open(a.mem_out, 'w').write('\n'.join([f'{w:010x}' for w in words] +
-                                              ['0000000000'] * (UC_DEPTH - len(words))) + '\n')
+        lo, hi = rom_images(words)
+        open(a.mem_out, 'w').write('\n'.join(lo) + '\n')
+        root, ext = os.path.splitext(a.mem_out)
+        open(root + '_hi' + (ext or '.mem'), 'w').write('\n'.join(hi) + '\n')
         return 0
     if a.list:
         listing()
