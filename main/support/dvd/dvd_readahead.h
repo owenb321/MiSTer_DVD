@@ -1,4 +1,4 @@
-// dvd_readahead.h — a RAM read-ahead between an optical/encrypted source and the core.
+// dvd_readahead.h — a RAM read-ahead between a disc or .iso source and the core.
 //
 // Main services the core's sector requests on its ONE thread (user_io_poll), so a
 // source read that stalls -- a dual-layer drive refocusing at the layer change, a
