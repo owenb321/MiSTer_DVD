@@ -181,7 +181,7 @@ then write it inline, and keep its rules equal to the list above.
 ```bash
 tools/hil_suite.py run --rbf $OUT/draft/zip/_Other/DVD_*.rbf --control <control.rbf> --out $OUT/hil_suite
 for c in film_ac3 film_dts film_lpcm; do tools/audio_check.py "$R/$(jq -r .$c tools/.smoke_set.json)" --secs 6; done
-tools/nav_offline.py --library        # no rig; the VM against libdvdnav over the whole library
+DVD_ISO_DIR=<library> tools/nav_offline.py --library --limit 100 --jobs 8   # no rig; ~40 min
 ```
 
 - `hil_suite`: 0 REGRESSION rows. It flashes cores only, on the Main deployed in step 2,
@@ -189,8 +189,10 @@ tools/nav_offline.py --library        # no rig; the VM against libdvdnav over th
   names; check `state` afterwards. It runs both builds, so this is where the time goes.
 - `audio_check`: every declared track audible (> −80 dBFS) on each disc; DTS needs
   **Decode PCM**. A silent track whose siblings are audible is a decode failure.
-- `nav_offline --library`: no new divergences against the previous release's run, if one
-  is on disk; otherwise record the count as the baseline for the next release.
+- `nav_offline`: 0 `DIFF` / `nolanding` (both are leads); `oracle-err`, `rnd`, `cap-edge`,
+  `udf-only` are not findings. ⚠ The whole library (~1,600 images) takes ~11 h at 8 jobs
+  (measured 2026-10-31: 125 discs in 50 min), so a smoke test runs `--limit 100`; run it
+  alongside `hil_suite`, it needs no rig. A full sweep is for an overnight run, not a gate.
 
 If the rig has no capture card, `hil_suite` capture checks and `audio_check` are NODATA:
 say so, and either borrow the capture rig (ask) or list "by ear" as a maintainer item.
