@@ -693,7 +693,7 @@ loads, 0 fails.
 ⚠ **A stall under ~5 s proves nothing on this rig.** CIFS `rsize=4194304` gives the kernel its
 own read-ahead, and a 5 s drop showed nothing on the control either. An A/B needs a longer one.
 
-### What the ring costs a jump (2026-11-01)
+### What the ring costs a jump (2026-11-01, ✅ HIL A/B on the rig, MERGED PR #186)
 
 PR #184's A/B measured a chapter skip on a film, which did not move. The v0.10.0 smoke test
 then found what it had missed: on an interactive disc, where every move is a jump, the ring

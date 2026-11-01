@@ -22,7 +22,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- ✅ **READ-AHEAD JUMP LATENCY (2026-11-01; host tests green; HIL A/B on the rig).** Found by the v0.10.0
+- ✅ **READ-AHEAD JUMP LATENCY (2026-11-01, MERGED PR #186; host tests green; HIL A/B on the rig).** Found by the v0.10.0
   smoke test, against PR #184: on interactive discs over CIFS the ring doubled the time from a jump to
   video (Dragon's Lair 20th 0.12 -> 0.27 s, Weakest Link 0.06 -> 0.14 s), with every `hil_suite` check
   green. Causes: the kernel's own read-ahead (`POSIX_FADV_RANDOM` on plain images) and the worker sharing
