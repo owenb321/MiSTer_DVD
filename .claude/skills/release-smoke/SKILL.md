@@ -113,6 +113,7 @@ after each was tested alone, and the release Main is a CI build none of them ran
 | #179 cell commands with buttons up | Mad Dog shots land | `hil_suite` covers it (step 5): `mad_dog` rows must PASS on the build |
 | #177 drive compatibility | stuck drives eject | needs a USB optical drive on the rig (`tools/mister.py shell ls /dev/sr*`). None → maintainer item: insert a disc, play, press the drive's button: tray opens, core returns to idle; `/tmp/dvd_report.log` has the drive identity line |
 | #180 HIL harness | (internal) | none — it is the instrument |
+| plain `.iso` read-ahead | a share's stall does not reach the core; plays from a read-only share | the share stall in step 5; plus a read-only bind mount of the share (`mount --bind`, then `mount -o remount,ro,bind`), launch from it, pictures advance |
 
 **Autosave sequence** (the PR #183 rig procedure, `docs/nav_engine.md` §11i):
 
@@ -194,6 +195,16 @@ DVD_ISO_DIR=<library> tools/nav_offline.py --library --limit 100 --jobs 8   # no
   (measured 2026-10-31: 125 discs in 50 min), so a smoke test runs `--limit 100`; run it
   alongside `hil_suite`, it needs no rig. A full sweep is for an overnight run, not a gate.
 
+**A share stall**, on `film_ac3` from the share: 45 s in (so the ring has filled), drop CIFS for
+20 s, and capture across it. PASS = no telemetry gap, no silence, 0 lates, and a `slow read` line
+in `/tmp/dvdcss.log` that shows the stall really happened. ⚠ It must be 20 s: the kernel's own CIFS
+read-ahead hides anything up to ~5 s, even with no ring. Detach the rule's removal on the rig, so it
+comes out whatever happens to your session:
+
+```bash
+tools/mister.py shell "nohup sh -c 'iptables -I OUTPUT -p tcp --dport 445 -j DROP; sleep 20; iptables -D OUTPUT -p tcp --dport 445 -j DROP' >/dev/null 2>&1 &"
+```
+
 If the rig has no capture card, `hil_suite` capture checks and `audio_check` are NODATA:
 say so, and either borrow the capture rig (ask) or list "by ear" as a maintainer item.
 
@@ -238,6 +249,12 @@ Then:
 tools/mister.py restore
 tools/mister.py state        # core=MENU? reboot the rig if a harness Main is still running (hil-testing)
 ```
+
+⚠ **`restore` does not cover two things this skill disturbs:**
+- **Save states.** Every mount of a disc writes an `_auto.ss`, and `sstate_stress` only guards
+  the numbered slots. Copy `/media/fat/savestates/DVD` aside before step 2 and put it back here.
+- **The network share.** A reboot drops the CIFS mount: run `Scripts/cifs_mount.sh` on the rig
+  afterwards, or the next user finds an empty library (2026-11-01).
 
 If the maintainer wants the rig left on the release, `deploy` its `.rbf` and Main
 *instead of* restoring, and say so.
