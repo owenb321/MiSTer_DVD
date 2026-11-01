@@ -18,17 +18,17 @@
 // free (Main 0x00-0x44, 0x61-63, 0xF0-F9; 0x7A/0x7B dvd_telem, 0x7C nav_trace).
 // MAGIC has bit 15 clear: a core without the module answers 0.
 #define UIO_DVD_VMSNAP      0x7D
-#define DVD_VMSNAP_MAGIC    0x5E02
+#define DVD_VMSNAP_MAGIC    0x5E03
 #define DVD_VMSNAP_HDR      19
 #define DVD_VMSNAP_MAXW     128
 
 // Header word 2: {busy, vm_en, slot[1:0], load_n[1:0], save_n[1:0], len[7:0]}.
 #define VMSNAP_BUSY(w2)     (((w2) >> 15) & 1)
 #define VMSNAP_VM_EN(w2)    (((w2) >> 14) & 1)
-#define VMSNAP_SLOT(w2)     (((w2) >> 12) & 3)
-#define VMSNAP_LOAD_N(w2)   (((w2) >> 10) & 3)
-#define VMSNAP_SAVE_N(w2)   (((w2) >> 8) & 3)
-#define VMSNAP_LEN(w2)      ((w2) & 0xFF)
+#define VMSNAP_SLOT(w2)     (((w2) >> 11) & 7)
+#define VMSNAP_LOAD_N(w2)   (((w2) >> 9) & 3)
+#define VMSNAP_SAVE_N(w2)   (((w2) >> 7) & 3)
+#define VMSNAP_LEN(w2)      ((w2) & 0x7F)
 
 // Header word 4 [15:13]: the last LOAD's verdict.
 enum { VL_NONE = 0, VL_PENDING, VL_APPLIED, VL_BAD_FMT, VL_BAD_LEN, VL_BAD_SUM,

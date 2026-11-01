@@ -169,6 +169,11 @@ module nav_pci #(
     // 0 = no VM value (legacy / nav_pci_tb default): the reset default 1 stands.
     input  wire  [5:0] hl_btnn,
 
+    // A save state's restore (vm_snap keep_sel, a level): the selection re-seeded from
+    // the restored SPRM8 beats the next HLI's forced select (fosl), so a menu loads on
+    // the button it was saved on. Every other entry keeps libdvdnav's fosl. 0 = off.
+    input  wire        keep_sel,
+
     // NUMPAD select+activate (keyboard digit key = DVD-remote number shortcut):
     // a 1-cycle pulse forces the selection to `num_btn` (1-based) AND activates it
     // once the button record is fetched, so the fired btn_cmd is the freshly-loaded
@@ -208,6 +213,7 @@ module nav_pci #(
     // menu_settled promotes it, and a press in that window must not skip the menu.
     output wire        btns_pend,
     output reg   [5:0] btn_sel,       // current button (1-based)
+    output reg         user_move,     // pulse: a D-pad press moved btn_sel (dvd_vm: SPRM8 follows again)
     output wire  [5:0] dbg_btn_ns,
     // EARLY "a multi-button in-title menu HLI has been parsed" — asserts as soon
     // as the PCI (NAV pack) is parsed, i.e. BEFORE the promotion the display path
@@ -618,6 +624,7 @@ always @(posedge clk or negedge rst_n) begin
         fetch_req <= 1'b0;
         auto_pend <= 1'b0;
         moved     <= 1'b0;
+        user_move <= 1'b0;
         hl_on     <= 1'b0;
         hl_x1 <= 10'd0; hl_x2 <= 10'd0; hl_y1 <= 10'd0; hl_y2 <= 10'd0;
         hl_coli   <= 32'd0;
@@ -654,6 +661,7 @@ always @(posedge clk or negedge rst_n) begin
         hli_commit_p  <= 1'b0;                 // default: one-cycle pulse
         btn_cmd_valid <= 1'b0;                 // default: one-cycle pulse
         hli_arm       <= 1'b0;                 // default: one-cycle pulse
+        user_move     <= 1'b0;                 // default: one-cycle pulse
         // RE-SEED the selection from the VM's HL_BTNN in the first cycle after a
         // reset (see the hl_btnn port). An async reset value must be a constant,
         // so the reset branch parks btn_sel at 1 and this overrides it one cycle
@@ -851,7 +859,12 @@ always @(posedge clk or negedge rst_n) begin
                 // hli_ss==2/3 are CONTINUATIONS of the same HLI: re-applying
                 // fosl there would fight the player's own D-pad, so they are
                 // excluded (same test the foac commit above uses).
-                if (nxt_fosl != 6'd0 && nxt_fosl <= nxt_btn_ns &&
+                // A restore's landing keeps the restored selection when it is a
+                // button of this HLI (keep_sel; Mad Dog's route menu, fosl 1, saved
+                // on button 2). Otherwise the rules below, as on any entry.
+                if (keep_sel && btn_sel != 6'd0 && btn_sel <= nxt_btn_ns)
+                    ;                                // the restored button stands
+                else if (nxt_fosl != 6'd0 && nxt_fosl <= nxt_btn_ns &&
                     (!armed || nxt_ss == 2'd1))
                     btn_sel <= nxt_fosl;             // forced select on a NEW HLI
                 else if (btn_sel == 6'd0 || btn_sel > nxt_btn_ns)
@@ -868,16 +881,16 @@ always @(posedge clk or negedge rst_n) begin
             if (nav_up || nav_dn || nav_lf || nav_rt) begin
                 // link 0 = stay; out-of-range links clamp to stay
                 if (nav_up && b_up != 6'd0 && b_up <= h_btn_ns && b_up != btn_sel) begin
-                    btn_sel <= b_up; fetch_req <= 1'b1; fetched <= 1'b0; moved <= 1'b1;
+                    btn_sel <= b_up; fetch_req <= 1'b1; fetched <= 1'b0; moved <= 1'b1; user_move <= 1'b1;
                 end
                 if (nav_dn && b_dn != 6'd0 && b_dn <= h_btn_ns && b_dn != btn_sel) begin
-                    btn_sel <= b_dn; fetch_req <= 1'b1; fetched <= 1'b0; moved <= 1'b1;
+                    btn_sel <= b_dn; fetch_req <= 1'b1; fetched <= 1'b0; moved <= 1'b1; user_move <= 1'b1;
                 end
                 if (nav_lf && b_lf != 6'd0 && b_lf <= h_btn_ns && b_lf != btn_sel) begin
-                    btn_sel <= b_lf; fetch_req <= 1'b1; fetched <= 1'b0; moved <= 1'b1;
+                    btn_sel <= b_lf; fetch_req <= 1'b1; fetched <= 1'b0; moved <= 1'b1; user_move <= 1'b1;
                 end
                 if (nav_rt && b_rt != 6'd0 && b_rt <= h_btn_ns && b_rt != btn_sel) begin
-                    btn_sel <= b_rt; fetch_req <= 1'b1; fetched <= 1'b0; moved <= 1'b1;
+                    btn_sel <= b_rt; fetch_req <= 1'b1; fetched <= 1'b0; moved <= 1'b1; user_move <= 1'b1;
                 end
             end
             if (nav_act) begin

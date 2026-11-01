@@ -13,6 +13,9 @@
 #ifndef DVD_SSTATE_H
 #define DVD_SSTATE_H
 
+// The OSD's Slot row (O[59:57], 1..8; vm_snap word 2's 3-bit slot). Four until 2026-10-30.
+#define DVD_SSTATE_SLOTS 8
+
 #include <stddef.h>
 #include <stdint.h>
 
@@ -40,7 +43,7 @@
 //
 // ★ THE MOUNT PATH CANNOT NAME THE FILE. Every physical disc mounts as the same
 // sentinel, so a path-derived name would collapse the whole library onto one set of
-// four slots. The identity comes from the disc itself: a hash of the first sector of
+// eight slots. The identity comes from the disc itself: a hash of the first sector of
 // VIDEO_TS.IFO (the VMGI_MAT), found by a short ISO9660 walk. The VMGI_MAT holds only
 // IFO-relative data and is never CSS-scrambled, so a physical disc and ANY rip of it
 // (raw or rebuilt from its files) share save slots. NOT the ISO9660 volume descriptor,

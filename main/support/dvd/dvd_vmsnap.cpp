@@ -25,7 +25,7 @@ int dvd_vmsnap_fetch(uint16_t seq0, uint16_t *h, uint16_t *w)
 	h[0] = spi_uio_cmd_cont(UIO_DVD_VMSNAP);
 	for (int i = 1; i < DVD_VMSNAP_HDR; i++) h[i] = spi_w(0);
 	int busy = h[2] >> 15;
-	unsigned len = h[2] & 0xFF;
+	unsigned len = VMSNAP_LEN(h[2]);
 	int ready = h[0] == DVD_VMSNAP_MAGIC && !busy && h[1] != seq0 && len;
 	if (len > DVD_VMSNAP_MAXW) len = DVD_VMSNAP_MAXW;      // never past our buffer
 	if (ready) for (unsigned i = 0; i < len; i++) w[i] = spi_w(0);
@@ -76,6 +76,11 @@ int dvd_vmsnap_disp_secs(uint32_t eltm, uint32_t sptm, uint32_t stc, int fresh, 
 
 int dvd_vmsnap_disp_secs_h(const uint16_t *h)
 {
+	// Buttons armed at the snapshot (word 4 bit 2): no exact time, so a load lands at the
+	// saved cell's start. A shootout's reticle is a subpicture bitmap that arrives with the
+	// window's first frames, and a time seek into the window lands after it: the HLI
+	// arms and nothing shows (Mad Dog's hideout, 2026-10-31; docs/nav_engine.md 11g).
+	if ((h[4] >> 2) & 1) return -1;
 	return dvd_vmsnap_disp_secs(((uint32_t)h[13] << 16) | h[14], ((uint32_t)h[15] << 16) | h[16],
 	                            ((uint32_t)h[17] << 16) | h[18], (h[4] >> 1) & 1, h[4] & 1);
 }

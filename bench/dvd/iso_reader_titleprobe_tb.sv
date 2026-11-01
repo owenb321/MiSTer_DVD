@@ -57,6 +57,7 @@ module iso_reader_titleprobe_tb;
     wire        menu_ar_wide;
     wire        ifo_bup_vmg, ifo_bup_vts, ifo_nogood;
     wire        vmgm_probed, vmgm_title_ok;
+    wire        dvd_video;     // VIDEO_TS.IFO found this mount (the OSD's Save State page)
 
     wire [31:0] sd_lba;
     wire        sd_rd;
@@ -94,7 +95,7 @@ module iso_reader_titleprobe_tb;
         .jump_ack(jump_ack), .pgc_loaded(pgc_loaded), .pgc_error(pgc_error),
         .nav_ready_o(nav_ready_w), .menu_active(menu_active), .menu_ar_wide(menu_ar_wide),
         .ifo_bup_vmg(ifo_bup_vmg), .ifo_bup_vts(ifo_bup_vts), .ifo_nogood(ifo_nogood),
-        .vmgm_probed(vmgm_probed), .vmgm_title_ok(vmgm_title_ok)
+        .vmgm_probed(vmgm_probed), .vmgm_title_ok(vmgm_title_ok), .dvd_video(dvd_video)
     );
 
     always #5 clk = ~clk;
@@ -312,6 +313,11 @@ module iso_reader_titleprobe_tb;
                          , arm, ma_seen, "menu_ar_wide seen %b)", wide_seen);
                 errors = errors + 1;
             end
+            // every image here has VIDEO_TS.IFO: DVD-Video whatever Disc Menus is (E)
+            if (dvd_video !== 1'b1) begin
+                $display("FAIL %0s: dvd_video=%b on a VIDEO_TS image", arm, dvd_video);
+                errors = errors + 1;
+            end
             if (nav_early !== 1'b0) begin
                 $display("FAIL %0s: nav_ready rose before the probe finished", arm);
                 errors = errors + 1;
@@ -384,6 +390,26 @@ module iso_reader_titleprobe_tb;
 
         e0 = errors; mount("H", 6, 1); expect_flags("H", 1, 1, 0);
         if (errors == e0) $display("H  entry 2 with a malformed start -> ok 1  PASS");
+
+        // I: dvd_video is per mount. A new mount clears it before its walk (a VCD or
+        //    a .mpg mounted after a DVD must not keep the Save State page), and the
+        //    walk sets it again only on finding VIDEO_TS.IFO.
+        e0 = errors; mount("I", 0, 1);
+        @(negedge clk); start = 1; @(negedge clk); start = 0;
+        repeat (8) @(posedge clk);
+        if (dvd_video !== 1'b0) begin
+            $display("FAIL I: dvd_video=%b straight after a new mount, want 0", dvd_video);
+            errors = errors + 1;
+        end
+        begin : wait_i
+            integer t; t = 0;
+            while (nav_ready_w !== 1'b1 && t < 2000000) begin @(posedge clk); t = t + 1; end
+        end
+        if (dvd_video !== 1'b1) begin
+            $display("FAIL I: dvd_video=%b after the remount's walk, want 1", dvd_video);
+            errors = errors + 1;
+        end
+        if (errors == e0) $display("I  dvd_video clears at a mount, sets on VIDEO_TS.IFO  PASS");
 
         if (errors == 0) $display("ISO_READER_TITLEPROBE_TB: ALL TESTS PASSED");
         else             $fatal(1, "ISO_READER_TITLEPROBE_TB: FAILED with %0d errors", errors);

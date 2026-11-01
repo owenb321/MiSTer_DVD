@@ -41,6 +41,7 @@ module nav_pci_tb;
     // value" = the pre-2026-09-14 behaviour, so TESTS 1-18 are bit-identical;
     // sel_force is likewise only driven by TEST 19.
     logic [5:0] hl_btnn = 6'd0;
+    logic keep_sel = 0;   // vm_snap: a restore's landing keeps the restored button (TEST 20)
     logic sel_force = 0;
     logic [5:0] sel_force_btn = 6'd0;
 
@@ -52,6 +53,7 @@ module nav_pci_tb;
     wire btns_armed;
     wire btns_pend;      // an HLI with buttons parsed, not yet promoted (user Still off gate)
     wire [5:0] btn_sel, dbg_btn_ns;
+    wire user_move;      // a D-pad press moved the selection (TEST 21)
 
     always #5 clk = ~clk;
 
@@ -66,17 +68,21 @@ module nav_pci_tb;
         .stc_reanchor(stc_reanchor),
         .sel_force(sel_force), .sel_force_btn(sel_force_btn),
         .hl_btnn(hl_btnn),
+        .keep_sel(keep_sel),
         .num_sel(num_sel), .num_btn(num_btn),
         .nav_up(nav_up), .nav_dn(nav_dn), .nav_lf(nav_lf), .nav_rt(nav_rt),
         .nav_act(nav_act),
         .hl_on(hl_on), .hl_x1(hl_x1), .hl_x2(hl_x2), .hl_y1(hl_y1), .hl_y2(hl_y2),
         .hl_coli(hl_coli),
         .btn_cmd(btn_cmd), .btn_cmd_valid(btn_cmd_valid),
-        .btns_armed(btns_armed), .btns_pend(btns_pend), .btn_sel(btn_sel), .dbg_btn_ns(dbg_btn_ns)
+        .btns_armed(btns_armed), .btns_pend(btns_pend), .btn_sel(btn_sel), .user_move(user_move),
+        .dbg_btn_ns(dbg_btn_ns)
     );
 
     // count activation pulses + last cmd
     int acts = 0;
+    int moves = 0;
+    always_ff @(posedge clk) if (user_move === 1'b1) moves <= moves + 1;
     logic [63:0] last_cmd;
     always_ff @(posedge clk) if (btn_cmd_valid) begin
         acts <= acts + 1; last_cmd <= btn_cmd;
@@ -543,6 +549,57 @@ module nav_pci_tb;
             hl_btnn = 6'd0;
         end else begin
             $display("T19: Scooby grid fixture absent -> SKIPPED (regen with tools/nav_extract.py)");
+        end
+
+        // ---- TEST 20: A SAVE STATE'S RESTORE KEEPS ITS BUTTON (2026-10-30, Mad Dog's
+        //      route menu: fosl 1, saved on button 2, loaded on button 1). With
+        //      keep_sel up, the restored SPRM8 (seeded from hl_btnn) beats the new
+        //      HLI's forced select. T19e above is the control: keep_sel low, fosl wins.
+        //      Same fosl=5 fixture as T19e (built by TEST 16).
+        if (nav[10240 + OFF_FOSL] !== 8'hXX) begin
+            nav[10240 + OFF_SS] = 8'h01;
+            keep_sel = 1'b1; hl_btnn = 6'd3;
+            rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; @(posedge clk);
+            stc = 33'd0;
+            feed_pci(10240);
+            stc = 33'd3000100;
+            repeat (160) @(posedge clk);
+            $display("T20a: armed=%b sel=%0d (restored 3, fosl 5, keep_sel 1)", btns_armed, btn_sel);
+            chk(btns_armed === 1'b1, "T20a the HLI armed");
+            chk(btn_sel == 6'd3, "T20a a restore's landing keeps the restored button over fosl");
+            // T20b: a restored button that is not one of this HLI's falls back to fosl
+            hl_btnn = 6'd40;
+            rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; @(posedge clk);
+            stc = 33'd0;
+            feed_pci(10240);
+            stc = 33'd3000100;
+            repeat (160) @(posedge clk);
+            chk(btn_sel == 6'd5, "T20b restored button 40 > btn_ns -> fosl (5), not kept");
+            keep_sel = 1'b0; hl_btnn = 6'd0;
+        end else begin
+            $display("T20: fosl fixture absent -> FAIL"); errors++;
+        end
+
+        // ---- TEST 21: user_move pulses for a D-pad press that MOVED the selection, and
+        //      for nothing else (dvd_vm ends an activation's SPRM8 freeze on it; Mad
+        //      Dog's shootouts, 2026-10-30). Scooby grid: btn 16 right = 17; btn 1 up =
+        //      1 (a "stay" link).
+        if (nav[12288] === 8'h00 && nav[12288 + 3] === 8'hBA) begin
+            hl_btnn = 6'd16;
+            rst_n = 0; repeat (4) @(posedge clk); rst_n = 1; @(posedge clk);
+            stc = 33'd0; feed_pci(12288); stc = 33'd11000; repeat (160) @(posedge clk);
+            moves = 0; @(posedge clk);
+            pulse(3);                                          // right: 16 -> 17
+            chk(btn_sel == 6'd17 && moves == 1, "T21a a D-pad move pulses user_move once");
+            @(negedge clk); sel_force = 1; sel_force_btn = 6'd1;
+            @(negedge clk); sel_force = 0; sel_force_btn = 6'd0;
+            repeat (80) @(posedge clk);
+            chk(btn_sel == 6'd1 && moves == 1, "T21b a VM force is not a user move");
+            pulse(0);                                          // up from 1: a stay link
+            chk(btn_sel == 6'd1 && moves == 1, "T21c a press that does not move is not a user move");
+            hl_btnn = 6'd0;
+        end else begin
+            $display("T21: Scooby grid fixture absent -> FAIL"); errors++;
         end
 
         if (errors == 0) $display("NAV_PCI_TB: ALL TESTS PASSED");

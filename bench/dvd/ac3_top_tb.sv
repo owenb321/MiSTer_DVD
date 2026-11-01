@@ -2,12 +2,12 @@
 // the blocks imdct_512 must be handed
 //
 // Feeds STEM.frames and STEM.bytes (tools/ac3_golden.py) into dts_top with optional input
-// stalls (+stall=N), and stands in for imdct_512: at each imdct_req it reads the block
-// out of the X buffer through coef_ra / coef_q and scores it against STEM.coef (the
-// emulator's blocks, which ac3_golden.py has checked against the model, and with
-// --rtl-gold against dvd/ac3's own dump), then pulses imdct_done after the transform's
-// time (+imlat=N cycles a block; default the measured imdct_512 figure, 13,479 for 3+
-// channels and 4,573 for one or two: tools/test_ac3_isa.py IMDCT_BLOCK).
+// stalls (+stall=N). At each imdct_req it reads the block out of the X buffer through
+// coef_ra / coef_q and scores it against STEM.coef (the emulator's blocks, which
+// ac3_golden.py has checked against the model, and with --rtl-gold against dvd/ac3's own
+// dump), then gives imdct_go and waits for imdct_fin: the engine transforms the block
+// itself (docs/imdct_engine.md), so the frame times below include the real IMDCT. Its
+// PCM is scored against imdct_512 by run_ac3_ab.sh and run_imdct_eng.sh.
 // Arms: [side] a block's blksw / dynrng / acmod / lfeon / cmixlev / surmixlev differs;
 // [coef] a coefficient differs (named by block, channel, bin), or its 25-bit word is not
 // the 24-bit value sign-extended; [count] blocks, frames, refusals, overrun bits or
@@ -40,7 +40,7 @@ module ac3_top_tb;
     logic [10:0] tr_pc, tr_addr;
     logic [1:0]  tr_kind;
     logic [23:0] tr_val;
-    logic        imdct_req, imdct_done;
+    logic        imdct_req, imdct_go, imdct_fin;
     logic [10:0] coef_ra;
     logic [24:0] coef_q;
     logic [4:0]  blk_blksw;
@@ -55,13 +55,13 @@ module ac3_top_tb;
         .pcm_l, .pcm_r, .pcm_valid, .pcm_ready(1'b1),
         .frames, .refused, .last_err, .err_seen, .overrun_bits, .lenient_codes,
         .dmix_ignored,
-        .imdct_req, .imdct_done, .coef_ra, .coef_q, .blk_blksw, .blk_dynrng, .blk_acmod,
+        .imdct_req, .imdct_go, .imdct_fin, .pcm_ra(9'd0), .pcm_q(), .coef_ra, .coef_q, .blk_blksw, .blk_dynrng, .blk_acmod,
         .blk_lfeon, .blk_cmix, .blk_surmix,
         .vop_start, .vop_op, .vop_done,
         .tr_valid, .tr_pc, .tr_kind, .tr_addr, .tr_val);
 
     string stem;
-    int stall, imlat, budget;
+    int stall, budget;
     logic [7:0]  bytes [];
     logic [15:0] flen [];
     int n_bytes, n_frames, n_ev, n_x1, n_x2, n_err, n_ovr, n_x3, n_x4, n_blk, cfd;
@@ -72,7 +72,6 @@ module ac3_top_tb;
         logic [31:0] v;
         if (!$value$plusargs("stem=%s", stem)) $fatal(1, "FAIL [setup] no +stem");
         if (!$value$plusargs("stall=%d", stall)) stall = 0;
-        if (!$value$plusargs("imlat=%d", imlat)) imlat = -1;
         if (!$value$plusargs("budget=%d", budget)) budget = 0;
         fd = $fopen({stem, ".meta"}, "r");
         if (fd == 0) $fatal(1, "FAIL [setup] no %s.meta", stem);
@@ -123,13 +122,13 @@ module ac3_top_tb;
         end
     end
 
-    // imdct_512's stand-in: read the block out, score it, take the transform's time
+    // the block out of X, scored; then the engine's own transform
     int blk, nwords, ri, wait_n, e_nf, e_lfe, e_blksw, e_dyn, e_acmod, e_cmix, e_sur;
     logic busy, rd_v, rd_v2, armed;          // a word's address out; its data in (2 later)
     logic [10:0] rd_a, rd_a2;
     logic [23:0] e_coef;
     always @(posedge clk) begin
-        imdct_done <= 1'b0;
+        imdct_go <= 1'b0;
         if (!rst_n) begin
             blk = 0; busy <= 1'b0; rd_v <= 1'b0; rd_v2 <= 1'b0; coef_ra <= 11'd0; armed <= 1'b1;
         end else begin
@@ -161,7 +160,7 @@ module ac3_top_tb;
                            e_blksw, e_dyn, e_acmod, e_lfe, e_cmix, e_sur);
                 nwords = e_nf * 256 + (e_lfe ? 7 : 0);
                 ri = 0;
-                wait_n = (imlat >= 0) ? imlat : (e_nf >= 3) ? 13479 : 4573;
+                wait_n = 0;
                 busy <= 1'b1;
             end
             if (busy) begin
@@ -171,10 +170,9 @@ module ac3_top_tb;
                     rd_v <= 1'b1;
                     ri = ri + 1;
                 end else if (ri < nwords + 3) ri = ri + 1;          // the last word lands
-                else if (wait_n > nwords + 3) wait_n = wait_n - 1;  // the transform's time
-                else begin
-                    imdct_done <= 1'b1; busy <= 1'b0; blk = blk + 1;
-                end
+                else if (wait_n == 0) begin imdct_go <= 1'b1; wait_n = 1; end   // the transform
+                else if (imdct_fin) begin busy <= 1'b0; blk = blk + 1; end
+                else if (++wait_n > 400000) $fatal(1, "FAIL [hang] block %0d: no imdct_fin", blk);
             end
         end
     end
@@ -225,7 +223,7 @@ module ac3_top_tb;
     int still;
     always @(posedge clk) begin
         if (!rst_n) still = 0;
-        else if ((in_valid && in_ready) || imdct_done || (fr_valid && fr_ready)) still = 0;
+        else if ((in_valid && in_ready) || imdct_fin || (fr_valid && fr_ready)) still = 0;
         else if (!(fi == n_frames && fr_ready)) begin
             still++;
             if (still > 400000)

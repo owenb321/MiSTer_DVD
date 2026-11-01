@@ -183,6 +183,101 @@ class Imdct512:
         e = e - 8 if e & 4 else e
         return w32((c * mant) >> (5 - e))
 
+    def ifft_post(self, ch, short, buf, p, c):
+        """The IFFT, then POST, the window and the overlap, for channel ch from the
+        work buffer buf: into self.pcm[ch] and self.delay[ch]."""
+        # ---- IFFT: the traced schedule
+        for op, sa, sb, sc, sd, wr, wi in SCHED[short]:
+            c0r, c0i = buf[sa & 127]
+            c1r, c1i = buf[sb & 127]
+            c2r, c2i = buf[sc & 127]
+            c3r, c3i = buf[sd & 127]
+            if op in (OP_IFFT2, OP_IFFT4):
+                Ar, Ai, Br, Bi = c0r + c1r, c0i + c1i, c0r - c1r, c0i - c1i
+            else:
+                Ar, Ai, Br, Bi = c0r, c0i, c1r, c1i
+            if op in (OP_IFFT4, OP_BZERO):
+                Tr, Ti, Ur, Ui = c2r + c3r, c2i + c3i, c2i - c3i, c3r - c2r
+                c.op(TERMS[op], [], 'ifft')
+            elif op == OP_BHALF:
+                m0, m1 = w34(c2r + c2i), w34(c2i - c2r)
+                m2, m3 = w34(c3r - c3i), w34(c3i + c3r)
+                c.op(TERMS[op], [m0, m2, m1, m3, m1, m3, m2, m0], 'bhalf')
+                p0, p1, p2, p3 = p(m0, wr), p(m1, wr), p(m2, wr), p(m3, wr)
+                Tr, Ti, Ur, Ui = w34(p0 + p2), w34(p1 + p3), w34(p1 - p3), w34(p2 - p0)
+            elif op == OP_BFULL:
+                c.op(TERMS[op], [c2r, c2i, c2i, c2r, c3r, c3i, c3i, c3r], 'bfull')
+                tt5 = w34(p(c2r, wr) + p(c2i, wi))
+                tt6 = w34(p(c2i, wr) - p(c2r, wi))
+                f7 = w34(p(c3r, wr) - p(c3i, wi))
+                f8 = w34(p(c3i, wr) + p(c3r, wi))
+                Tr, Ti, Ur, Ui = w34(tt5 + f7), w34(tt6 + f8), w34(tt6 - f8), w34(f7 - tt5)
+            else:
+                Tr = Ti = Ur = Ui = 0
+                c.op(TERMS[op], [], 'ifft')
+            buf[sa & 127] = (w32(Ar + Tr), w32(Ai + Ti))
+            buf[sb & 127] = (w32(Br + Ur), w32(Bi + Ui))
+            if op != OP_IFFT2:
+                buf[sc & 127] = (w32(Ar - Tr), w32(Ai - Ti))
+                buf[sd & 127] = (w32(Br - Ur), w32(Bi - Ui))
+        # ---- POST, window, overlap
+        dl, out = self.delay[ch], self.pcm[ch]
+        z = self.first
+        if not short:
+            for i in range(64):
+                bir, bii = buf[i]
+                b1r, b1i = buf[127 - i]
+                d0 = 0 if z else dl[2 * i]
+                d1 = 0 if z else dl[2 * i + 1]
+                pr, pi = POST1[i]
+                ar = w32(p(bir, pr) + p(bii, pi))
+                ai = w32(p(bir, pi) - p(bii, pr))
+                br = w32(p(b1r, pi) + p(b1i, pr))
+                bi = w32(p(b1r, pr) - p(b1i, pi))
+                wa, wb = WINDOW[2 * i], WINDOW[255 - 2 * i]
+                pa0 = w32(p(d0, wb) - p(ar, wa))
+                pa1 = w32(p(d0, wa) + p(ar, wb))
+                wa, wb = WINDOW[2 * i + 1], WINDOW[254 - 2 * i]
+                pb0 = w32(p(d1, wb) + p(br, wa))
+                pb1 = w32(p(d1, wa) - p(br, wb))
+                # 16 products: each sample operand once per product
+                c.op(TERMS['post'], [bir, bii, bir, bii, b1r, b1i, b1r, b1i,
+                              d0, ar, d0, ar, d1, br, d1, br], 'post')
+                out[2 * i], out[2 * i + 1] = pa0, pb0
+                out[255 - 2 * i], out[254 - 2 * i] = pa1, pb1
+                dl[2 * i], dl[2 * i + 1] = ai, bi
+        else:
+            for i in range(32):
+                q1ir, q1ii = buf[i]
+                q1mr, q1mi = buf[63 - i]
+                q2ir, q2ii = buf[64 + i]
+                q2mr, q2mi = buf[127 - i]
+                d2i = 0 if z else dl[2 * i]
+                d2i1 = 0 if z else dl[2 * i + 1]
+                d126 = 0 if z else dl[126 - 2 * i]
+                d127 = 0 if z else dl[127 - 2 * i]
+                pr, pi = POST2[i]
+                s_ar = w32(p(q1ir, pr) + p(q1ii, pi)); s_ai = w32(p(q1ir, pi) - p(q1ii, pr))
+                s_br = w32(p(q1mr, pi) + p(q1mi, pr)); s_bi = w32(p(q1mr, pr) - p(q1mi, pi))
+                s_cr = w32(p(q2ir, pr) + p(q2ii, pi)); s_ci = w32(p(q2ir, pi) - p(q2ii, pr))
+                s_dr = w32(p(q2mr, pi) + p(q2mi, pr)); s_di = w32(p(q2mr, pr) - p(q2mi, pi))
+                wa, wb = WINDOW[2 * i], WINDOW[255 - 2 * i]
+                o2i = w32(p(d2i, wb) - p(s_ar, wa)); o255 = w32(p(d2i, wa) + p(s_ar, wb))
+                wa, wb = WINDOW[127 - 2 * i], WINDOW[128 + 2 * i]
+                o128 = w32(p(d127, wa) + p(s_ai, wb)); o127 = w32(p(d127, wb) - p(s_ai, wa))
+                wa, wb = WINDOW[2 * i + 1], WINDOW[254 - 2 * i]
+                o2i1 = w32(p(d2i1, wb) - p(s_bi, wa)); o254 = w32(p(d2i1, wa) + p(s_bi, wb))
+                wa, wb = WINDOW[126 - 2 * i], WINDOW[129 + 2 * i]
+                o129 = w32(p(d126, wa) + p(s_br, wb)); o126 = w32(p(d126, wb) - p(s_br, wa))
+                c.op(TERMS['post256'], [q1ir, q1ii, q1ir, q1ii, q1mr, q1mi, q1mr, q1mi,
+                                 q2ir, q2ii, q2ir, q2ii, q2mr, q2mi, q2mr, q2mi,
+                                 d2i, s_ar, d2i, s_ar, d127, s_ai, d127, s_ai,
+                                 d2i1, s_bi, d2i1, s_bi, d126, s_br, d126, s_br], 'post')
+                out[2 * i], out[255 - 2 * i], out[128 + 2 * i], out[127 - 2 * i] = o2i, o255, o128, o127
+                out[2 * i + 1], out[254 - 2 * i], out[129 + 2 * i], out[126 - 2 * i] = o2i1, o254, o129, o126
+                dl[2 * i], dl[2 * i + 1] = s_ci, s_dr
+                dl[126 - 2 * i], dl[127 - 2 * i] = s_di, s_cr
+
     def block(self, coeff, nf, blksw, dynrng, acmod, cmix, surmix):
         """coeff[ch][256] (Q1.23) for ch < nf -> pcm slots, exactly as imdct_512 leaves them."""
         p, c = (self.p_red if os.environ.get('IMDCT_MODEL_RED') == '1' else self.p), self.cost
@@ -205,97 +300,7 @@ class Imdct512:
                 d255k = self.drc(coeff[ch][a1], dynrng)
                 c.op(TERMS['pre'], [d255k, dk, d255k, dk], 'pre')
                 buf[i] = (w32(p(d255k, pi) + p(dk, pr)), w32(p(d255k, pr) - p(dk, pi)))
-            # ---- IFFT: the traced schedule
-            for op, sa, sb, sc, sd, wr, wi in SCHED[short]:
-                c0r, c0i = buf[sa & 127]
-                c1r, c1i = buf[sb & 127]
-                c2r, c2i = buf[sc & 127]
-                c3r, c3i = buf[sd & 127]
-                if op in (OP_IFFT2, OP_IFFT4):
-                    Ar, Ai, Br, Bi = c0r + c1r, c0i + c1i, c0r - c1r, c0i - c1i
-                else:
-                    Ar, Ai, Br, Bi = c0r, c0i, c1r, c1i
-                if op in (OP_IFFT4, OP_BZERO):
-                    Tr, Ti, Ur, Ui = c2r + c3r, c2i + c3i, c2i - c3i, c3r - c2r
-                    c.op(TERMS[op], [], 'ifft')
-                elif op == OP_BHALF:
-                    m0, m1 = w34(c2r + c2i), w34(c2i - c2r)
-                    m2, m3 = w34(c3r - c3i), w34(c3i + c3r)
-                    c.op(TERMS[op], [m0, m2, m1, m3, m1, m3, m2, m0], 'bhalf')
-                    p0, p1, p2, p3 = p(m0, wr), p(m1, wr), p(m2, wr), p(m3, wr)
-                    Tr, Ti, Ur, Ui = w34(p0 + p2), w34(p1 + p3), w34(p1 - p3), w34(p2 - p0)
-                elif op == OP_BFULL:
-                    c.op(TERMS[op], [c2r, c2i, c2i, c2r, c3r, c3i, c3i, c3r], 'bfull')
-                    tt5 = w34(p(c2r, wr) + p(c2i, wi))
-                    tt6 = w34(p(c2i, wr) - p(c2r, wi))
-                    f7 = w34(p(c3r, wr) - p(c3i, wi))
-                    f8 = w34(p(c3i, wr) + p(c3r, wi))
-                    Tr, Ti, Ur, Ui = w34(tt5 + f7), w34(tt6 + f8), w34(tt6 - f8), w34(f7 - tt5)
-                else:
-                    Tr = Ti = Ur = Ui = 0
-                    c.op(TERMS[op], [], 'ifft')
-                buf[sa & 127] = (w32(Ar + Tr), w32(Ai + Ti))
-                buf[sb & 127] = (w32(Br + Ur), w32(Bi + Ui))
-                if op != OP_IFFT2:
-                    buf[sc & 127] = (w32(Ar - Tr), w32(Ai - Ti))
-                    buf[sd & 127] = (w32(Br - Ur), w32(Bi - Ui))
-            # ---- POST, window, overlap
-            dl, out = self.delay[ch], self.pcm[ch]
-            z = self.first
-            if not short:
-                for i in range(64):
-                    bir, bii = buf[i]
-                    b1r, b1i = buf[127 - i]
-                    d0 = 0 if z else dl[2 * i]
-                    d1 = 0 if z else dl[2 * i + 1]
-                    pr, pi = POST1[i]
-                    ar = w32(p(bir, pr) + p(bii, pi))
-                    ai = w32(p(bir, pi) - p(bii, pr))
-                    br = w32(p(b1r, pi) + p(b1i, pr))
-                    bi = w32(p(b1r, pr) - p(b1i, pi))
-                    wa, wb = WINDOW[2 * i], WINDOW[255 - 2 * i]
-                    pa0 = w32(p(d0, wb) - p(ar, wa))
-                    pa1 = w32(p(d0, wa) + p(ar, wb))
-                    wa, wb = WINDOW[2 * i + 1], WINDOW[254 - 2 * i]
-                    pb0 = w32(p(d1, wb) + p(br, wa))
-                    pb1 = w32(p(d1, wa) - p(br, wb))
-                    # 16 products: each sample operand once per product
-                    c.op(TERMS['post'], [bir, bii, bir, bii, b1r, b1i, b1r, b1i,
-                                  d0, ar, d0, ar, d1, br, d1, br], 'post')
-                    out[2 * i], out[2 * i + 1] = pa0, pb0
-                    out[255 - 2 * i], out[254 - 2 * i] = pa1, pb1
-                    dl[2 * i], dl[2 * i + 1] = ai, bi
-            else:
-                for i in range(32):
-                    q1ir, q1ii = buf[i]
-                    q1mr, q1mi = buf[63 - i]
-                    q2ir, q2ii = buf[64 + i]
-                    q2mr, q2mi = buf[127 - i]
-                    d2i = 0 if z else dl[2 * i]
-                    d2i1 = 0 if z else dl[2 * i + 1]
-                    d126 = 0 if z else dl[126 - 2 * i]
-                    d127 = 0 if z else dl[127 - 2 * i]
-                    pr, pi = POST2[i]
-                    s_ar = w32(p(q1ir, pr) + p(q1ii, pi)); s_ai = w32(p(q1ir, pi) - p(q1ii, pr))
-                    s_br = w32(p(q1mr, pi) + p(q1mi, pr)); s_bi = w32(p(q1mr, pr) - p(q1mi, pi))
-                    s_cr = w32(p(q2ir, pr) + p(q2ii, pi)); s_ci = w32(p(q2ir, pi) - p(q2ii, pr))
-                    s_dr = w32(p(q2mr, pi) + p(q2mi, pr)); s_di = w32(p(q2mr, pr) - p(q2mi, pi))
-                    wa, wb = WINDOW[2 * i], WINDOW[255 - 2 * i]
-                    o2i = w32(p(d2i, wb) - p(s_ar, wa)); o255 = w32(p(d2i, wa) + p(s_ar, wb))
-                    wa, wb = WINDOW[127 - 2 * i], WINDOW[128 + 2 * i]
-                    o128 = w32(p(d127, wa) + p(s_ai, wb)); o127 = w32(p(d127, wb) - p(s_ai, wa))
-                    wa, wb = WINDOW[2 * i + 1], WINDOW[254 - 2 * i]
-                    o2i1 = w32(p(d2i1, wb) - p(s_bi, wa)); o254 = w32(p(d2i1, wa) + p(s_bi, wb))
-                    wa, wb = WINDOW[126 - 2 * i], WINDOW[129 + 2 * i]
-                    o129 = w32(p(d126, wa) + p(s_br, wb)); o126 = w32(p(d126, wb) - p(s_br, wa))
-                    c.op(TERMS['post256'], [q1ir, q1ii, q1ir, q1ii, q1mr, q1mi, q1mr, q1mi,
-                                     q2ir, q2ii, q2ir, q2ii, q2mr, q2mi, q2mr, q2mi,
-                                     d2i, s_ar, d2i, s_ar, d127, s_ai, d127, s_ai,
-                                     d2i1, s_bi, d2i1, s_bi, d126, s_br, d126, s_br], 'post')
-                    out[2 * i], out[255 - 2 * i], out[128 + 2 * i], out[127 - 2 * i] = o2i, o255, o128, o127
-                    out[2 * i + 1], out[254 - 2 * i], out[129 + 2 * i], out[126 - 2 * i] = o2i1, o254, o129, o126
-                    dl[2 * i], dl[2 * i + 1] = s_ci, s_dr
-                    dl[126 - 2 * i], dl[127 - 2 * i] = s_di, s_cr
+            self.ifft_post(ch, short, buf, p, c)
         # ---- the 5.1 -> stereo fold (imdct_512 S_DMX)
         if nf > 2:
             has_c = (acmod & 1) and acmod != 1

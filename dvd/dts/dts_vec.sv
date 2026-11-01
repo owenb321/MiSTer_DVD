@@ -32,8 +32,13 @@
 //   op 23 CZERO  a0 slot, a1 lo, a2 hi: X[slot][lo .. min(hi, 256)) = 0
 //   op 24 REMAT  a0 flags, a1 end: 2/0 rematrix of bins [13, end), saturating; the
 //                active bands' bins, L and R read before either is written
-//   op 25 IMDCT  the block's coefficients are ready: imdct_req until imdct_done, X's
-//                read port the caller's (coef_ra -> coef_q, one cycle)
+//   op 25 IMDCT  a0 blksw, a1 dynrng, a2 acmod, a4 cmixlev, a5 surmixlev: the block's
+//                transform, here (docs/imdct_engine.md). imdct_req waits for imdct_go
+//                (the caller's pcm_out has drained the last block); then the term program
+//                (dvd/dts/imdct_tprog.mem, tools/imdct_isa.py) runs DRC, PRE, the IFFT
+//                schedule and POST for every channel, folding 5.1 into PCM slots 0/1 in
+//                the ring; imdct_fin pulses when they hold the block. pcm_ra -> pcm_q
+//                reads them (one cycle) whenever the transform is not running.
 //
 // MP2's ops (docs/mp2_engine.md M2; tools/mp2_isa.py Machine, which proves each against
 // tools/mp2_ref.py's own functions on every op). The samples live in X at {k, ch, sb}
@@ -107,14 +112,26 @@ module dts_vec (
     // AC-3
     input  wire   [10:0] xq_addr,
     input  wire          abort,
-    output logic         imdct_req,
-    input  wire          imdct_done,
+    output logic         imdct_req,          // op 25 waits for imdct_go
+    input  wire          imdct_go,           // pcm_out has drained the last block
+    output logic         imdct_fin,          // pulse: PCM slots 0/1 hold this block
+    input  wire    [8:0] pcm_ra,             // {slot, idx}
+    output logic  [31:0] pcm_q,
+    // X's read port while op 25 waits for imdct_go (benches score the coefficients
+    // there; the core ties it off): {slot, bin}, one cycle
     input  wire   [10:0] coef_ra,
     output logic  [24:0] coef_q
 );
 
 `include "dvd/dts/dts_ucode.svh"
 `include "dvd/dts/dts_vec.svh"
+`include "dvd/dts/imdct_isa.svh"
+// imdct_512's own tables (docs/imdct_engine.md: the same ROM images, so the same values).
+// A bench that compiles imdct_512 too includes the file twice in one compilation unit:
+// undef its guard on both sides of this include, so each module gets its own copy.
+`undef AC3_IMDCT_TABLES_SVH
+`include "dvd/ac3/ac3_imdct_tables.svh"
+`undef AC3_IMDCT_TABLES_SVH
 
     localparam [5:0] OP_XCLR = 6'd0, OP_XQ = 6'd1, OP_XVQ = 6'd2, OP_ADPCM = 6'd3,
                      OP_JOINT = 6'd4, OP_BFLY = 6'd5, OP_MIXSYN = 6'd6, OP_HCLR = 6'd7;
@@ -140,8 +157,10 @@ module dts_vec (
     (* ramstyle = "M10K" *) logic [26:0] xb   [0:2047];   // X {ch, band, j}: 25 bits (a butterflied
                                                           // band); MP2's samples 27
     (* ramstyle = "M10K" *) logic [23:0] hb   [0:1023];   // ADPCM history {ch, band, k}, k 0 the oldest
-    (* ramstyle = "M10K" *) logic [31:0] ring [0:2047];   // IMDCT rings {0, side, i}, 24 bits;
-                                                          // MP2's V {ch, i}, 31 bits
+    (* ramstyle = "M10K" *) logic [34:0] ring [0:2047];   // IMDCT rings {0, side, i}, 24 bits;
+                                                          // MP2's V {ch, i}, 31 bits; AC-3's
+                                                          // IMDCT: 32-bit words, 33-bit pre-sums
+                                                          // (35 wide: still 7 M10K at 2K x 5)
     // the four small buffers share one M10K (each alone took a block): their phases
     // never overlap -- the IMDCT scratch (mix, IMDCT), the window's carried sums
     // (window) and the PCM pairs (written by the window's outputs, read by the emit):
@@ -150,14 +169,14 @@ module dts_vec (
     //   128..191 pcm {side, i}     the 32 PCM pairs, 16 bits (L then R)
     (* ramstyle = "M10K" *) logic [28:0] sm [0:255];
     initial begin                    // as the emulator: every buffer starts at zero
-        for (int n = 0; n < 2048; n++) begin xb[n] = 27'd0; ring[n] = 32'd0; end
+        for (int n = 0; n < 2048; n++) begin xb[n] = 27'd0; ring[n] = 35'd0; end
         for (int n = 0; n < 1024; n++) hb[n] = 24'd0;
         for (int n = 0; n < 256; n++) sm[n] = 29'd0;
     end
 
     logic [10:0] xb_ra;  logic [26:0] xb_q;
     logic  [9:0] hb_ra;  logic [23:0] hb_q;
-    logic [10:0] rg_ra;  logic [31:0] rg_q;
+    logic [10:0] rg_ra;  logic [34:0] rg_q;
     logic  [5:0] b2_ra, sc_ra;
     logic  [7:0] sm_ra;  logic [28:0] sm_q;
     logic  [4:0] pb_ra;
@@ -173,7 +192,7 @@ module dts_vec (
     logic  [8:0] mw_ra;  logic [17:0] mw_q;
 
     // stage-Y write controls (the issue-side controls, registered)
-    logic        x_xb_we, x_hb_we, x_rg_we, x_b2_we, x_sc_we, x_p_we, x_mag_en;
+    logic        x_xb_we, x_hb_we, x_rg_we, x_b2_we, x_sc_we, x_p_we, x_mag_en, x_w35;
     logic [10:0] x_xb_wa;
     logic  [9:0] x_hb_wa;
     logic [10:0] x_rg_wa;
@@ -187,11 +206,14 @@ module dts_vec (
     wire  signed [15:0] p_s16 = (p_rnd > 25'sd32767) ? 16'sh7FFF :
                                 (p_rnd < -25'sd32768) ? 16'sh8000 : p_rnd[15:0];
 
+    assign pcm_q = rg_q[31:0];
     assign coef_q = xb_q[24:0];
+    // the ring's write: a 32-bit word sign-extended, or (the IMDCT's pre-sums) 35 bits
+    wire  [34:0] rg_wd = x_w35 ? res[34:0] : {{3{res[31]}}, res[31:0]};
     always_ff @(posedge clk) begin
         xb_q <= xb[xb_ra];    if (x_xb_we) xb[x_xb_wa] <= res[26:0];
         hb_q <= hb[hb_ra];    if (x_hb_we) hb[x_hb_wa] <= res[23:0];
-        rg_q <= ring[rg_ra];  if (x_rg_we) ring[x_rg_wa] <= res[31:0];
+        rg_q <= ring[rg_ra];  if (x_rg_we) ring[x_rg_wa] <= rg_wd;
         sm_q <= sm[sm_ra];
         if (x_sc_we)      sm[{2'b00, x_sc_wa}] <= res[28:0];
         else if (x_b2_we) sm[{2'b01, x_b2_wa}] <= res[28:0];
@@ -215,7 +237,7 @@ module dts_vec (
         // MP2
         V_MQ0, V_MQ1, V_MQ2, V_MQ3, V_MQ4, V_MS0, V_MM, V_MWIN, V_MWW,
         // AC-3
-        V_AW, V_AD, V_CSC, V_CCH, V_CD1, V_CD2, V_CMUL, V_CZ, V_RM, V_IM
+        V_AW, V_AD, V_CSC, V_CCH, V_CD1, V_CD2, V_CMUL, V_CZ, V_RM, V_IM, V_IMX
     } vstate_t;
     vstate_t st;
     logic  [5:0] vop;
@@ -351,9 +373,293 @@ module dts_vec (
     wire signed [26:0] vhi27 = {{11{rg_q[31]}}, rg_q[31:16]};
     wire signed [26:0] s27   = xb_q;
 
+    // ------------------------------------------------------------------ AC-3's IMDCT
+    // docs/imdct_engine.md; tools/imdct_isa.py is this, term for term and cycle for cycle.
+    // Three stages ahead of the shared datapath:
+    //   F  the walker: element (phase, channel, index) and term t; presents the term ROM
+    //      address; prefetches the next element's fftorder / schedule entry
+    //   R  the term word: resolves its sample, constant and destination symbols against
+    //      the element's context and presents the ring / X / constant reads; STALLS while
+    //      its ring word has a write in flight (the term in I or in stage Y)
+    //   I  the term issues on the multiplier (the per-state wiring, V_IMX)
+    (* ramstyle = "M10K" *) logic [19:0] tprog [0:IM_TP_WORDS-1];
+    initial $readmemh("dvd/dts/imdct_tprog.mem", tprog);
+    logic [19:0] tp_q;
+    logic  [9:0] tp_ra;
+    logic signed [17:0] wn_im_q;
+    logic  [7:0] wn_im_ra;
+    logic [35:0] pre_q, post_q;
+    logic  [7:0] pre_ra;
+    logic  [6:0] post_ra;
+    logic  [7:0] fo_q;
+    logic  [6:0] fo_ra;
+    logic [70:0] sched_q;
+    logic  [8:0] sched_ra;
+    // F
+    logic        f_v, f_short;
+    logic  [2:0] f_ch;
+    logic  [1:0] f_ph;                       // 0 DRC, 1 PRE, 2 IFFT, 3 POST
+    logic  [7:0] f_cnt;                      // the element: j (DRC), i, the butterfly
+    logic  [6:0] f_t;                        // its term
+    logic  [4:0] f_kind;
+    logic  [7:0] f_a0, f_a1;
+    logic  [6:0] f_s0, f_s1, f_s2, f_s3;
+    logic signed [17:0] f_wr, f_wi;
+    // R
+    logic        r_v, r_short;
+    logic  [2:0] r_ch;
+    logic  [1:0] r_ph;
+    logic  [7:0] r_cnt, r_a0, r_a1;
+    logic  [6:0] r_s0, r_s1, r_s2, r_s3;
+    logic signed [17:0] r_wr, r_wi;
+    // I
+    logic        i_v, i_prod, i_drc, i_krom, i_kim, i_dstv, i_w35;
+    logic  [1:0] i_mode, i_srck, i_kromsel;
+    logic signed [26:0] i_kv;
+    logic [10:0] i_dst;
+    // per block
+    logic  [4:0] im_vld;                     // a channel's delay line is valid (since reset)
+    logic [10:0] im_ra;                      // R: the ring read
+    logic        im_hz;                      // R: stall
+    // the block's parameters (the op's arguments)
+    wire  [2:0] im_acmod = a2[2:0];
+    wire  [2:0] im_nf = (im_acmod == 3'd1) ? 3'd1 : (im_acmod == 3'd3 || im_acmod == 3'd4) ? 3'd3 :
+                        (im_acmod == 3'd5 || im_acmod == 3'd6) ? 3'd4 : (im_acmod == 3'd7) ? 3'd5 : 3'd2;
+    wire  [5:0] im_mant = {1'b1, a1[4:0]};                   // 32 + dynrng[4:0]
+    wire  [3:0] im_drc_sh = 4'd5 - {a1[7], a1[7:5]};         // 5 - e, e signed in [7:5]
+    wire        im_has_c = (im_acmod == 3'd3) || (im_acmod == 3'd5) || (im_acmod == 3'd7);
+    wire        im_has_s = im_acmod[2];
+    wire        im_mono_s = (im_acmod == 3'd4) || (im_acmod == 3'd5);
+    logic [17:0] im_clev, im_slev;
+    always_comb begin
+        case (a4[1:0])
+            2'd0: im_clev = 18'd92682;
+            2'd2: im_clev = 18'd65536;
+            default: im_clev = 18'd77933;
+        endcase
+        if (!im_has_c || im_nf <= 3'd2) im_clev = 18'd0;
+        case (a5[1:0])
+            2'd0: im_slev = im_mono_s ? 18'd65536 : 18'd92682;
+            2'd1: im_slev = im_mono_s ? 18'd46341 : 18'd65536;
+            default: im_slev = 18'd0;
+        endcase
+        if (!im_has_s) im_slev = 18'd0;
+    end
+    // the fold class of channel f_ch (tools/imdct_isa.py CLASSES: D0 D1 A1 C S LS RS NONE)
+    logic [2:0] im_cls;
+    always_comb begin
+        if (im_nf <= 3'd2) im_cls = (f_ch == 3'd0) ? 3'd0 : 3'd1;
+        else if (f_ch == 3'd0) im_cls = 3'd0;                                    // L
+        else if (im_has_c && f_ch == 3'd1) im_cls = 3'd3;                        // C
+        else if (f_ch == (im_has_c ? 3'd2 : 3'd1)) im_cls = im_has_c ? 3'd2 : 3'd1;   // R
+        else if (im_slev == 18'd0) im_cls = 3'd7;                                // a silent surround
+        else if (im_mono_s) im_cls = 3'd4;
+        else im_cls = (f_ch == (im_has_c ? 3'd3 : 3'd2)) ? 3'd5 : 3'd6;          // LS, RS
+    end
+    // F: the term ROM address, the element's length
+    wire  [9:0] f_kb  = IM_KB[f_kind * 10 +: 10];
+    wire  [6:0] f_kl  = IM_KL[f_kind * 7 +: 7];
+    wire        f_lastt = (f_t == f_kl - 7'd1);
+    wire  [7:0] f_last  = (f_ph == 2'd0) ? 8'd255 : (f_ph == 2'd1) ? 8'd127 :
+                          (f_ph == 2'd2) ? (f_short ? 8'd133 : 8'd156) : (f_short ? 8'd31 : 8'd63);
+    wire  [7:0] f_nxt = f_cnt + 8'd1;
+    always_comb begin
+        tp_ra    = f_kb + {3'd0, f_t};
+        fo_ra    = (f_ph == 2'd1) ? (f_short ? {1'b0, f_nxt[5:0]} : f_nxt[6:0]) : 7'd0;
+        sched_ra = (f_short ? 9'd157 : 9'd0) + ((f_ph == 2'd2) ? {1'b0, f_nxt} : 9'd0);
+        if (st == V_IM) sched_ra = a0[0] ? 9'd157 : 9'd0;    // channel 0's entry 0 (ISKIP)
+    end
+    // the short-block PRE pair from fftorder (imdct_512: buf2 = i >= 64)
+    wire  [7:0] fo_nx = f_nxt;                      // the PRE element the prefetch is for
+    // R: resolve the term's sample, destination and constant symbols
+    wire  [1:0] r_mode = tp_q[1:0];
+    wire  [5:0] r_src  = tp_q[7:2];
+    wire  [3:0] r_cst  = tp_q[11:8];
+    wire  [5:0] r_dst  = tp_q[17:12];
+    logic [10:0] ra_q [0:1];                // [0] the sample's, [1] the destination's
+    logic  [1:0] r_srck;                    // 0 ring, 1 X, 2 zero (an invalid delay word)
+    // the resolver's temporaries, one set per symbol (module scope: Quartus 17)
+    logic  [5:0] sy_q [0:1], d_q [0:1];
+    logic  [6:0] ix_q [0:1], j7_q [0:1];
+    logic  [7:0] kk_q [0:1];
+    always_comb begin
+        for (int q = 0; q < 2; q++) begin
+            sy_q[q] = q ? r_dst : r_src;
+            d_q[q] = 6'd0; ix_q[q] = 7'd0; j7_q[q] = 7'd0; kk_q[q] = 8'd0;
+            ra_q[q] = 11'd0;
+            if (sy_q[q] >= IM_S_C && sy_q[q] < IM_S_T) begin                 // c0r .. c3i
+                d_q[q] = sy_q[q] - IM_S_C;
+                case (d_q[q][2:1])
+                    2'd0: ix_q[q] = r_s0;  2'd1: ix_q[q] = r_s1;  2'd2: ix_q[q] = r_s2;  default: ix_q[q] = r_s3;
+                endcase
+                ra_q[q] = {3'b000, ix_q[q], d_q[q][0]};
+            end else if (sy_q[q] >= IM_S_T && sy_q[q] < IM_S_DA0) begin      // t0 .. t15
+                d_q[q] = sy_q[q] - IM_S_T;
+                ra_q[q] = IM_R_TMP + {7'd0, d_q[q][3:0]};
+            end else if (sy_q[q] == IM_S_DA0) ra_q[q] = IM_R_D + {3'd0, r_a0};
+            else if (sy_q[q] == IM_S_DA1) ra_q[q] = IM_R_D + {3'd0, r_a1};
+            else if (sy_q[q] == IM_S_BIR || sy_q[q] == IM_S_BII) ra_q[q] = {3'b000, r_cnt[6:0], sy_q[q] == IM_S_BII};
+            else if (sy_q[q] == IM_S_DJ) ra_q[q] = IM_R_D + {3'd0, r_cnt};
+            else if (sy_q[q] >= IM_S_B && sy_q[q] < IM_S_DL) begin           // bA .. bD, r / i
+                d_q[q] = sy_q[q] - IM_S_B;
+                case (d_q[q][2:1])
+                    2'd0: ix_q[q] = r_cnt[6:0];
+                    2'd1: ix_q[q] = 7'd63 - r_cnt[6:0];
+                    2'd2: ix_q[q] = 7'd64 + r_cnt[6:0];
+                    default: ix_q[q] = 7'd127 - r_cnt[6:0];
+                endcase
+                ra_q[q] = {3'b000, ix_q[q], d_q[q][0]};
+            end else if (sy_q[q] >= IM_S_DL && sy_q[q] < IM_S_P) begin       // dl0 .. dl3
+                d_q[q] = sy_q[q] - IM_S_DL;
+                case (d_q[q][1:0])
+                    2'd0: j7_q[q] = {r_cnt[5:0], 1'b0};
+                    2'd1: j7_q[q] = {r_cnt[5:0], 1'b1};
+                    2'd2: j7_q[q] = 7'd126 - {r_cnt[5:0], 1'b0};
+                    default: j7_q[q] = 7'd127 - {r_cnt[5:0], 1'b0};
+                endcase
+                ra_q[q] = {4'd6 + {1'b0, r_ch}, j7_q[q]};
+            end else if (sy_q[q] >= IM_S_P) begin                       // p{slot}_{n}
+                d_q[q] = sy_q[q] - IM_S_P;
+                if (r_short) case (d_q[q][2:0])
+                    3'd0: kk_q[q] = {r_cnt[6:0], 1'b0};
+                    3'd1: kk_q[q] = 8'd255 - {r_cnt[6:0], 1'b0};
+                    3'd2: kk_q[q] = 8'd128 + {r_cnt[6:0], 1'b0};
+                    3'd3: kk_q[q] = 8'd127 - {r_cnt[6:0], 1'b0};
+                    3'd4: kk_q[q] = {r_cnt[6:0], 1'b1};
+                    3'd5: kk_q[q] = 8'd254 - {r_cnt[6:0], 1'b0};
+                    3'd6: kk_q[q] = 8'd129 + {r_cnt[6:0], 1'b0};
+                    default: kk_q[q] = 8'd126 - {r_cnt[6:0], 1'b0};
+                endcase else case (d_q[q][1:0])
+                    2'd0: kk_q[q] = {r_cnt[6:0], 1'b0};
+                    2'd1: kk_q[q] = 8'd255 - {r_cnt[6:0], 1'b0};
+                    2'd2: kk_q[q] = {r_cnt[6:0], 1'b1};
+                    default: kk_q[q] = 8'd254 - {r_cnt[6:0], 1'b0};
+                endcase
+                ra_q[q] = {2'b11, d_q[q][3], kk_q[q]};
+            end
+        end
+        im_ra = ra_q[0];
+        r_srck = (r_src == IM_S_XJ) ? 2'd1 :
+                 (r_src >= IM_S_DL && r_src < IM_S_P && !im_vld[r_ch]) ? 2'd2 : 2'd0;
+        // the constant: a window tap, a PRE / POST twiddle (the ROMs, read now), or a value
+        case (r_cst)
+            IM_C_WA0: wn_im_ra = {r_cnt[6:0], 1'b0};
+            IM_C_WB0: wn_im_ra = 8'd255 - {r_cnt[6:0], 1'b0};
+            IM_C_WA1: wn_im_ra = r_short ? 8'd127 - {r_cnt[6:0], 1'b0} : {r_cnt[6:0], 1'b1};
+            IM_C_WB1: wn_im_ra = r_short ? 8'd128 + {r_cnt[6:0], 1'b0} : 8'd254 - {r_cnt[6:0], 1'b0};
+            IM_C_WA2: wn_im_ra = {r_cnt[6:0], 1'b1};
+            IM_C_WB2: wn_im_ra = 8'd254 - {r_cnt[6:0], 1'b0};
+            IM_C_WA3: wn_im_ra = 8'd126 - {r_cnt[6:0], 1'b0};
+            default:  wn_im_ra = 8'd129 + {r_cnt[6:0], 1'b0};
+        endcase
+        pre_ra  = r_short ? {2'b10, r_cnt[5:0]} : {1'b0, r_cnt[6:0]};
+        post_ra = r_short ? {2'b10, r_cnt[4:0]} : {1'b0, r_cnt[5:0]};
+        // stall: the ring word has a write in flight (the term in I, the one in stage Y)
+        im_hz = r_v && (r_srck != 2'd1) &&
+                ((i_v && i_dstv && i_dst == im_ra) || (x_rg_we && x_rg_wa == im_ra));
+    end
+    always_ff @(posedge clk) begin
+        if (!im_hz) tp_q <= tprog[tp_ra];   // held while R stalls: R still needs its word
+        wn_im_q <= imdct_window[wn_im_ra];
+        pre_q   <= imdct_pre_pk[pre_ra];
+        post_q  <= imdct_post_pk[post_ra];
+        fo_q    <= imdct_fftorder[fo_ra];
+        sched_q <= imdct_sched_pk[sched_ra];
+    end
+    // F, R, I
+    always_ff @(posedge clk) begin
+        if (st == V_IM && imdct_go) begin               // the block starts: channel 0, DRC
+            f_v <= 1'b1; f_ch <= 3'd0; f_short <= a0[0]; f_ph <= 2'd0; f_cnt <= 8'd0;
+            f_t <= 7'd0; f_kind <= IM_K_DRC;
+            r_v <= 1'b0; i_v <= 1'b0;
+            // ISKIP (a7[0], benches only): start at the IFFT, on a work buffer and delay
+            // line the bench has written -- the only way to reach 33-bit pre-sums, which
+            // no coefficient block does through PRE (docs/imdct_engine.md I2). The
+            // schedule entry is channel 0's first, read while op 25 waited (>= 1 cycle).
+            if (a7[0]) begin
+                f_ph <= 2'd2;
+                f_kind <= IM_K_OP + {2'd0, sched_q[70:68]};
+                f_s0 <= sched_q[66:60]; f_s1 <= sched_q[58:52];
+                f_s2 <= sched_q[50:44]; f_s3 <= sched_q[42:36];
+                f_wr <= $signed(sched_q[35:18]); f_wi <= $signed(sched_q[17:0]);
+            end
+        end else if (st == V_IMX && !im_hz) begin
+            // R <- F
+            r_v <= f_v; r_ch <= f_ch; r_short <= f_short; r_ph <= f_ph; r_cnt <= f_cnt;
+            r_a0 <= f_a0; r_a1 <= f_a1; r_s0 <= f_s0; r_s1 <= f_s1; r_s2 <= f_s2; r_s3 <= f_s3;
+            r_wr <= f_wr; r_wi <= f_wi;
+            // I <- R
+            i_v <= r_v;
+            i_mode <= r_mode; i_srck <= r_srck;
+            i_dst <= ra_q[1]; i_dstv <= (r_dst != 6'd0); i_w35 <= tp_q[18];
+            i_drc  <= (r_cst == IM_C_MANT);
+            i_prod <= (r_cst != IM_C_NONE) && (r_cst != IM_C_MANT);
+            i_krom <= (r_cst >= IM_C_PR) && (r_cst <= IM_C_WB3);
+            i_kromsel <= (r_cst >= IM_C_WA0) ? 2'd0 : (r_ph == 2'd1) ? 2'd1 : 2'd2;
+            i_kim <= (r_cst == IM_C_PI);
+            case (r_cst)
+                IM_C_WR:   i_kv <= {{9{r_wr[17]}}, r_wr};
+                IM_C_WI:   i_kv <= {{9{r_wi[17]}}, r_wi};
+                IM_C_MANT: i_kv <= {21'd0, im_mant};
+                IM_C_CLEV: i_kv <= {9'd0, im_clev};
+                IM_C_SLEV: i_kv <= {9'd0, im_slev};
+                default:   i_kv <= 27'sd1;                  // an add: the sample itself
+            endcase
+            // F: the next term, or the next element
+            if (f_v) begin
+                if (!f_lastt) f_t <= f_t + 7'd1;
+                else begin
+                    f_t <= 7'd0;
+                    f_cnt <= (f_cnt == f_last) ? 8'd0 : f_nxt;
+                    case (f_ph)
+                        2'd0: if (f_cnt == f_last) begin            // DRC -> PRE, element 0
+                            f_ph <= 2'd1; f_kind <= IM_K_PRE;
+                            f_a0 <= fo_q;
+                            f_a1 <= f_short ? 8'd254 - fo_q : 8'd255 - fo_q;
+                        end
+                        2'd1: if (f_cnt == f_last) begin            // PRE -> IFFT, butterfly 0
+                            f_ph <= 2'd2;
+                            f_kind <= IM_K_OP + {2'd0, sched_q[70:68]};
+                            f_s0 <= sched_q[66:60]; f_s1 <= sched_q[58:52];
+                            f_s2 <= sched_q[50:44]; f_s3 <= sched_q[42:36];
+                            f_wr <= $signed(sched_q[35:18]); f_wi <= $signed(sched_q[17:0]);
+                        end else begin                              // PRE element i + 1
+                            f_a0 <= (f_short && fo_nx[6]) ? fo_q + 8'd1 : fo_q;
+                            f_a1 <= !f_short ? 8'd255 - fo_q : fo_nx[6] ? 8'd255 - fo_q : 8'd254 - fo_q;
+                        end
+                        2'd2: if (f_cnt == f_last) begin            // IFFT -> POST
+                            f_ph <= 2'd3;
+                            f_kind <= (f_short ? IM_K_POSTS : IM_K_POSTL) + {2'd0, im_cls};
+                        end else begin                              // the next butterfly
+                            f_kind <= IM_K_OP + {2'd0, sched_q[70:68]};
+                            f_s0 <= sched_q[66:60]; f_s1 <= sched_q[58:52];
+                            f_s2 <= sched_q[50:44]; f_s3 <= sched_q[42:36];
+                            f_wr <= $signed(sched_q[35:18]); f_wi <= $signed(sched_q[17:0]);
+                        end
+                        default: if (f_cnt == f_last) begin         // POST done: the next channel
+                            if (f_ch + 3'd1 == im_nf) f_v <= 1'b0;
+                            else begin
+                                f_ch <= f_ch + 3'd1; f_short <= a0[f_ch + 3'd1];
+                                f_ph <= 2'd0; f_kind <= IM_K_DRC;
+                            end
+                        end
+                    endcase
+                end
+            end
+        end else if (st == V_IMX) i_v <= 1'b0;          // a stall: a bubble issues
+        if (!rst_n) begin
+            f_v <= 1'b0; r_v <= 1'b0; i_v <= 1'b0; im_vld <= 5'd0;
+        end else if (imdct_fin) im_vld <= im_vld | ((im_nf == 3'd1) ? 5'b00001 : (im_nf == 3'd2) ? 5'b00011 :
+                                                    (im_nf == 3'd3) ? 5'b00111 : (im_nf == 3'd4) ? 5'b01111 : 5'b11111);
+    end
+
     // ------------------------------------------------------------------ the datapath
-    logic signed [26:0] ma, mb;
+    logic signed [32:0] ma;                  // 33: the IMDCT's samples (a 32-bit word, or a
+                                             // pre-sum of two); every other op's are 27
+    logic signed [26:0] mb;
     logic               acc_clr, acc_en, direct, trunc, preclip, neg, sat24, mag_en;
+    logic               psh, psub, w35;      // the IMDCT: floor the product by 17 before it
+                                             // meets the accumulator; subtract it; store 35
     logic         [1:0] shl;
     logic signed [55:0] init, addend, dsrc;
     logic         [5:0] rsh;
@@ -362,14 +668,18 @@ module dts_vec (
     logic         [9:0] hb_wa;
     logic        [10:0] rg_wa;
     logic         [5:0] b2_wa, sc_wa, p_wai;
-    logic signed [53:0] x_prod;
+    logic signed [55:0] x_prod;              // |33 x 27| < 2^55 for every op that uses it
     logic               x_acc_clr, x_acc_en, x_direct, x_trunc, x_preclip, x_neg, x_sat24;
+    logic               x_psh, x_psub;
     logic         [1:0] x_shl;
     logic signed [55:0] x_init, x_addend, x_dsrc, acc;
     logic         [5:0] x_rsh;
-    logic signed [55:0] sum, rsrc, rnd, pcl, pn, post, shv;
+    logic signed [55:0] sum, rsrc, rnd, pcl, pn, post, shv, pv;
     always_comb begin
-        sum  = (x_acc_clr ? x_init : acc) + {{2{x_prod[53]}}, x_prod};
+        // the IMDCT floors EACH product (imdct_512's `(s * tw) >>> 17`) before it is added,
+        // and subtracts the floored product (floor(-x) != -floor(x))
+        pv   = x_psh ? (x_prod >>> 17) : x_prod;
+        sum  = (x_acc_clr ? x_init : acc) + (x_psub ? -pv : pv);
         rsrc = x_direct ? x_dsrc : sum;
         rnd  = (x_rsh == 6'd0) ? rsrc
              : ((rsrc + (x_trunc ? 56'sd0 : (56'sd1 <<< (x_rsh - 6'd1)))) >>> x_rsh);
@@ -397,6 +707,7 @@ module dts_vec (
 
     always_ff @(posedge clk) begin
         x_prod <= ma * mb;
+        x_psh <= psh; x_psub <= psub; x_w35 <= w35;
         x_acc_clr <= acc_clr; x_acc_en <= acc_en; x_direct <= direct; x_trunc <= trunc;
         x_preclip <= preclip; x_neg <= neg; x_sat24 <= sat24; x_shl <= shl;
         x_init <= init; x_addend <= addend; x_dsrc <= dsrc; x_rsh <= rsh;
@@ -414,7 +725,8 @@ module dts_vec (
 
     // ------------------------------------------------------------------ per-state wiring
     always_comb begin
-        ma = 27'sd0; mb = 27'sd0; acc_clr = 1'b1; acc_en = 1'b0; direct = 1'b0;
+        ma = 33'sd0; mb = 27'sd0; acc_clr = 1'b1; acc_en = 1'b0; direct = 1'b0;
+        psh = 1'b0; psub = 1'b0; w35 = 1'b0;
         trunc = 1'b0; preclip = 1'b0; neg = 1'b0; sat24 = 1'b0; shl = 2'd0; mag_en = 1'b0;
         init = 56'sd0; addend = 56'sd0; dsrc = 56'sd0; rsh = 6'd0;
         xb_we = 1'b0; hb_we = 1'b0; rg_we = 1'b0; b2_we = 1'b0; sc_we = 1'b0; p_wi = 1'b0;
@@ -426,7 +738,9 @@ module dts_vec (
         p_wai = {side, wd_q[0], wd_i};
         xb_ra = {a0[2:0], a1[4:0], k[2:0]};
         hb_ra = {a0[2:0], a1[4:0], k[1:0]};
-        rg_ra = {1'b0, side, w_rg};
+        // the ring's read: pcm_out's AC-3 PCM slots unless an op is using the ring (DTS's
+        // window, MP2's window, AC-3's IMDCT override it; only those ops read the ring)
+        rg_ra = {2'b11, pcm_ra};
         b2_ra = {side, w_q[0], w_i};
         sc_ra = ip_q[5:0];
         pb_ra = k[4:0];
@@ -555,7 +869,9 @@ module dts_vec (
                 end
             end
             // ---- MIXSYN: the window, 8 taps an output, q-major
-            V_WIN: if (dv) begin
+            V_WIN: begin
+                rg_ra = {1'b0, side, w_rg};
+                if (dv) begin
                 ma = wn27; mb = rg27;
                 acc_clr = (wd_t == 3'd0); acc_en = 1'b1;
                 init = wd_q[1] ? 56'sd0 : ($signed({{27{b2_q[28]}}, b2_q}) <<< 21);
@@ -564,6 +880,7 @@ module dts_vec (
                     if (wd_q[1]) b2_we = 1'b1;                       // c, d: the carried sums
                     else begin sat24 = 1'b1; p_wi = 1'b1; end        // a, b: PCM
                 end
+            end
             end
             // ---- AC-3: an item (the dither table is read for the LFSR as it stands)
             V_AW: begin
@@ -613,11 +930,35 @@ module dts_vec (
                 end
             end
             V_IM: xb_ra = coef_ra;
+            V_IMX: begin
+                // R stage: the next term's reads (its ring word / coefficient, its constant)
+                rg_ra = im_ra;
+                xb_ra = {r_ch, r_cnt};
+                // I stage: the term issues
+                if (i_v) begin
+                    case (i_srck)
+                        2'd0: ma = $signed(rg_q[32:0]);
+                        2'd1: ma = {{8{xb_q[24]}}, xb_q[24:0]};
+                        default: ma = 33'sd0;                    // a delay word not yet valid
+                    endcase
+                    mb = i_kv;
+                    if (i_krom) case (i_kromsel)
+                        2'd0: mb = {{9{wn_im_q[17]}}, wn_im_q};
+                        2'd1: mb = i_kim ? {{9{pre_q[17]}}, pre_q[17:0]} : {{9{pre_q[35]}}, pre_q[35:18]};
+                        default: mb = i_kim ? {{9{post_q[17]}}, post_q[17:0]} : {{9{post_q[35]}}, post_q[35:18]};
+                    endcase
+                    acc_clr = !i_mode[1]; acc_en = 1'b1;
+                    psub = i_mode[0];
+                    psh = i_prod;
+                    rsh = i_drc ? {2'd0, im_drc_sh} : 6'd0; trunc = 1'b1;
+                    rg_we = i_dstv; rg_wa = i_dst; w35 = i_w35;
+                end
+            end
             // ---- MP2: MDQ -- C read, x16 C and d16 C into one sum, floored by 7; then x SCF
             V_MQ0: ic_ra = MP2_IC_C + {3'd0, a3[4:0]};
             V_MQ1: begin
                 ic_ra = MP2_IC_C + {3'd0, a3[4:0]};
-                ma = {{11{a1[15]}}, a1}; mb = {10'd0, ic_q[16:0]}; acc_en = 1'b1;
+                ma = {{17{a1[15]}}, a1}; mb = {10'd0, ic_q[16:0]}; acc_en = 1'b1;
             end
             V_MQ2: begin
                 ic_ra = MP2_IC_SCF + {2'd0, a4[5:0]};
@@ -627,7 +968,7 @@ module dts_vec (
             V_MQ3: ic_ra = MP2_IC_SCF + {2'd0, a4[5:0]};          // the floor lands (ss)
             V_MQ4: begin                        // floor(q x SCF / 2^20): never clips (|S| < 2^25)
                 ic_ra = MP2_IC_SCF + {2'd0, a4[5:0]};
-                ma = ss[26:0]; mb = {5'd0, ic_q[21:0]}; rsh = 6'd20; trunc = 1'b1;
+                ma = {{6{ss[26]}}, ss[26:0]}; mb = {5'd0, ic_q[21:0]}; rsh = 6'd20; trunc = 1'b1;
                 xb_we = 1'b1; xb_wa = a0[10:0];
             end
             // ---- MP2: MSYN's matrix, V[i] = floor(sum_k N[i][k] S[k] / 2^14) (|V| <= 2^30)
@@ -664,6 +1005,7 @@ module dts_vec (
     always_ff @(posedge clk) begin
         done <= 1'b0;
         cb_req <= 1'b0;
+        imdct_fin <= 1'b0;
         if (cb_valid) begin cb_row <= cb_data; cb_got <= 1'b1; end
         if (pcm_valid && pcm_ready) pcm_valid <= 1'b0;
         if (x_mag_en) mag <= mag + {5'd0, res_abs};
@@ -777,7 +1119,11 @@ module dts_vec (
                     if (rph == 2'd3) rb <= rb + 8'd1;
                 end
             end
-            V_IM: if (imdct_done) st <= V_DONE;
+            V_IM: if (imdct_go) st <= V_IMX;
+            V_IMX: if (!f_v && !r_v && !i_v && !x_rg_we) begin   // the last write has landed
+                imdct_fin <= 1'b1;
+                st <= V_DONE;
+            end
             // ---- a plain loop: k issues reads, k_d the data's use
             V_LOOP: begin
                 dv <= (k < lcnt);

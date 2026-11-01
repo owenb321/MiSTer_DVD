@@ -86,7 +86,7 @@ module mp2_ab_tb;
         .pcm_l(e_l), .pcm_r(e_r), .pcm_valid(e_valid), .pcm_ready(1'b1),
         .frames(e_frames), .refused(e_refused), .last_err(), .err_seen(), .overrun_bits(),
         .lenient_codes(), .dmix_ignored(), .frame_end(), .refuse(), .refuse_code(),
-        .imdct_req(), .imdct_done(1'b0), .coef_ra(11'd0), .coef_q(), .blk_blksw(),
+        .imdct_req(), .imdct_go(1'b0), .imdct_fin(), .pcm_ra(9'd0), .pcm_q(), .coef_ra(11'd0), .coef_q(), .blk_blksw(),
         .blk_dynrng(), .blk_acmod(), .blk_lfeon(), .blk_cmix(), .blk_surmix(), .mp2_fs(e_fs),
         .vop_start(), .vop_op(), .vop_done(), .tr_valid(), .tr_pc(), .tr_kind(), .tr_addr(),
         .tr_val());

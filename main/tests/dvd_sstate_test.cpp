@@ -42,7 +42,7 @@ static unsigned fake_now = 1000;
 
 // ---------------------------------------------------------------- the fake core
 static int      core_present = 1;
-static uint16_t core_seq = 4, core_fmt = 0x3f84, core_w2_req = 0;   // w2 bits 14:8
+static uint16_t core_seq = 4, core_fmt = 0x3f84, core_w2_req = 0;   // w2 bits 13:7 (slot 13:11, load_n 10:9, save_n 8:7)
 static int      core_vm_en = 1;
 static int      core_busy = 0, core_busy_for = 0;      // fetches answered busy
 static int      core_len = 0;
@@ -63,7 +63,7 @@ static int      ld_n;
 static uint16_t word2(void)
 {
 	return (uint16_t)((core_busy ? 0x8000 : 0) | (core_vm_en ? 0x4000 : 0) |
-	                  (core_w2_req & 0x3F00) | (core_busy ? 0 : core_len));
+	                  (core_w2_req & 0x3F80) | (core_busy ? 0 : core_len));
 }
 static uint16_t spi_uio_cmd_cont(uint16_t cmd)
 {
@@ -71,7 +71,7 @@ static uint16_t spi_uio_cmd_cont(uint16_t cmd)
 	if (cmd != 0x7D || !core_present) { tx_k = -1; return 0; }
 	tx_k = 0;
 	if (core_busy && core_busy_for-- <= 0) { core_busy = 0; core_seq++; core_len = 96; }
-	return 0x5E02;
+	return 0x5E03;
 }
 static uint16_t spi_w(uint16_t x)
 {
@@ -189,9 +189,9 @@ static void make_iso(const char *path, int variant, const char *provider, int dv
 static void tick(void) { fake_now += 25; dvd_sstate_tick(); }
 static void press(int save, int slot)
 {
-	int sv = (core_w2_req >> 8) & 3, ld = (core_w2_req >> 10) & 3;
+	int sv = (core_w2_req >> 7) & 3, ld = (core_w2_req >> 9) & 3;
 	if (save) sv = (sv + 1) & 3; else ld = (ld + 1) & 3;
-	core_w2_req = (uint16_t)(slot << 12 | ld << 10 | sv << 8);
+	core_w2_req = (uint16_t)(slot << 11 | ld << 9 | sv << 7);
 }
 static void snapshot_state(void)
 {
@@ -240,7 +240,7 @@ int main(void)
 	snapshot_state();
 
 	printf("[4] the first word is a baseline\n");
-	core_w2_req = 0x2500;                              // slot 2, load_n 1, save_n 1
+	core_w2_req = 2 << 11 | 1 << 9 | 1 << 7;          // slot 2, load_n 1, save_n 1
 	tick(); tick(); tick();
 	check(n_asks == 0 && n_loads == 0 && n_info == 0, "counters already set do nothing");
 
@@ -353,6 +353,33 @@ int main(void)
 	core_busy_for = 0;
 	for (int i = 0; i < 4; i++) tick();
 	check(n_asks == a0 + 1 && !strcmp(last_info, "Saved to slot 2"), "served once it settles");
+
+	printf("[14] eight slots: slot 8 is _8.ss, saved and loaded\n");
+	core_busy_for = 0;
+	press(1, 7);
+	for (int i = 0; i < 6; i++) tick();
+	check(!strcmp(last_info, "Saved to slot 8"), "says Saved to slot 8");
+	snprintf(path, sizeof(path), "%s/DVD/%s_8.ss", save_dir, id1);
+	check(FileExists(path), "the slot 8 file is _8.ss");
+	int l8 = n_loads;
+	press(0, 7);
+	for (int i = 0; i < 10; i++) tick();
+	check(n_loads == l8 + 1, "a Load of slot 8 sends it");
+
+	printf("[15] buttons armed at the save: no exact time, the load lands at the cell start\n");
+	core_hdr[4] |= 4;                                  // word 4 bit 2 = hl_armed
+	core_busy_for = 0;
+	press(1, 3);
+	for (int i = 0; i < 6; i++) tick();
+	check(!strcmp(last_info, "Saved to slot 4"), "says Saved to slot 4");
+	snprintf(path, sizeof(path), "%s/DVD/%s_4.ss", save_dir, id1);
+	fl = 0; f = fopen(path, "rb");
+	if (f) { fl = (int)fread(fb, 1, sizeof(fb), f); fclose(f); }
+	check(fl == 64 + 192 && (int32_t)get32(fb + 20) == -1, "armed: the file carries no time (-1), not 771");
+	press(0, 3);
+	for (int i = 0; i < 10; i++) tick();
+	check(ld_tm == 0xFFFF, "armed: the load asks for the saved cell's start (0xFFFF)");
+	core_hdr[4] &= (uint16_t)~4;
 
 	printf(fails ? "dvd_sstate_test: %d FAILED\n" : "dvd_sstate_test: ALL GREEN\n", fails);
 	return fails ? 1 : 0;

@@ -704,7 +704,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-vmsnap"
+`define CORE_VERSION "dev-reclaim"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -725,11 +725,6 @@ parameter CONF_STR = {
     // stock Main; our Main widens it (integration step 50). A longer list is
     // fine with our Main, but keep that step in mind before adding more.
     "S0,MPGM2VVOBISOBINIMGDATWAVCUE,Load Video;",
-    // Aspect Ratio: Auto (default) reads the display AR from the MPEG-2 sequence header
-    // (aspect_ratio_information, par. 6.3.3: 2=4:3, 3=16:9); 4:3/16:9 force it. Drives the
-    // MiSTer scaler output aspect (VIDEO_ARX/ARY) — the 720x480/576 raster is unchanged,
-    // ascal letterboxes/pillarboxes it. status[20:19]: 0=Auto, 1=4:3, 2=16:9.
-    "O[20:19],Aspect Ratio,Auto,4:3,16:9;",
     // Disc Menus: On (DEFAULT) = the disc boots its authored First Play PGC and
     // the full DVD virtual machine runs — menus, button highlights, and nav
     // commands all execute, like a set-top player. The Menu/Title gamepad keys
@@ -743,43 +738,12 @@ parameter CONF_STR = {
     // with the OLD meaning and comes up Off — delete the .cfg after updating.
     // status[1]. See docs/dvd_nav.md, docs/dvd_vm.md.
     "O[1],Disc Menus,On,Off;",
-    // D-Pad Seek: OFF by default. On = the D-pad does VLC-style FIXED-TIME
-    // seeking while a title plays -- Left/Right jump -/+10 s, Down/Up -/+60 s --
-    // with targets read from the disc's OWN authored DSI seek tables
-    // (dvd/dpad_seek.sv). Presses inside ~0.4 s add up into ONE jump.
-    // ⚠ Default Off ON PURPOSE: the hold-to-seek scrub was deliberately moved
-    // OFF the D-pad in 2026-07-28 because interactive/game DVDs have seekable
-    // title video yet expect directional input, and the in_title_menu heuristic
-    // cannot always tell the two apart. Off keeps the D-pad pure navigation for
-    // everyone who does not ask for this. When On it is still suppressed
-    // wherever the nav layer claims the D-pad (menus, in-title game menus).
-    // See docs/dvd_nav.md 2b.
-    "O[45],D-Pad Seek,Off,On;",
-    "O5,Audio,On,Off;",
-    // Audio Out: Decode = AC-3/DTS/LPCM/MP2 decoded in fabric to HDMI PCM (default;
-    // DTS core decode since PRs #148/#149). Passthru = the UNDECODED AC-3/DTS frames
-    // are wrapped in IEC 61937 and sent as a bitstream for an AV receiver to decode
-    // (Path B; full multichannel DTS). Always out optical S/PDIF, and ALSO over
-    // HDMI when MiSTer_DVDcss has put the ADV7513 in IEC958-direct mode and the
-    // sink advertises AC-3/DTS; otherwise HDMI stays muted as before.
-    // status[6]. See docs/iec61937.md and docs/hdmi_bitstream.md.
-    //
-    // ★ OX (not O) marks it "also handled by the HPS": the bit still reaches the
-    // core exactly as before, but Main sees the declaration in parse_config and
-    // learns this build HAS the HDMI bitstream path. A core without it never
-    // declares OX6, so Main never reconfigures the chip for a core that cannot
-    // drive it. Bit layout is unchanged, so no CONF_STR "v,N" bump is needed.
-    "OX6,Audio Out,Decode PCM,Passthru (SPDIF+HDMI);",
-    // SPDIF Byte Order: flips the 61937 payload byte packing. If the receiver
-    // recognises the format (e.g. "Dolby D"/"DTS") but plays static, toggle
-    // this. status[7]. Only meaningful in Passthru.
-    "O7,SPDIF Byte Order,Normal,Swap;",
     // Phase-10: audio- and subtitle-TRACK selection moved OFF the OSD onto the
     // gamepad Audio (B7) / Subtitle (B8) cycle buttons (see the J1 line below).
     // Rationale: MiSTer CONF_STR value labels are compile-time static, so a
     // per-disc track/language list can't be shown in the OSD. The track counts
     // are bounded by the title IFO; the on-screen indicator is Phase 11.
-    // DVD Title override: MOVED to the Debug page (P1 "Title VTS" tens/units,
+    // DVD Title override: MOVED to the Debug page (P7 "Title VTS" tens/units,
     // status[39:32]) and widened to VTS 1..99 -- user decision 2026-08-19: it is
     // a debug aid, not a user feature (Disc Menus is the real selector), and the
     // old 4-bit O[31:28] couldn't reach VTS_16+ on ~9% of the library (Atmosfear
@@ -795,6 +759,21 @@ parameter CONF_STR = {
     // (audio/subtitle preference, read by disc nav commands to auto-select
     // streams). Takes effect at the next menu jump / disc mount. status[43:40].
     "O[43:40],Player Language,English,French,German,Spanish,Italian,Japanese,Chinese,Korean,Portuguese,Russian,Dutch,Swedish,Danish,Norwegian,Finnish,Polish;",
+
+    // ======== OSD PAGES (2026-10-30, by topic; maintainer's choice) ==============
+    // Rows grouped into pages by topic. A row keeps its O[] bits wherever it sits, so
+    // moving one between pages changes nobody's saved settings (no "v,N" bump). Page
+    // numbers are one digit (menu.cpp); a mask prefix goes BEFORE the P (H0P1O...).
+    // tools/docs_check.py requires each row documented under its page's heading in
+    // site/content/playback/settings.md.
+
+    // ---- Video (page 1) ----
+    "P1,Video;",
+    // Aspect Ratio: Auto (default) reads the display AR from the MPEG-2 sequence header
+    // (aspect_ratio_information, par. 6.3.3: 2=4:3, 3=16:9); 4:3/16:9 force it. Drives the
+    // MiSTer scaler output aspect (VIDEO_ARX/ARY) — the 720x480/576 raster is unchanged,
+    // ascal letterboxes/pillarboxes it. status[20:19]: 0=Auto, 1=4:3, 2=16:9.
+    "P1O[20:19],Aspect Ratio,Auto,4:3,16:9;",
     // Video Output (DVD-FORK consolidation 2026-09-02, replaces "Interlaced Out"
     // O[10:9] + "Analog Out" O[27:26] — bits [27:26] are left DEAD/reserved one
     // release so stale saved status can't re-arm the old enum; that relayout is what
@@ -814,7 +793,7 @@ parameter CONF_STR = {
     //                    available, analog pins carry 480p/576p through the stock
     //                    path (component/VGA displays; also the dev A/B switch).
     // status[10:9]. See docs/analog_dual_raster.md, docs/field_parity.md.
-    "O[10:9],Video Output,Auto,Interlaced,Progressive;",
+    "P1O[10:9],Video Output,Auto,Interlaced,Progressive;",
     // Deinterlace (DVD-FORK deinterlace merge, 2026-09-25, docs/field_blend.md "One
     // option"): ONE choice for both rasters, O[51:50] = 0 Weave (default), 1 Bob,
     // 2 Blend. Replaces "480i Deint" (OB, bit 11) and "Progressive Deint" (O[49]);
@@ -833,8 +812,40 @@ parameter CONF_STR = {
     // ⚠ Weave is index 0 BY DESIGN (user decision): the Progressive default stays the
     // measured one (Blend over-selects, see below), at the cost of HDMI-on-Interlaced
     // moving from Bob to Weave by default.
-    "H0O[51:50],Deinterlace,Weave,Bob,Blend;",
-    "h0O[51:50],Deinterlace,Weave,Bob;",
+    "H0P1O[51:50],Deinterlace,Weave,Bob,Blend;",
+    "h0P1O[51:50],Deinterlace,Weave,Bob;",
+    // (Line-21 CC is on the Subtitles & CC page, P4O[14] below; on the Debug page until
+    // 2026-10-30. The data is invisible in the VBI and correct behavior is On.)
+    // Video Standard: NTSC (720x480p @ 59.94 Hz, 27 MHz dot clock) or PAL (720x576p
+    // @ 50 Hz, same 27 MHz clock — 864x625 total = 50.0 Hz). Switches the runtime
+    // modeline-write walk AND av_sync's STC tick rate. Auto (default) picks from the
+    // stream's vertical_size (480=NTSC, 576=PAL); NTSC/PAL force it (handy for HW
+    // bring-up without a matching disc). status[17:16]: 0=Auto, 1=NTSC, 2=PAL. PAL
+    // supports native 576i fields (Video Output = Interlaced) for true-interlaced
+    // video; PAL film stays 25p. PAL 576i on the analog pins rides the fieldpass
+    // re-timer (docs/analog_dual_raster.md).
+    // The governor's SHOW_N=2 gives 25 fps from a 50 Hz display. See
+    // docs/frame_rate_governor.md / docs/av_sync.md / docs/interlaced_auto.md.
+    "P1O[17:16],Video Standard,Auto,NTSC,PAL;",
+    // Flap probe: release a passthrough frame up to N ms EARLY so a marginally
+    // not-yet-due frame doesn't cost a whole silence burst on the wire (the STC
+    // advances in ~16.7 ms refresh quanta, so an on-the-margin equilibrium
+    // chatters hold/release at burst granularity). Bounded (the hold engages
+    // past the bias) and below lip-sync perception. status[52:51].
+    // Film 24p/25p Out: emit a progressive-film raster (one film frame per refresh, no
+    // in-core 3:2) and let the framework scaler (ascal) do the pulldown to the HDMI
+    // output — NTSC 23.976 Hz (2:5 -> 59.94) / PAL 25.000 Hz (1:2 -> 50). Fixes the
+    // issue #124 progressive-film cadence pulse (and eases the PAL high-motion stutter)
+    // by cutting the core's framebuffer re-reads, so motion-comp stops missing
+    // deadlines. Off/On/Auto: On forces it (hard-telecine discs); Auto engages only on
+    // a confident sustained film cadence (an in-fabric detector). HDMI-only (forced off
+    // under Video Output = Interlaced — fields and a 23.976 Hz raster are mutually
+    // exclusive). status[25:24]. See docs/film_24p_plan.md.
+    // Auto is FIRST so it's the power-on default (status bits reset to 0).
+    "P1O[25:24],Film 24p Out,Auto,Off,On;",
+
+    // ---- Analog / CRT (page 2) ----
+    "P2,Analog / CRT;",
     // (retired) "OB,480i Deint,Bob,Weave;" -- bit 11 reserved.
     // (retired, now Deinterlace = Blend above; bit 49 reserved)
     // Progressive Deint (docs/field_blend.md): on the PROGRESSIVE raster a
@@ -868,7 +879,7 @@ parameter CONF_STR = {
     // the rescale happens upstream in the shared raster, so HDMI shows it too —
     // VIDEO_ARX/ARY switch to 4:3 while active so HDMI geometry stays correct.
     // status[4:3]: 0=Auto, 1=Fit, 2=Letterbox, 3=Crop. See docs/crt_anamorphic.md.
-    "O[4:3],Analog Aspect,Auto,Fit,Letterbox,Crop;",
+    "P2O[4:3],Analog Aspect,Auto,Fit,Letterbox,Crop;",
     // Analog Dither (2026-10-06): the DE10-Nano's classic analog I/O board drives its
     // VGA DAC from the top 6 bits of each channel, so dark film gradients band in 64
     // steps on a CRT. On = a 4x4 ordered dither, inverted every field, ahead of that
@@ -877,110 +888,7 @@ parameter CONF_STR = {
     // 24-bit analog DAC (e.g. a SuperStation) has nothing to fix. status[8]: never
     // allocated before, so every saved config reads Off and no "v,N" bump is needed.
     // See docs/single_raster_analog.md §8.
-    "O[8],Analog Dither,Off,On;",
-    // (Line-21 CC moved to the debug page — see P1O[14] below. Normal users never
-    // need it: the data is invisible in the VBI and correct behavior is On.)
-    // Video Standard: NTSC (720x480p @ 59.94 Hz, 27 MHz dot clock) or PAL (720x576p
-    // @ 50 Hz, same 27 MHz clock — 864x625 total = 50.0 Hz). Switches the runtime
-    // modeline-write walk AND av_sync's STC tick rate. Auto (default) picks from the
-    // stream's vertical_size (480=NTSC, 576=PAL); NTSC/PAL force it (handy for HW
-    // bring-up without a matching disc). status[17:16]: 0=Auto, 1=NTSC, 2=PAL. PAL
-    // supports native 576i fields (Video Output = Interlaced) for true-interlaced
-    // video; PAL film stays 25p. PAL 576i on the analog pins rides the fieldpass
-    // re-timer (docs/analog_dual_raster.md).
-    // The governor's SHOW_N=2 gives 25 fps from a 50 Hz display. See
-    // docs/frame_rate_governor.md / docs/av_sync.md / docs/interlaced_auto.md.
-    "O[17:16],Video Standard,Auto,NTSC,PAL;",
-    // Screensaver: after this long PAUSED or STOPPED, the bouncing idle logo
-    // takes over and any button/key dismisses it (burn-in protection -- this
-    // core drives real CRTs). dvd/stop_ctl.sv owns the timer; the verdict is a
-    // DISPLAY-layer override only (it never touches media_seen, which would
-    // flip VIDEO_ARX/ARY and re-init the scaler mid-film).
-    // ⚠ VALUE ORDER IS LOAD-BEARING: status[] powers up at zero, so index 0 is
-    // the DEFAULT. "5min" sits first deliberately -- a natural-reading
-    // Off,2min,5min,10min list would ship the feature disabled and protect
-    // nobody. Re-ordering these later REMAPS saved values and forces a "v,N"
-    // bump (that is exactly why v3 exists -- see the A/V Offset note below).
-    // Bits 47/48 were never allocated, so adding this row needs no bump.
-    "O[48:47],Screensaver,5min,Off,2min,10min;",
-    // (DVD-FORK dual raster: the bogus "O[10],Direct Video,Off,On;" entry that used
-    // to sit here is DELETED — it collided with the O[10:9] enum (setting it
-    // silently forced native fields), and the real direct_video signal comes from
-    // the HPS cfg word, not status.)
-    // -------------------------------------------------------------------------
-    // Debug submenu (P1): diagnostics + tuning levers.
-    // NOTE: O[14] Critical-Word Serve, O[15] Dual Outstanding, and O[18] Ref Prefetch
-    // were BAKED IN to their HW-confirmed winners (all On) and removed from this menu to
-    // free routing (the enables are now 1'b1 constants so Quartus prunes the loser
-    // datapaths). See docs/roadmap.md "FPGA congestion / resource cleanup".
-    // -------------------------------------------------------------------------
-    "P1,Debug;",
-    "P1O2,Debug Overlay,Off,On;",
-    // Debug title-VTS override (moved off the main page + widened, see the
-    // O[31:28] retirement note above). Two BCD digits compose VTS 1..99
-    // (CONF_STR value lists are compile-time static, so a single 99-entry list
-    // is unusable); 0/0 = Auto (largest VTS). Match tools/iso_nav_check.py's
-    // "VTS_0N". status[35:32] = tens, status[39:36] = units.
-    "P1O[35:32],Title VTS Tens,0,1,2,3,4,5,6,7,8,9;",
-    "P1O[39:36],Title VTS Units,Auto/0,1,2,3,4,5,6,7,8,9;",
-    // DVD-FORK (frame-drop governor O[12]): when the decoder falls behind the display
-    // cadence on compute-bound (high-motion / PAL) content, drop the next B-frame in the
-    // VLD to catch up instead of the governor irregularly repeating late frames. B is
-    // never a reference so this cannot corrupt the picture; worst case is a rare dropped
-    // frame for a steadier cadence. Default On. The drop request is also how the PTS
-    // scheduler asks the display to catch up (mpeg2video ORs sched_catchup_late into
-    // frame_late), so Frame Drop Off leaves a behind-schedule timeline to recover by
-    // repeating late frames alone. O[12] (freed when the AC-3 File Test was removed);
-    // O[19] is now Aspect Ratio. See docs/motcomp_throughput.md.
-    // ⚠ The pre-2026-09-07 note here credited "the PR #158 film cadence-slip corrector"
-    // to this path; PR #63 deleted that corrector (cad_acc) along with the refresh-counted
-    // STC — see resample_addrgen.v's removal note.
-    "P1O[12],Frame Drop,On,Off;",
-    // A/V Sync: On (default) = everything that presents to the viewer is scheduled
-    // against the free-running 90 kHz STC at its PTS (docs/stc_freerun.md). Off is a
-    // DIAGNOSTIC that disables that scheduling wholesale, in three places at once:
-    //   * disp_sched.sched_en  — every picture is due immediately, so the display
-    //     free-runs at raster rate with no PTS pacing (VIDEO, not just audio);
-    //   * dvd_audio_decode.sched_en — bypasses the PTS-scheduled drain start, plus
-    //     the stale-skip / mid-play catch-up / pre-anchor hold;
-    //   * iec61937_wrap.sync_armed — passthrough free-runs, no A/V hold.
-    // It is the only on-hardware way to take the whole scheduler out of the picture,
-    // which is what makes it worth a menu row: "set A/V Sync Off and tell me if it
-    // plays" separates a scheduler fault from a source/decode one in one message.
-    // Off is strictly worse for playback (no lip sync at all) — it is not a fallback.
-    // ⚠ RENAMED from "Audio Genlock" 2026-09-07 (PR #66). The original meaning — slew the
-    // 48 kHz NCO via av_sync's nco_trim — has been dead since the 2026-07-02 trim
-    // retirement (dec_nco_trim is hardwired 0 below, independent of this bit), and the
-    // old name hid the fact that Off also stops pacing the VIDEO. Bit span unchanged.
-    // See docs/stc_freerun.md, docs/av_sync.md, docs/fabric_audio.md.
-    "P1O[13],A/V Sync,On,Off;",
-    // Force 4:3 Subpics: present as a 4:3/LETTERBOX display so a disc that authors
-    // mode-specific subpicture streams serves its 4:3-mode art instead of the 16:9
-    // stream. Motivating case: the MiB "visual commentary" - subpicture logical
-    // stream 3 maps 16:9-wide -> physical 0x23 (a persistent "set your DVD player to
-    // 4x3 display mode" warning) but LETTERBOX -> 0x24 (the actual commentator
-    // silhouettes + annotations). On = force the letterbox mapping (selects 0x24) AND
-    // apply the pgc->subp_control mapping to the gamepad-selected subtitle stream.
-    // Default Off (subpicture path byte-identical when off). Combine with a letterbox
-    // OUTPUT mode (CRT O[4:3]=Letterbox) for correct silhouette geometry. status[15].
-    // See memory mib-visual-commentary-letterbox-substream / docs/dvd_nav.md.
-    "P1O[15],Force 4:3 Subpics,Off,On;",
-    // DVD-FORK (line-21 CC diagnostic): paint the caption waveform on a VISIBLE
-    // line instead of line 21. The bits are otherwise invisible — they live in the
-    // blanking interval — so without this there is no way to tell "the TV is not
-    // decoding" from "no captions are reaching the output". See docs/closed_captions.md §6.
-    // DVD-FORK (line-21 closed captions): re-inject the disc's EIA-608 caption
-    // bytes onto line 21 of the analog raster so the TELEVISION's own decoder
-    // renders them, like a real player (dvd/cc_line21.sv, docs/closed_captions.md;
-    // ✅ HW-CONFIRMED 2026-08-26). NTSC + analog only; lives in the VBI so it is
-    // invisible to anything not looking for it — hence default On, and buried
-    // here (user decision, post-HW-confirm): the Off exists only as an escape
-    // hatch for capture devices / upscalers that display VBI lines or the rare
-    // TV whose caption decoder misbehaves on caption data — the same "CC output
-    // on/off" setting real DVD players kept in their setup menus. Reuses bit 14,
-    // freed when O[14] "CRT 480i Out" was retired.
-    "P1O[14],Line-21 CC,On,Off;",
-    "P1O[44],CC Test Line,Off,On;",
+    "P2O[8],Analog Dither,Off,On;",
     // DVD-FORK (SMPTE 170M / BT.470 analog composite sync, 2026-09-05).
     // The framework `csync` module emits NO equalizing pulses and serrates the
     // vertical sync at LINE rate, so the two fields of the 2:1 raster present first
@@ -1011,23 +919,29 @@ parameter CONF_STR = {
     // ⚠ A rig running vga_scaler=1 or a framebuffer takes sync from hdmi_cs_osd and
     // never sees this at all — expect "the setting does nothing" reports from those.
     // status[46]. See docs/single_raster_analog.md §3.10.
-    "P1O[46],Analog CSync,SMPTE,2H;",
-    // Flap probe: release a passthrough frame up to N ms EARLY so a marginally
-    // not-yet-due frame doesn't cost a whole silence burst on the wire (the STC
-    // advances in ~16.7 ms refresh quanta, so an on-the-margin equilibrium
-    // chatters hold/release at burst granularity). Bounded (the hold engages
-    // past the bias) and below lip-sync perception. status[52:51].
-    // Film 24p/25p Out: emit a progressive-film raster (one film frame per refresh, no
-    // in-core 3:2) and let the framework scaler (ascal) do the pulldown to the HDMI
-    // output — NTSC 23.976 Hz (2:5 -> 59.94) / PAL 25.000 Hz (1:2 -> 50). Fixes the
-    // issue #124 progressive-film cadence pulse (and eases the PAL high-motion stutter)
-    // by cutting the core's framebuffer re-reads, so motion-comp stops missing
-    // deadlines. Off/On/Auto: On forces it (hard-telecine discs); Auto engages only on
-    // a confident sustained film cadence (an in-fabric detector). HDMI-only (forced off
-    // under Video Output = Interlaced — fields and a 23.976 Hz raster are mutually
-    // exclusive). status[25:24]. See docs/film_24p_plan.md.
-    // Auto is FIRST so it's the power-on default (status bits reset to 0).
-    "P1O[25:24],Film 24p Out,Auto,Off,On;",
+    "P2O[46],Analog CSync,SMPTE,2H;",
+
+    // ---- Audio (page 3) ----
+    "P3,Audio;",
+    "P3O5,Audio,On,Off;",
+    // Audio Out: Decode = AC-3/DTS/LPCM/MP2 decoded in fabric to HDMI PCM (default;
+    // DTS core decode since PRs #148/#149). Passthru = the UNDECODED AC-3/DTS frames
+    // are wrapped in IEC 61937 and sent as a bitstream for an AV receiver to decode
+    // (Path B; full multichannel DTS). Always out optical S/PDIF, and ALSO over
+    // HDMI when MiSTer_DVDcss has put the ADV7513 in IEC958-direct mode and the
+    // sink advertises AC-3/DTS; otherwise HDMI stays muted as before.
+    // status[6]. See docs/iec61937.md and docs/hdmi_bitstream.md.
+    //
+    // ★ OX (not O) marks it "also handled by the HPS": the bit still reaches the
+    // core exactly as before, but Main sees the declaration in parse_config and
+    // learns this build HAS the HDMI bitstream path. A core without it never
+    // declares OX6, so Main never reconfigures the chip for a core that cannot
+    // drive it. Bit layout is unchanged, so no CONF_STR "v,N" bump is needed.
+    "P3OX6,Audio Out,Decode PCM,Passthru (SPDIF+HDMI);",
+    // SPDIF Byte Order: flips the 61937 payload byte packing. If the receiver
+    // recognises the format (e.g. "Dolby D"/"DTS") but plays static, toggle
+    // this. status[7]. Only meaningful in Passthru.
+    "P3O7,SPDIF Byte Order,Normal,Swap;",
     // A/V Offset: signed playback-start trim for the PTS-scheduled audio drain
     // (dvd_audio_decode): audio sample with PTS X leaves the speaker when
     // STC = X + offset. 0 = nominal lip-sync (STC is display-referenced);
@@ -1049,12 +963,69 @@ parameter CONF_STR = {
     // fixed in PR #62; the range stays balanced at +/-200 ms.
     // ⚠ Re-ordering an option's value list REMAPS every saved setting, so the
     // "v,N" config version below is bumped with it. See docs/av_sync.md.
-    "P1O[23:21],A/V Offset,0ms,-200ms,-100ms,-50ms,+50ms,+100ms,+150ms,+200ms;",
+    "P3O[23:21],A/V Offset,0ms,-200ms,-100ms,-50ms,+50ms,+100ms,+150ms,+200ms;",
 
-    // ---- Save State (page 2; save states step 4, docs/nav_engine.md §11) ----------
-    // Four slots per DISC. A save state is the VM's whole navigation state plus the
-    // displayed picture's time (dvd/vm_snap.sv); the custom Main writes it to
-    // savestates/DVD/ and pushes it back on a load. With stock Main nothing answers
+    // ---- Subtitles & CC (page 4) ----
+    "P4,Subtitles & CC;",
+    // DVD-FORK (line-21 CC diagnostic): paint the caption waveform on a VISIBLE
+    // line instead of line 21. The bits are otherwise invisible — they live in the
+    // blanking interval — so without this there is no way to tell "the TV is not
+    // decoding" from "no captions are reaching the output". See docs/closed_captions.md §6.
+    // DVD-FORK (line-21 closed captions): re-inject the disc's EIA-608 caption
+    // bytes onto line 21 of the analog raster so the TELEVISION's own decoder
+    // renders them, like a real player (dvd/cc_line21.sv, docs/closed_captions.md;
+    // ✅ HW-CONFIRMED 2026-08-26). NTSC + analog only; lives in the VBI so it is
+    // invisible to anything not looking for it — hence default On, and buried
+    // here (user decision, post-HW-confirm): the Off exists only as an escape
+    // hatch for capture devices / upscalers that display VBI lines or the rare
+    // TV whose caption decoder misbehaves on caption data — the same "CC output
+    // on/off" setting real DVD players kept in their setup menus. Reuses bit 14,
+    // freed when O[14] "CRT 480i Out" was retired.
+    "P4O[14],Line-21 CC,On,Off;",
+    // Force 4:3 Subpics: present as a 4:3/LETTERBOX display so a disc that authors
+    // mode-specific subpicture streams serves its 4:3-mode art instead of the 16:9
+    // stream. Motivating case: the MiB "visual commentary" - subpicture logical
+    // stream 3 maps 16:9-wide -> physical 0x23 (a persistent "set your DVD player to
+    // 4x3 display mode" warning) but LETTERBOX -> 0x24 (the actual commentator
+    // silhouettes + annotations). On = force the letterbox mapping (selects 0x24) AND
+    // apply the pgc->subp_control mapping to the gamepad-selected subtitle stream.
+    // Default Off (subpicture path byte-identical when off). Combine with a letterbox
+    // OUTPUT mode (CRT O[4:3]=Letterbox) for correct silhouette geometry. status[15].
+    // See memory mib-visual-commentary-letterbox-substream / docs/dvd_nav.md.
+    "P4O[15],Force 4:3 Subpics,Off,On;",
+
+    // ---- Playback (page 5) ----
+    "P5,Playback;",
+    // D-Pad Seek: OFF by default. On = the D-pad does VLC-style FIXED-TIME
+    // seeking while a title plays -- Left/Right jump -/+10 s, Down/Up -/+60 s --
+    // with targets read from the disc's OWN authored DSI seek tables
+    // (dvd/dpad_seek.sv). Presses inside ~0.4 s add up into ONE jump.
+    // ⚠ Default Off ON PURPOSE: the hold-to-seek scrub was deliberately moved
+    // OFF the D-pad in 2026-07-28 because interactive/game DVDs have seekable
+    // title video yet expect directional input, and the in_title_menu heuristic
+    // cannot always tell the two apart. Off keeps the D-pad pure navigation for
+    // everyone who does not ask for this. When On it is still suppressed
+    // wherever the nav layer claims the D-pad (menus, in-title game menus).
+    // See docs/dvd_nav.md 2b.
+    "P5O[45],D-Pad Seek,Off,On;",
+    // Screensaver: after this long PAUSED or STOPPED, the bouncing idle logo
+    // takes over and any button/key dismisses it (burn-in protection -- this
+    // core drives real CRTs). dvd/stop_ctl.sv owns the timer; the verdict is a
+    // DISPLAY-layer override only (it never touches media_seen, which would
+    // flip VIDEO_ARX/ARY and re-init the scaler mid-film).
+    // ⚠ VALUE ORDER IS LOAD-BEARING: status[] powers up at zero, so index 0 is
+    // the DEFAULT. "5min" sits first deliberately -- a natural-reading
+    // Off,2min,5min,10min list would ship the feature disabled and protect
+    // nobody. Re-ordering these later REMAPS saved values and forces a "v,N"
+    // bump (that is exactly why v3 exists -- see the A/V Offset note below).
+    // Bits 47/48 were never allocated, so adding this row needs no bump.
+    "P5O[48:47],Screensaver,5min,Off,2min,10min;",
+
+
+    // ---- Save State (page 6; save states step 4, docs/nav_engine.md §11) ----------
+    // Eight slots per DISC (four until 2026-10-30). A save state is the VM's whole
+    // navigation state plus the displayed picture's time (dvd/vm_snap.sv); the custom
+    // Main writes it to savestates/DVD/ and pushes it back on a load. With stock Main nothing answers
     // and the rows do nothing (no core can write a file).
     // ★ `R` is the framework's momentary row (Main's menu.cpp: "'R' covers every
     // momentary option ... the PSX core also uses it for Save state, Restore state"),
@@ -1062,10 +1033,69 @@ parameter CONF_STR = {
     // the Slot row AT each one, so moving the row afterwards cannot redirect it.
     // ⚠ Bits 53-56 were never allocated: no "v,N" bump, nobody's settings reset. It
     // IS a CONF_STR edit, so it re-rolls the pinned fitter SEED.
-    "P2,Save State;",
-    "P2O[54:53],Slot,1,2,3,4;",
-    "P2R[55],Save to Slot;",
-    "P2R[56],Load Slot;",
+    // 8 slots (2026-10-30): the Slot row moved to fresh bits 57-59 rather than
+    // widening onto bit 52, so an older saved config reads slot 1, not a shifted
+    // number; 53-54 are retired (still never released, still no "v,N" bump).
+    // H1: hidden while no DVD-Video disc is mounted (status_menumask bit 1 =
+    // ~dvd_video: nothing to save on a VCD, a .mpg, a WAV or an empty drive).
+    // D2: greyed with Disc Menus off (bit 2 = ~menus_on: the VM a save state is
+    // made of is not running). check_vm_snap_wiring.py pins both. Page 6.
+    "H1D2P6,Save State;",
+    "P6O[59:57],Slot,1,2,3,4,5,6,7,8;",
+    "P6R[55],Save to Slot;",
+    "P6R[56],Load Slot;",
+    // (DVD-FORK dual raster: the bogus "O[10],Direct Video,Off,On;" entry that used
+    // to sit here is DELETED — it collided with the O[10:9] enum (setting it
+    // silently forced native fields), and the real direct_video signal comes from
+    // the HPS cfg word, not status.)
+    // -------------------------------------------------------------------------
+    // Debug submenu (P7; P1 until 2026-10-30): diagnostics + tuning levers.
+    // NOTE: O[14] Critical-Word Serve, O[15] Dual Outstanding, and O[18] Ref Prefetch
+    // were BAKED IN to their HW-confirmed winners (all On) and removed from this menu to
+    // free routing (the enables are now 1'b1 constants so Quartus prunes the loser
+    // datapaths). See docs/roadmap.md "FPGA congestion / resource cleanup".
+    // -------------------------------------------------------------------------
+    "P7,Debug;",
+    "P7O2,Debug Overlay,Off,On;",
+    // DVD-FORK (frame-drop governor O[12]): when the decoder falls behind the display
+    // cadence on compute-bound (high-motion / PAL) content, drop the next B-frame in the
+    // VLD to catch up instead of the governor irregularly repeating late frames. B is
+    // never a reference so this cannot corrupt the picture; worst case is a rare dropped
+    // frame for a steadier cadence. Default On. The drop request is also how the PTS
+    // scheduler asks the display to catch up (mpeg2video ORs sched_catchup_late into
+    // frame_late), so Frame Drop Off leaves a behind-schedule timeline to recover by
+    // repeating late frames alone. O[12] (freed when the AC-3 File Test was removed);
+    // O[19] is now Aspect Ratio. See docs/motcomp_throughput.md.
+    // ⚠ The pre-2026-09-07 note here credited "the PR #158 film cadence-slip corrector"
+    // to this path; PR #63 deleted that corrector (cad_acc) along with the refresh-counted
+    // STC — see resample_addrgen.v's removal note.
+    "P7O[12],Frame Drop,On,Off;",
+    // A/V Sync: On (default) = everything that presents to the viewer is scheduled
+    // against the free-running 90 kHz STC at its PTS (docs/stc_freerun.md). Off is a
+    // DIAGNOSTIC that disables that scheduling wholesale, in three places at once:
+    //   * disp_sched.sched_en  — every picture is due immediately, so the display
+    //     free-runs at raster rate with no PTS pacing (VIDEO, not just audio);
+    //   * dvd_audio_decode.sched_en — bypasses the PTS-scheduled drain start, plus
+    //     the stale-skip / mid-play catch-up / pre-anchor hold;
+    //   * iec61937_wrap.sync_armed — passthrough free-runs, no A/V hold.
+    // It is the only on-hardware way to take the whole scheduler out of the picture,
+    // which is what makes it worth a menu row: "set A/V Sync Off and tell me if it
+    // plays" separates a scheduler fault from a source/decode one in one message.
+    // Off is strictly worse for playback (no lip sync at all) — it is not a fallback.
+    // ⚠ RENAMED from "Audio Genlock" 2026-09-07 (PR #66). The original meaning — slew the
+    // 48 kHz NCO via av_sync's nco_trim — has been dead since the 2026-07-02 trim
+    // retirement (dec_nco_trim is hardwired 0 below, independent of this bit), and the
+    // old name hid the fact that Off also stops pacing the VIDEO. Bit span unchanged.
+    // See docs/stc_freerun.md, docs/av_sync.md, docs/fabric_audio.md.
+    "P7O[13],A/V Sync,On,Off;",
+    // Debug title-VTS override (moved off the main page + widened, see the
+    // O[31:28] retirement note above). Two BCD digits compose VTS 1..99
+    // (CONF_STR value lists are compile-time static, so a single 99-entry list
+    // is unusable); 0/0 = Auto (largest VTS). Match tools/iso_nav_check.py's
+    // "VTS_0N". status[35:32] = tens, status[39:36] = units.
+    "P7O[35:32],Title VTS Tens,0,1,2,3,4,5,6,7,8,9;",
+    "P7O[39:36],Title VTS Units,Auto/0,1,2,3,4,5,6,7,8,9;",
+    "P7O[44],CC Test Line,Off,On;",
     "R0,Reset;",
     // Saved-settings version (lowercase v = user_io.cpp config_ver, DISTINCT
     // from the display-only uppercase V line below): the framework persists
@@ -1108,6 +1138,7 @@ wire  [1:0] buttons;
 // 128-bit to match hps_io's status port (was [31:0], which truncated it and
 // hid bits 32+ — needed since the Debug "Title VTS" picker at status[39:32]).
 wire [127:0] status;
+wire         rdr_dvd_video_w;     // dvd_iso_reader: this mount is DVD-Video (OSD menu mask bit 1)
 
 // OSD R0 Reset -> core reset (see the reset_n comment near the top)
 reg user_rst_q = 1'b0;
@@ -1149,7 +1180,9 @@ hps_io #(.CONF_STR(CONF_STR), .BLKSZ(4)) hps_io_inst (
     .clk_sys        (clk_sys),
     // DVD-FORK (deinterlace merge): menu-mask bit 0 = the Interlaced raster is up;
     // the two Deinterlace rows (H0/h0) swap on it. Main reads it per menu draw.
-    .status_menumask({15'd0, interlaced_eff}),
+    // bit 1 = no DVD-Video mounted (Save State page hidden: H1), bit 2 = Disc Menus off
+    // (Save State page greyed: D2); check_vm_snap_wiring.py pins both
+    .status_menumask({13'd0, status[1], ~rdr_dvd_video_w, interlaced_eff}),   // status[1] = Disc Menus Off
     .HPS_BUS        (HPS_BUS),
     .EXT_BUS        (ext_bus),      // DVD-FORK (telemetry bridge): see dvd_telem below
 
@@ -2835,6 +2868,7 @@ wire        vm_snap_req, vm_snap_we, vm_snap_done;
 wire [15:0] vm_snap_d, vm_snap_fmt;
 // ...and the restore's (save states step 3, docs/nav_engine.md §9)
 wire        vm_rst_req, vm_rst_done;
+wire        nav_user_move;                // nav_pci: the player moved the selection
 wire [6:0]  vm_rst_ra;
 wire [15:0] vm_rst_q;
 
@@ -2892,6 +2926,7 @@ dvd_vm dvd_vm_inst (
     .btn_cmd_valid (hl_btn_cmd_valid),
     .btn_sel       (hl_btn_sel),
     .btns_armed    (hl_btns_armed),
+    .sel_moved     (nav_user_move),     // a move ends an activation's SPRM8 freeze
     .btn_force     (vm_btn_force),
     .btn_force_val (vm_btn_force_val),
     .hl_btnn       (vm_hl_btnn),
@@ -3801,6 +3836,7 @@ dvd_iso_reader dvd_iso_reader_inst (
     .ifo_nogood     (ifo_nogood_w),
     .vmgm_probed    (vmgm_probed_w),      // audit 10b: the Title-entry probe ran
     .vmgm_title_ok  (vmgm_title_ok_w),    // ...and found a VMGM Title menu
+    .dvd_video      (rdr_dvd_video_w),    // VIDEO_TS.IFO found: the OSD shows Save State
     .chap_pulse     (chap_pulse),         // gamepad chapter skip (B2/B3)
     .chap_dir       (chap_dir),
     .chap_mag       (chap_mag),           // debounced burst magnitude (# chapters)
@@ -6448,6 +6484,7 @@ wire [9:0]  hl_x1, hl_x2, hl_y1, hl_y2;
 wire [31:0] hl_coli;
 
 wire hli_arm_w;                           // nav_pci: an HLI with buttons was promoted
+wire ss_keep_sel;                         // vm_snap: a restore's landing keeps its button
 wire [31:0] hl_sptm_w;                    // nav_pci: that HLI's start PTS (nav_trace)
 wire        hl_rj_w, hl_rj_ok_w;          // nav_pci: re-judge at a re-anchor, and its verdict (nav_trace X0)
 wire        hl_fb_promo_w;                // nav_pci: a fallback promotion (nav_trace X1)
@@ -6505,6 +6542,7 @@ nav_pci nav_pci_inst (
     .sel_force  (vm_btn_force),          // Phase 4: SetHL_BTNN / link buttons
     .sel_force_btn (vm_btn_force_val),
     .hl_btnn    (vm_hl_btnn),            // SPRM8 button: re-seed after the pipe reset
+    .keep_sel   (ss_keep_sel),           // ...and a restore's landing keeps it over fosl
                                          // (a link's button field must survive the
                                          //  flush that link fires; checked by
                                          //  tools/check_hl_btnn_wiring.py)
@@ -6524,6 +6562,7 @@ nav_pci nav_pci_inst (
     .btns_armed (hl_btns_armed),
     .btns_pend  (hl_btns_pend),
     .btn_sel    (hl_btn_sel),
+    .user_move  (nav_user_move),         // -> dvd_vm: SPRM8 follows the player again
     .dbg_btn_ns (hl_btn_ns),         // gate in-title multi-button menu nav (Scene It)
     .hli_seen   (hl_menu_seen),      // early menu-HLI detect -> open the subpicture gate in time
     .dbg_h_sptm (hl_sptm_w),         // -> nav_trace HLI_ARM payload
@@ -6680,15 +6719,18 @@ vm_snap vm_snap_inst (
     .stc          (av_stc),             // ...and the displayed picture's PTS
     .ui_save      (ss_save_edge),       // the OSD's "Save to Slot"
     .ui_load      (ss_load_edge),       // the OSD's "Load Slot"
-    .ui_slot      (status[54:53]),      // the Slot row
+    .ui_slot      (status[59:57]),      // the Slot row (8 slots)
     .vm_en        (menus_on),           // = dvd_vm's enable
     .pgc_loaded   (pgc_loaded),
     .video_live   (video_live_s2),
     .menu_active  (menu_active),
+    .hl_armed_in  (hl_btns_armed),      // buttons armed at the snapshot: a load lands at the cell start
     .mount        (start_streaming),
     .rst_seek_pulse (rst_seek_pulse),
     .rst_seek_secs  (rst_seek_secs),
-    .rst_seek_rbn   (rst_seek_rbn)
+    .rst_seek_rbn   (rst_seek_rbn),
+    .hli_arm        (hli_arm_w),        // the landing's HLI ends keep_sel
+    .keep_sel       (ss_keep_sel)       // -> nav_pci: the restored button beats fosl
 );
 
 // ★ NEW CELL for spu_decode's menu re-send guard (2026-09-18, Harry Potter

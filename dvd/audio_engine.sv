@@ -1,13 +1,14 @@
 //============================================================================
 //  audio_engine.sv -- the shared microcoded audio engine (dvd/dts/dts_top.sv) as the
-//  AC-3 decoder's front end, feeding the unchanged imdct_512. docs/ac3_engine.md
-//  "W1" (the in-core wiring).
+//  AC-3 decoder: the parse (docs/ac3_engine.md "W1") and, since logic reclaim F, the
+//  IMDCT too (docs/imdct_engine.md: imdct_512's arithmetic as a term program, bit for
+//  bit), its PCM read by pcm_out out of the engine's ring.
 //
 //  It replaces ac3_front (sync_crc, bsi_parse, audblk_parse, exponent_decode,
 //  bit_allocation, mantissa_dequant, bit_reader, bit_fifo) with the engine running
 //  dvd/dts/ac3.uasm, whose coefficients, LFE slot and side information are bit-exact
 //  against ac3_front's on every gate stream (bench/dvd/run_ac3.sh). Downstream
-//  everything is as before: imdct_512 transforms each block, pcm_out drains it.
+//  pcm_out drains each block from the ring.
 //
 //  INPUT: one frame at a time -- a descriptor (fr_len: its byte length) and then
 //  exactly that many bytes (dvd_audio_decode's dispatcher, one audio_ring frame;
@@ -16,15 +17,14 @@
 //  engine waits for the next: no halt and no self-heal reset, unlike ac3_front.
 //
 //  THE IMDCT HANDSHAKE. The engine raises imdct_req with the block's coefficients in
-//  its X buffer and waits; imdct_512 is started once the PREVIOUS block's pcm_mem
-//  has been drained by pcm_out (pcm_done): the next transform overwrites pcm_mem.
-//  The block's side information is LATCHED at that start (blksw, dynrng, acmod,
-//  cmixlev, surmixlev) and held until the next start, because the engine runs ahead
-//  -- it parses block k+1 while pcm_out still drains block k -- and imdct_512's
-//  lvl_q, which pcm_out applies during the drain, is combinational in acmod and the
-//  mix levels. (ac3_front never ran ahead: it waited for pcm_done before parsing on.)
-//  imdct_512 reads the coefficients through the engine's X port, a registered read
-//  like mantissa_dequant's coeff_mem; the engine holds X until imdct_done.
+//  its X buffer and waits for imdct_go: the PREVIOUS block's PCM drained by pcm_out
+//  (pcm_done), because the transform overwrites the PCM slots. It then transforms the
+//  block itself and pulses imdct_fin (-> imdct_done, pcm_out's start). The block's
+//  acmod and mix levels are LATCHED at the go and held until the next one, because the
+//  engine runs ahead -- it parses block k+1 while pcm_out still drains block k -- and
+//  lvl_q, which pcm_out applies during the drain, is combinational in them.
+//  ⚠ The PCM slots are in the engine's ring, which DTS and MP2 use too: a change of
+//  program also waits for pcm_free, so a DTS RESET never clears a block mid-drain.
 //
 //  DTS (docs/dts_decoder.md P3): the same engine runs dvd/dts/dts.uasm when codec_req
 //  is 0, and MP2 (docs/mp2_engine.md M3) dvd/dts/mp2.uasm when it is 2: both leave
@@ -91,9 +91,7 @@ module audio_engine (
 
     // ---- the engine ----
     logic        e_rst_n;
-    logic        imdct_req, e_imdct_done;
-    logic [10:0] coef_ra;
-    logic [24:0] coef_q;
+    logic        imdct_req, im_fin, im_go;
     logic  [4:0] blk_blksw;
     logic  [7:0] blk_dynrng;
     logic  [2:0] blk_acmod;
@@ -104,12 +102,12 @@ module audio_engine (
     logic        vop_start, vop_done, e_fend, e_ref;
     logic  [4:0] e_rcode;
     logic  [5:0] vop_op;
-    logic        im_busy;                    // this request's transform is running/done
     // the program: a change waits for the engine to idle at FRAME, then resets it
     logic  [1:0] eng_codec;
     logic  [2:0] sw_cnt;
     logic        e_fr_ready;
-    wire         idle_at_frame = e_fr_ready && !imdct_req && !im_busy;
+    logic        pcm_free;                   // pcm_out has drained the ring's PCM slots
+    wire         idle_at_frame = e_fr_ready && !imdct_req && pcm_free;
     always_ff @(posedge clk) begin
         if (rst) begin
             eng_codec <= 2'd1; sw_cnt <= 3'd0;
@@ -132,7 +130,9 @@ module audio_engine (
         .frames(e_frames), .refused(e_refused), .last_err(e_last_err), .err_seen(err_seen),
         .overrun_bits(e_ovr), .lenient_codes(), .dmix_ignored(n_ignored),
         .frame_end(e_fend), .refuse(e_ref), .refuse_code(e_rcode),
-        .imdct_req, .imdct_done(e_imdct_done), .coef_ra, .coef_q,
+        .imdct_req, .imdct_go(im_go), .imdct_fin(im_fin),
+        .pcm_ra({pcm_rd_addr[8], pcm_rd_addr[7:0]}), .pcm_q(pcm_rd_data),
+        .coef_ra(11'd0), .coef_q(),
         .blk_blksw, .blk_dynrng, .blk_acmod, .blk_lfeon, .blk_cmix, .blk_surmix,
         .vop_start, .vop_op, .vop_done,
         .tr_valid(), .tr_pc(), .tr_kind(), .tr_addr(), .tr_val());
@@ -142,49 +142,68 @@ module audio_engine (
     assign n_overrun = e_ovr;
 
     // ---- the IMDCT handshake ----
-    logic        pcm_free;                   // pcm_mem drained (or never written)
-    logic        im_go;
-    logic  [4:0] i_blksw;
-    logic  [7:0] i_dynrng;
     logic  [2:0] i_acmod;
     logic  [1:0] i_cmix, i_surmix;
-    always_comb im_go = imdct_req && !im_busy && pcm_free;
-
+    always_comb im_go = imdct_req && pcm_free;
     always_ff @(posedge clk) begin
         if (rst) begin
             pcm_free <= 1'b1;
-            im_busy  <= 1'b0;
-            i_blksw <= 5'd0; i_dynrng <= 8'd0; i_acmod <= 3'd2; i_cmix <= 2'd0; i_surmix <= 2'd0;
+            i_acmod <= 3'd2; i_cmix <= 2'd0; i_surmix <= 2'd0;
         end else begin
-            if (im_go) begin
-                im_busy  <= 1'b1;
+            if (im_go) begin                     // the transform starts this edge
                 pcm_free <= 1'b0;
-                i_blksw <= blk_blksw; i_dynrng <= blk_dynrng; i_acmod <= blk_acmod;
-                i_cmix  <= blk_cmix;  i_surmix <= blk_surmix;
+                i_acmod <= blk_acmod; i_cmix <= blk_cmix; i_surmix <= blk_surmix;
             end
-            if (!imdct_req) im_busy <= 1'b0;     // the engine took done: next request
             if (pcm_done) pcm_free <= 1'b1;
         end
     end
+    assign imdct_done = im_fin;
+    assign pcm_acmod  = i_acmod;
 
-    // nfchans by acmod (A/52 {2,1,2,3,3,4,4,5}; an inline ternary, as ac3_parse's)
-    wire [2:0] i_nf = (i_acmod == 3'd1)                    ? 3'd1 :
-                      (i_acmod == 3'd3 || i_acmod == 3'd4) ? 3'd3 :
-                      (i_acmod == 3'd5 || i_acmod == 3'd6) ? 3'd4 :
-                      (i_acmod == 3'd7)                    ? 3'd5 : 3'd2;
-
-    logic [10:0] im_coeff_ra;
-    imdct_512 u_imdct (
-        .clk, .rst,
-        .start(im_go),
-        .nfchans(i_nf), .blksw(i_blksw), .dynrng(i_dynrng),
-        .cmixlev(i_cmix), .surmixlev(i_surmix), .acmod(i_acmod),
-        .coeff_rd_addr(im_coeff_ra), .coeff_rd_data(coef_q[23:0]),
-        .pcm_rd_addr, .pcm_rd_data, .lvl_q,
-        .done(imdct_done));
-    assign coef_ra      = im_coeff_ra;
-    assign e_imdct_done = imdct_done;
-    assign pcm_acmod    = i_acmod;
+    // ---- lvl_q: the per-frame output level (moved from imdct_512 unchanged) ----
+    // pcm_out multiplies by this so the s16 output lands on liba52's reference level for
+    // every acmod: Q2.14, round(2^32 / (131072 + clev + slev)), clev and slev the
+    // EFFECTIVE mix levels (zero for a role the acmod lacks; a mono surround pre-scaled
+    // by LEVEL_3DB). The full derivation is in git history of dvd/ac3/imdct_512.sv
+    // ("DVD-FORK FIX (2026-09-07): per-frame OUTPUT LEVEL scalar"). dts_vec derives the
+    // same clev / slev for its fold from the op's arguments.
+    wire        has_c    = (i_acmod == 3'd3) || (i_acmod == 3'd5) || (i_acmod == 3'd7);
+    wire        has_surr = i_acmod[2];
+    wire        surr_mono = (i_acmod == 3'd4) || (i_acmod == 3'd5);
+    logic [17:0] clev, slev;
+    always_comb begin
+        case (i_cmix)                          // 0.707 / 0.595 / 0.5 / reserved -> 0.595
+            2'd0: clev = 18'd92682;
+            2'd2: clev = 18'd65536;
+            default: clev = 18'd77933;
+        endcase
+        if (!has_c) clev = 18'd0;
+        case (i_surmix)                        // 0.707 / 0.5 / 0 (reserved -> 0)
+            2'd0: slev = surr_mono ? 18'd65536 : 18'd92682;
+            2'd1: slev = surr_mono ? 18'd46341 : 18'd65536;
+            default: slev = 18'd0;
+        endcase
+        if (!has_surr) slev = 18'd0;
+    end
+    wire [18:0] lvl_den = 19'd131072 + {2'b00, clev[16:0]} + {2'b00, slev[16:0]};
+    always_comb begin
+        case (lvl_den)
+            19'd131072: lvl_q = 16'd32768;   // 2.000000  (no downmix: acmod 1,2)
+            19'd177413: lvl_q = 16'd24209;   // 1.477592
+            19'd196608: lvl_q = 16'd21845;   // 1.333333
+            19'd209005: lvl_q = 16'd20550;   // 1.254248
+            19'd223754: lvl_q = 16'd19195;   // 1.171572
+            19'd242949: lvl_q = 16'd17678;   // 1.079008
+            19'd255346: lvl_q = 16'd16820;   // 1.026623
+            19'd262144: lvl_q = 16'd16384;   // 1.000000
+            19'd270095: lvl_q = 16'd15902;   // 0.970562
+            19'd274541: lvl_q = 16'd15644;   // 0.954845
+            19'd289290: lvl_q = 16'd14847;   // 0.906163
+            19'd301687: lvl_q = 16'd14237;   // 0.868927
+            19'd316436: lvl_q = 16'd13573;   // 0.828427  (3/2 at clev=slev=.707)
+            default:    lvl_q = 16'd16384;   // unreachable: the conservative 1.0
+        endcase
+    end
 
     // ---- status ----
     always_ff @(posedge clk) begin

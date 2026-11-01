@@ -26,9 +26,11 @@
 #   T8  malformed-not-ok: a malformed start hides the entry      -> H
 #   T9  dom-vmgm        : the probe sets dom = VMGM              -> A B C C2 C3 D D2 F H
 #   T10 bup-skip        : the probe's VMGI read is not gated     -> F
-#   T11 no-finish       : S_DONE never raises nav_ready          -> A B C C2 C3 D D2 F G H
+#   T11 no-finish       : S_DONE never raises nav_ready          -> A B C C2 C3 D D2 F G H I
 #   T12 probed-never    : vmgm_probed never set                  -> A B C C2 C3 D D2 F H
 #   T13 jump-fallback   : a command jump's miss takes SRP[1]     -> G
+#   T14 dvdvideo-menus  : dvd_video only with Disc Menus on      -> E
+#   T15 dvdvideo-stuck  : dvd_video never clears at a mount      -> I
 #
 # Usage: bench/dvd/run_title_probe.sh [--red]
 set -u
@@ -84,7 +86,7 @@ if [ $RED -eq 1 ]; then
         fi
         timeout 900 vvp -n "$OUT/$name" > "$OUT/$name.log" 2>&1
         local got
-        got=$(grep -oE "^FAIL [A-H][23]?[: ]" "$OUT/$name.log" | awk '{print $2}' | sed 's/:$//' \
+        got=$(grep -oE "^FAIL [A-I][23]?[: ]" "$OUT/$name.log" | awk '{print $2}' | sed 's/:$//' \
               | sort -u | tr '\n' ' ' | sed 's/ $//')
         if [ "$got" = "$want" ]; then
             echo "  ok   $name -> fails [$got]"
@@ -119,10 +121,15 @@ if [ $RED -eq 1 ]; then
         's/(\n(\s*)probe       <= 1.b1;)/$1\n$2dom         <= DOM_VMGM;/'
     mutate T10_bup_skip "F" \
         's/hdr_chk     <= HC_VMG;         \/\/ VMGI sector 0: header gate/hdr_chk     <= HC_NONE;/'
-    mutate T11_no_finish "A B C C2 C3 D D2 F G H" \
+    mutate T11_no_finish "A B C C2 C3 D D2 F G H I" \
         's/(vmgm_probed <= 1.b1;\n)\s*nav_ready   <= 1.b1;\n/$1/'
     mutate T12_probed_never "$ALLVM" \
         's/vmgm_probed <= 1.b1;/vmgm_probed <= 1\x27b0;/'
+    # the OSD's Save State page (2026-10-30): dvd_video is VIDEO_TS.IFO, per mount
+    mutate T14_dvdvideo_menus "E" \
+        's/assign dvd_video = vmgi_found;/assign dvd_video = vmgi_found \&\& vm_mode;/'
+    mutate T15_dvdvideo_stuck "I" \
+        's/assign dvd_video = vmgi_found;/assign dvd_video = 1\x27b1;/'
     mutate T13_jump_fallback "G" \
         's/(scan_mode  <= 1.b0;            \/\/ no entry match -> SRP\[0\]\n\s*scan_title <= 1.b0;\n\s*)srp_i      <= 16.d0;/${1}srp_i      <= 16\x27d1;/'
 fi

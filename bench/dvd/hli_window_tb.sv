@@ -87,6 +87,7 @@ module hli_window_tb;
         .stc_reanchor(stc_reanchor),
         .sel_force(1'b0), .sel_force_btn(6'd0),
         .hl_btnn(6'd0),
+        .keep_sel(1'b0),
         .num_sel(1'b0), .num_btn(6'd0),
         .nav_up(nav_up), .nav_dn(nav_dn), .nav_lf(nav_lf), .nav_rt(nav_rt),
         .nav_act(nav_act),

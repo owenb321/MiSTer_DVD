@@ -232,7 +232,7 @@ int main(void)
 
 	printf("[7] the request\n");
 	fresh(); reply_cmd = 0x7D;
-	reply[0] = 0x5E02; reply[1] = 4; reply_len = 2;
+	reply[0] = 0x5E03; reply[1] = 4; reply_len = 2;
 	vmsnap_request();
 	check(n_cmd == 1 && n_words == 1 && n_disable == 1, "one transaction: command + one word");
 	check(sent[0] == 1, "control word 1 (take a snapshot when this transaction ends)");
@@ -242,7 +242,7 @@ int main(void)
 
 	printf("[8] polls while busy, or before seq moves\n");
 	unsigned t0 = vs_t0;
-	reply[0] = 0x5E02; reply[1] = 5; reply[2] = 0x8060; reply_len = 2048;   // seq moved, but busy
+	reply[0] = 0x5E03; reply[1] = 5; reply[2] = 0x8060; reply_len = 2048;   // seq moved, but busy
 	n_words = 0;
 	vmsnap_poll(t0 + 5);
 	check(n_words == 0, "a poll within 20 ms of the last does nothing");
@@ -280,12 +280,15 @@ int main(void)
 	check(strstr(vsbuf, "\"disp_secs\":-1,") != NULL, "a VOBU without a picture has no displayed time");
 	check(strstr(vsbuf, "57005") == NULL, "nothing past len");
 
-	printf("[10] a reply claiming more words than the buffer\n");
+	// len is 7 bits since the 8-slot layout (2026-10-30), so no reply can claim more
+	// than the 128-word buffer any more: the largest claim reads exactly that many,
+	// and a byte that would have read 200 is masked to its 7 bits.
+	printf("[10] a reply claiming the most words its len can\n");
 	vs_wait = 1; vs_seq0 = 5; vs_t0 = vs_last = t0;
-	reply[1] = 6; reply[2] = 200;
+	reply[1] = 6; reply[2] = 0x7F;
 	n_words = 0;
 	vmsnap_poll(t0 + 100);
-	check(n_words == 18 + 128, "reads at most 128 words");
+	check(n_words == 18 + 127, "reads the 127 words len claims, within the 128-word buffer");
 
 	printf("[11] a request that never completes\n");
 	vs_wait = 1; vs_seq0 = 6; vs_t0 = vs_last = t0; unlink(vs_path);
@@ -318,7 +321,7 @@ int main(void)
 		fprintf(sf, "]}\n");
 		fclose(sf);
 	}
-	fresh(); reply_cmd = 0x7D; reply[0] = 0x5E02; reply_len = 2048;
+	fresh(); reply_cmd = 0x7D; reply[0] = 0x5E03; reply_len = 2048;
 	vmload_request(vs_path);
 	unsigned want_sum = 770 + 0x0001 + 0x5513;            // tm + the fallback RBN's halves
 	for (int i = 0; i < 96; i++) want_sum += 0x1000 + i;
@@ -336,7 +339,7 @@ int main(void)
 		FILE *sf = fopen(vs_path, "w");
 		fprintf(sf, "{\"fmt\":51157,\"nv_pck_lbn\":5,\"disp_secs\":-1,\"words\":[1,2,3]}\n");
 		fclose(sf);
-		fresh(); reply_cmd = 0x7D; reply[0] = 0x5E02; reply_len = 2048;
+		fresh(); reply_cmd = 0x7D; reply[0] = 0x5E03; reply_len = 2048;
 		vmload_request(vs_path);
 		check(sent[4] == 0xFFFF, "no displayed time: tm 0xFFFF (the cell start)");
 	}

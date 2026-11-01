@@ -210,7 +210,7 @@ stay there — including across chapter skips, seeks, menus and a mid-title `Vid
 change.
 
 If it does not, that is a bug rather than something to work around. Try `A/V Offset` on
-the debug page to see whether a fixed correction lines it up, then
+the Audio page to see whether a fixed correction lines it up, then
 [report it](reporting-a-bug.md) with the disc and roughly how far into the title it
 started — and say whether a chapter skip changes anything, because that distinguishes two
 quite different faults.
@@ -389,7 +389,7 @@ Many televisions never show it at all; it depends on the set.
     Reports of a **sawtooth or ragged look on a CRT** kept coming in after v0.4.0, and they
     turned out not to be this at all: the composite sync itself was missing its equalizing
     pulses, so some televisions could not tell the two fields apart reliably. There is now
-    an `Analog CSync` setting for it on the debug page — see
+    an `Analog CSync` setting for it on the Analog / CRT page — see
     [Analog CSync](../video/analog-crt.md#analog-csync-if-your-set-jitters-or-shows-sawtooth-edges).
     Fixing the sync also uncovered a field-order error it had been masking, which is
     corrected in the same version and needs no setting.
@@ -400,7 +400,7 @@ If vertical edges look stepped or ragged, the picture seems to have half the det
 should, or a scaler tells you the fields are out of order, the sync is the first thing to
 try — not the picture settings.
 
-Debug page → **`Analog CSync`**. `SMPTE` is the default and is what a broadcast signal
+Analog / CRT page → **`Analog CSync`**. `SMPTE` is the default and is what a broadcast signal
 carries. If your set prefers `2H`, that is worth telling us — it decides whether the
 setting stays at all.
 

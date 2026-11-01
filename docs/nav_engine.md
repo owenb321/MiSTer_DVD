@@ -756,14 +756,14 @@ trials: **no picture between the flushes, which are 11-12 ms apart**; landings +
 the 2026-10-27 decision it merges only stacked with a logic reclaim, `docs/roadmap.md` "Save
 states"). ⏳ Not yet run: a physical disc, and the maintainer's own play-test.
 
-**What the user sees.** OSD page 2, **Save State**: `Slot` (1-4), `Save to Slot`, `Load Slot`.
-Four slots per DISC, in `savestates/DVD/<provider>-<16 hex>_N.ss`; messages from the Main's
+**What the user sees.** OSD page 2, **Save State**: `Slot` (1-8), `Save to Slot`, `Load Slot`.
+Eight slots per DISC (four until 2026-10-30, §11d), in `savestates/DVD/<provider>-<16 hex>_N.ss`; messages from the Main's
 notice box. Manual: `site/content/playback/save-states.md`.
 
 **The chain.**
 1. `emu.sv` edge-detects `status[55]` / `status[56]` (`R` rows: Main holds the bit for many
    cycles). `vm_snap` counts each press (2-bit, wrapping) and latches the Slot row
-   (`status[54:53]`) AT the press, so moving the row afterwards cannot redirect it. All of it
+   (`status[59:57]`; `status[54:53]` until §11d) AT the press, so moving the row afterwards cannot redirect it. All of it
    rides header word 2's spare bits with `vm_en` (= `menus_on` = `dvd_vm`'s enable):
    `{busy, vm_en, slot, load_n, save_n, len}`. The Main polls three words every 20 ms.
 2. `main/support/dvd/dvd_sstate.cpp` latches a baseline from the first word it reads (a
@@ -818,11 +818,13 @@ SPRM2's stream and clear bit 6 (libdvdnav; the forced-subtitle fallback reads it
 restore (`vm_rst_done`) syncs `aud_cur` / `sub_on` / `sub_idx` from the restored SPRMs, so
 the saved track plays whether or not the write moved the VM's value.
 
-**The highlighted button.** A menu restore lands with SPRM8 restored, but a menu whose PCI
-authors a forced select (`fosl_btnn`) highlights that button on entry, as libdvdnav does.
-T2's timeline menu forces button 1 (read off the disc's PCI on the rig), so a save on
-"Special Edition" loads on "Theatrical". The manual says a disc's menu may start on its
-own button.
+**The highlighted button** (§11c reverses the 2026-10-27 decision). A menu restore lands
+with SPRM8 restored, but a menu whose PCI authors a forced select (`fosl_btnn`) used to take
+the highlight on the landing, as on any entry and as libdvdnav does. T2's timeline menu
+(fosl 1) loaded a "Special Edition" save on "Theatrical", and that was accepted as
+libdvdnav behaviour. Mad Dog's route menu showed the cost: the maintainer saved with the
+reticle on Saloon and loaded on the Sheriff's office. A save state's job is to come back
+where you were, so the restored button now wins for the landing's HLI (§11c).
 
 ### 11a. HW round (2026-10-27, rig)
 
@@ -842,3 +844,196 @@ raises; screenshots cannot see the OSD).
 - **Cost** (`_2214`, SEED 7): 61,776 ALUTs (+17 over the step-3 build), 533 / 553 M10K
   (unchanged), 41,100 ALMs needed (98 %); `clk_dec` 89.24 / 90.24 MHz, `clk_mem` 95.68 /
   96.15, timing PASS.
+
+### 11b. Stress round (2026-10-28, rig, on the stacked reclaim build)
+
+`tools/sstate_stress.py`, a seeded random walk on `DVD_reclaim_20261028_0538.rbf` (logic
+reclaim F stacked on this branch) with this branch's Main. It does saves and loads across all four
+slots, plus seeks, chapter skips, menu/title jumps, audio steps, load spam (2–4 extra
+presses), save-then-load, a relaunch with a load during the boot logos, Disc Menus off
+live, and a slot file with one byte flipped. Each load is scored against the slot file
+the save wrote: the verdict message; VM domain, VTS, reader VTS and PGCN; SPRM1/2/3; all 16 GPRMs; in a
+title the landing (shown time − saved time within [−2, elapsed + 2] s) and the picture
+advancing 3 s later.
+- **Result: 75 loads on T2, Men in Black and Scooby-Doo 2, 0 failures**: 60 restores scored
+  in full (47 in a title, 13 in a menu) and 15 verdict-only. That covers 7 load-spams, 6
+  save-then-loads, 2 boot loads, empty-slot loads, a damaged file ("That save file is damaged") and Disc Menus off (both rows
+  refused).
+- **One false alarm, kept as a lesson:** the first T2 run "failed" 4 loads (GPRM 4/5
+  changed, shown time ~0 s). Every one had been saved at 41–42 s into T2's intro (VTS 5,
+  ~48 s long). The load landed exactly (41 s at +0.2 s), the intro ended ~7 s later, and its
+  post command set GPRM 4/5 and jumped to the feature, before the oracle's 7 s sample. The
+  oracle now samples at +2.5 s and compares the reader VTS too. A state check after a load
+  must allow for the disc's own commands running next.
+- ⚠ The tool's first version moved a disc's slots aside into ONE shared folder and
+  restored them only at the normal end. A crash, then a second run, lost one T2 test slot
+  from §11a. It now uses a per-run folder, a `finally`, and a refusal to start over a
+  leftover folder.
+
+### 11c. The restored button beats the landing's forced select (2026-10-30)
+
+**Report (maintainer, on the rig):** Mad Dog McCree, on the route menu after the first
+shootout (VTS 12 PGC 1: an indefinite still, 4 link buttons, `fosl 1`). Saved with the
+reticle on Saloon (button 2), loaded, and the reticle was on button 1. The slot file held
+SPRM8 = 0x0800 (button 2), so the save was right. On the landing, `nav_pci` came out of the flush
+re-seeded with button 2 (`hl_btnn`), and then the HLI's forced select moved it to 1, because a
+freshly reset `nav_pci` is not armed and so treats any HLI as a new one.
+
+**Decision:** a save state comes back where you were. libdvdnav applies `fosl` on every
+entry. It has no save states, and a set-top player's resume is a different thing. So
+for the **landing's HLI only**, a restored SPRM8 that is a button of that HLI stands.
+Every other entry keeps libdvdnav's forced select: menu keys, links and seeks, and an
+HLI that is new after the landing.
+
+**Mechanism:**
+- `vm_snap.keep_sel` is a level on the hard reset, so it lives across the restore's
+  flushes. It is set as the restore issues its jump (`rst_done`).
+- It is held through the restore's own PGC load and, in a film, the landing's time seek.
+  An HLI armed before that seek is the cell start's, not the landing's.
+- It is dropped by the first HLI arm after that (`nav_pci.hli_arm`), or by any later PGC
+  load (no HLI came), or by a mount.
+- `nav_pci`'s promote reads it. When it is up and `btn_sel` (seeded from the restored
+  SPRM8) is 1..`btn_ns`, `fosl` is skipped. Out of range, the old rules apply (`fosl`, else 1).
+
+**Gates:**
+- `nav_pci_tb` T20: kept, and an out-of-range button falls back to `fosl`. T19e is the
+  control, with `keep_sel` low and `fosl` winning.
+- `run_vm_snap.sh --red` `[keep]` and S31–S35. S16/S19 now also fail `[keep]`, because
+  `keep_sel` follows the landing.
+- `check_vm_snap_wiring.py --red`, which pins both ends of the seam in `emu.sv`.
+
+### 11d. Eight slots (2026-10-30, maintainer's request)
+
+- **The OSD row:** `Slot` moved from `O[54:53]` to `O[59:57]` (1-8), rather than widening
+  onto the free bit 52. Widening would read every saved config's slot as a different
+  number. Fresh bits read 0, which is slot 1. Bits 53-54 are retired. Save states have
+  never shipped, so there is no `v,N` bump.
+- **Header word 2:** it is now `{busy, vm_en, slot[2:0], load_n, save_n, len[6:0]}`. `len`
+  gave up its top bit; it never exceeds 127, because the buffer is 128 words and `wa` is
+  7 bits.
+- **MAGIC:** `0x5E02` became `0x5E03`, so a Main built for the four-slot layout refuses
+  this core, and the reverse, instead of reading the counters off the wrong bits.
+- **The Main:** `dvd_vmsnap.h` has the new shifts, `VMSNAP_LEN` is 7 bits, and
+  `DVD_SSTATE_SLOTS` (8) bounds `dvd_sstate_slot_path`. The old bound was a literal
+  `slot > 3`, which the new `dvd_sstate_test` [14] caught. Its mutation is
+  `ss-four-slots`.
+- **A retired mutation:** `ctl-vs-cap-short` is gone. No 7-bit `len` can reach the
+  128-word cap, so capping at 127 is an equivalent mutation. The cap stays in the code as
+  a guard.
+- **Gates:** `vm_snap_tb` `[ui]` (slot 7 and slot 8 through word 2), and
+  `check_vm_snap_wiring.py` (the row, the bits, the shifts and masks, MAGIC).
+  `test_status_bits.py`, `main/tests/run_tests.sh --red`.
+
+### 11e. The Save State page hides without a DVD-Video disc (2026-10-30)
+
+**Request (maintainer):** hide the save-state option unless a disc is loaded: it does
+nothing without one. **Decision:** the page header is `H1D2P6,Save State;`.
+- **H1** hides the page while `status_menumask` bit 1 is set. The bit is
+  `~dvd_video`, and `dvd_video` is a new `dvd_iso_reader` output that is simply
+  `vmgi_found`: the ISO walk found `VIDEO_TS.IFO`. It is per mount and clears at the
+  next one. "A disc is loaded" is not enough: a VCD, a `.mpg` or a WAV has no VM to
+  snapshot. It rises with the walk, before the Title-entry probe, and it does not depend
+  on Disc Menus.
+- **D2** greys the page while bit 2 is set, which is `status[1]` (Disc Menus Off). The
+  page stays discoverable, and the existing "Save states need Disc Menus on" message still
+  explains a press that gets through.
+- Bit 0 is the existing Interlaced mask (`H0P1O` / `h0P1O` Deinterlace). The mask word is
+  `{13'd0, status[1], ~rdr_dvd_video_w, interlaced_eff}`.
+- **Gates:** `iso_reader_titleprobe_tb` (every VIDEO_TS arm sees `dvd_video`; arm I
+  checks it clears at a mount and sets on the walk) with T14/T15 in `run_title_probe.sh
+  --red`; `check_vm_snap_wiring.py --red` pins the header, the mask's shape and the
+  reader's net, with three mutations. `check_field_blend_wiring.py` follows the wider mask.
+- **Cost:** it is a `CONF_STR` edit, so it re-rolls the pinned fitter seed.
+
+### 11f. OSD pages by topic (2026-10-30)
+
+The single long list outgrew a page. The OSD is now seven pages (the layout the maintainer
+chose from two proposals):
+
+| Page | Rows |
+|---|---|
+| Main | Load Video, Disc Menus, Player Language, Reset |
+| `P1` Video | Aspect Ratio, Video Output, Deinterlace (two rows, H0/h0), Video Standard, Film 24p Out |
+| `P2` Analog / CRT | Analog Aspect, Analog Dither, Analog CSync |
+| `P3` Audio | Audio, Audio Out, SPDIF Byte Order, A/V Offset |
+| `P4` Subtitles & CC | Line-21 CC, Force 4:3 Subpics |
+| `P5` Playback | D-Pad Seek, Screensaver |
+| `P6` Save State | Slot, Save to Slot, Load Slot (hidden/greyed, §11e) |
+| `P7` Debug | Debug Overlay, Title VTS Tens/Units, Frame Drop, A/V Sync, CC Test Line |
+
+- **A row keeps its `O[]` bits wherever it sits**, so every saved setting is unchanged and
+  there is **no `v,N` bump**. Only the Slot row changed bits (§11d), and that was before any
+  release.
+- Main's `menu.cpp` takes a one-digit page number and puts a mask prefix BEFORE the `P`
+  (`H0P1O...`). `tools/docs_check.py` already accepted both. `check_field_blend_wiring.py`
+  compares the Deinterlace rows without the page digit.
+- The manual's `settings.md` has one section per page, and the references elsewhere ("Debug
+  page", "Main page") point at the page a row now lives on.
+
+### 11g. A save with buttons armed lands at the cell start (2026-10-31)
+
+**Report (maintainer, on the rig):** Mad Dog McCree's hideout shootout, saved with the
+reticle on screen in slot 8. The load showed the scene, with the enemy's shot, and no reticle.
+**Measured** (capture card, the saved state loaded with only the landing time changed):
+landing at 0 s shows the reticle, 2 s and the saved 3 s do not. The HLI does arm after the
+exact landing (nav trace: `HLI_ARM`, 35 buttons, `late_ticks` 252252, the 2.8 s the
+window's authored start is behind). The nav events are the same chain either way (arm, cell
+command 26, jump to cell 13).
+- **Cause:** the reticle is the selected button's highlight recolouring a subpicture bitmap
+  (the grid), and that bitmap rides with the first frames of the window, together with the
+  35-button HLI's first pack (`subpicture.md`, the in-title grid). A time seek lands after it.
+  The HLI arms from a later continuation pack and has nothing to recolour. No other state
+  repairs it: the unit is delivered once.
+- **Decision:** when buttons are armed at the snapshot, save no exact time. The core latches
+  `btns_armed` into word 4 bit 2 at `snap_done` (`vm_snap.hl_armed_in`), and the Main's
+  `dvd_vmsnap_disp_secs_h` returns -1 for it, so the file carries no time and the load takes
+  the "saved cell's start" path that menus already use. A film bookmark keeps its exact
+  time. The cost is that a button scene restarts from its first frame, which is where an
+  interactive disc waits for input anyway. The manual's "at the start of that scene" now
+  holds for these scenes too.
+- **Limitation:** a window that spans cells has its bitmap in an earlier cell, so landing at
+  the saved cell's start would still miss it. (§11h: until 2026-10-31 "the saved cell's start"
+  was in fact the title's first program for a title-domain restore.) Mad Dog, Scooby-Doo 2's windows and the
+  quiz discs author a window per cell. ⏳ Not checked against a spanning window.
+- **Existing slots do not change:** the flag is written at save time. A slot saved before
+  this (Mad Dog's slot 8) still carries its exact time and needs a re-save.
+- **Gates:** `vm_snap_tb` `[armed]` (latched at the snapshot, not live) with S36/S37;
+  `check_vm_snap_wiring.py --red` (the port, word 4's bit 2 on both sides, two mutations);
+  `dvd_sstate_test` [15] and `ss-armed-exact-time`.
+
+### 11h. A title restore entered the title's first program, not the saved place (2026-10-31)
+
+**Report (maintainer):** after §11g, Mad Dog's slot 8 (saved at the chimney shot, a later part of
+the hideout shootout) loaded at the start of the hideout shootout. The file was right: reader
+cell 3 of 68, SPRM7 = 4, SPRM8 = button 9.
+**Measured on the rig** (`vmload` with only `in_cur_cell` changed to 1, 3 and 7): the nav trace
+is identical every time (`PGC 11/1`, `CELL 0`, the first window's `HLI_ARM` at 0.2 s,
+`CELL_CMD cell 0 cmd 26` 3.8 s later). The saved cell never reached the reader.
+- **Cause:** `dvd_vm` E_RST sends the title number with a HINT flag (`jump_ttn_hint`), so SPRM5
+  and the title's chapter map come back. The hint was meant to leave `want_pgcn` alone, but it
+  still set `want_ttn`, which sends the reader through the PTT resolve (S_PTT_MAT / OFF / PGC).
+  `S_PTT_PGC` then read the title's FIRST part `{pgcn, pgn}` and overwrote `want_pgcn` with its
+  PGC and set `jpgn_l` to its start program, whose entry cell P_PMAP latches over the saved
+  cell. So every title-domain restore entered PGC `ptt[0]`, program `pgn`: right only for a state
+  saved in the title's entry PGC at its first program. Mad Dog's feature PGC *is* PGC 1, so it
+  showed as "the cell is ignored"; a state in a title's PGC 2 or later would have restored into
+  the wrong PGC. It had been latent since the hint was ported (`1e5f57f`, 2026-10-26).
+  Why nothing saw it: the menu-domain jumps skip the resolve; the T2 film is one PGC (entry PGC,
+  cell 0 saved); `iso_reader_menu_tb` TEST 3 has no PTT table, and every other jump that
+  reaches the resolve is an unhinted chapter jump, which is supposed to overwrite.
+- **Fix:** `S_PTT_PGC` does nothing to `want_pgcn` / `jpgn_l` when `jhint_l` is set; it still
+  clears `want_ttn` and `jptt_l`, and `cur_ttn` and the chapter table were already loaded.
+- **Gate:** `run_restore_land.sh --red` (`iso_reader_restore_tb`: a title with a PTT table and a
+  two-cell PGC 2; A/B hinted jumps into PGC 2 cell 1 / cell 0, C the entry PGC, D an unhinted
+  chapter jump). The pre-fix reader fails exactly A and B. Mutations M1-M3.
+- **Effect on §11g:** the armed landing at "the saved cell's start" now lands at the saved cell.
+  A film bookmark's exact time is unchanged: the time seek is by PGC time, whatever cell the jump
+  entered.
+- **HIL (2026-10-31, `DVD_reclaim_20261031_0508`):** Mad Dog's chimney slot 8 now enters cell 3 of
+  the PGC (nav trace: `CELL 3`, the 35-button HLI armed on time) and the capture shows the cabin,
+  then the chimney with the reticle. T2 stress (`tools/sstate_stress.py`, 24 ops, 7 loads): 0
+  failures. Its 2 warnings are one save at 31 s of a 34 s cell, where the cell's own command
+  moved the disc on between the oracle's two samples. The tool now ignores the reader's title VTS
+  for menu-domain loads (a menu restore does not restore it, by design) and treats a PGC change
+  between its samples as a warning, not a stuck picture.
+

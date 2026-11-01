@@ -98,6 +98,7 @@ module dvd_vm_tb;
     reg [63:0] btn_cmd = 0;
     reg        btn_cmd_valid = 0;
     reg [5:0]  btn_sel = 6'd1;
+    reg        sel_moved = 1'b0;   // nav_pci user_move (S12c/S12d)
     reg        btns_armed = 0;
 
     wire        btn_force;
@@ -166,7 +167,7 @@ module dvd_vm_tb;
         .key_menu(key_menu), .key_title(key_title), .key_return(key_return), .key_cmenu(key_cmenu),
         .key_chedge(key_chedge), .key_chedge_dir(key_chedge_dir),
         .btn_cmd(btn_cmd), .btn_cmd_valid(btn_cmd_valid),
-        .btn_sel(btn_sel), .btns_armed(btns_armed),
+        .btn_sel(btn_sel), .btns_armed(btns_armed), .sel_moved(sel_moved),
         .btn_force(btn_force), .btn_force_val(btn_force_val),
         .hl_btnn(hl_btnn),
         .jump_pulse(jump_pulse), .jump_domain(jump_domain),
@@ -833,6 +834,46 @@ module dvd_vm_tb;
         if (`VM_GPRM(dut, 0) !== 16'd2 || !saw_jump || cap_jpgcn != 8'd84)
             fail("S12b: dispatch collapsed to button 1 (LinkPGCN 58) on btn_sel drift");
         $display("S12 Atmosfear LinkTailPGC dispatch survives btn_sel drift PASS");
+
+        // ---------------- [S12c] a MOVE after an activation ends the freeze ----
+        // Mad Dog's shootouts (2026-10-30): a hit's button command only sets a GPRM
+        // and the scene plays on, so the player keeps aiming. Frozen until the next
+        // PGC load, SPRM8 (hl_btnn, nav_pci's re-seed after the segment's jump) held
+        // the SHOT's square: the reticle snapped back. libdvdnav's HL_BTNN follows
+        // every move. S12b above is the control: drift with no move stays frozen.
+        vm_restart;
+        menu_active = 0;
+        nr_pre = 0; nr_post = 0; nr_cell = 0; cur_pgcn = 8'd1; cell_count = 8'd1;
+        btns_armed = 1; btn_sel = 6'd20;
+        @(negedge clk);
+        btn_cmd = 64'h5300001400000000;     // the hit: SetMode g[0] = 0x14 (no jump)
+        btn_cmd_valid = 1;
+        @(negedge clk); btn_cmd_valid = 0;
+        wait_settled;
+        if (hl_btnn !== 6'd20) fail("S12c: the activation did not latch the shot's button");
+        btn_sel = 6'd27;                    // the player aims down...
+        @(negedge clk); sel_moved = 1; @(negedge clk); sel_moved = 0;
+        repeat (4) @(negedge clk);
+        if (hl_btnn !== 6'd27) fail("S12c: SPRM8 stayed on the shot's square after a move");
+        btn_sel = 6'd28;                    // ...and keeps aiming: SPRM8 follows live
+        @(negedge clk); sel_moved = 1; @(negedge clk); sel_moved = 0;
+        repeat (4) @(negedge clk);
+        if (hl_btnn !== 6'd28) fail("S12c: SPRM8 does not follow the selection after the freeze ended");
+        $display("S12c a move after an activation ends the SPRM8 freeze PASS");
+
+        // ---------------- [S12d] ...but never a restore's freeze ----------------
+        // A restore writes SPRM8 and freezes it until its landing's load (UPB_FRZ8):
+        // a D-pad press on the old menu meanwhile must not hand SPRM8 back to the
+        // live selection.
+        vm_restart;
+        btns_armed = 1; btn_sel = 6'd5;
+        @(negedge clk);
+        dut.sprm8 = 16'h0C00; dut.sprm8_frozen = 1'b1; dut.sprm8_frz_btn = 1'b0;   // = FRZ8's state
+        @(negedge clk); sel_moved = 1; @(negedge clk); sel_moved = 0;
+        repeat (4) @(negedge clk);
+        if (hl_btnn !== 6'd3) fail("S12d: a move ended a restore's SPRM8 freeze");
+        btns_armed = 0;
+        $display("S12d a move leaves a restore's SPRM8 freeze PASS");
 
         // ---------------- [S13] 15-bit PGCN: LinkPGCN / JumpSS_VMGM_PGC ------
         // REGRESSION for the Weakest Link root cause (docs/disc_sweep.md): the

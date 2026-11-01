@@ -67,7 +67,7 @@ module dvd_vm_atmos_tb;
         .key_menu(key_menu), .key_title(1'b0), .key_return(1'b0), .key_cmenu(1'b0),
         .key_chedge(1'b0), .key_chedge_dir(1'b0),   // title-edge chapter key (audit item 7)
         .btn_cmd(btn_cmd), .btn_cmd_valid(btn_cmd_valid),
-        .btn_sel(btn_sel), .btns_armed(btns_armed),
+        .btn_sel(btn_sel), .btns_armed(btns_armed), .sel_moved(1'b0),
         .btn_force(btn_force), .btn_force_val(btn_force_val),
         .jump_pulse(jump_pulse), .jump_domain(jump_domain),
         .jump_vts(jump_vts), .jump_pgcn(jump_pgcn), .jump_entry(jump_entry),

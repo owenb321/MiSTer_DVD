@@ -685,3 +685,55 @@ the census since F1 + F2, `decode_pacing.md`) is the hardest-won property in the
    question matters more than the workflow one. Either decides whether the rest of 10b
    and 10c are worth a branch. **Built (2026-10-07, `docs/nav_engine.md`): the pilot
    says yes on area (−498 ALM in the core for +4 M10K).** Next is the reader state split.
+
+## 11. Reclaim F, stacked on save states (2026-10-27, `feature/logic-reclaim-f`)
+
+**Why:** the save-states merge gate (`roadmap.md`, user decision 2026-10-27): save states
+merge only together with a reclaim that wins back what they cost, about 370 ALM by entity
+(`vm_snap` 315, `dvd_vm`/`nav_seq` growth, the glue), with M10K not up and timing passing.
+
+### 11a. `mult22x16` as one DSP product (✅ built, fitted; HW ⏳)
+
+§10d's item. `rtl/mpeg2/idct.v` `mult22x16` is now `p <= multiplier * multiplicand` in one
+27×27 DSP, then `product <= p_clr ? 0 : p`. `p` carries no reset so the DSP absorbs it;
+the reset moves one stage later (`p_clr`, "p not reloaded since the reset") so the first
+product after any reset, even a one-cycle watchdog pulse, is 0 as upstream's was.
+- **Gate:** `bench/dvd/run_idct_mult.sh --red`, against upstream's module kept as
+  `bench/dvd/ref/mult22x16_ref.v`: [data] the multiplier alone on full-range and corner
+  operands with random `clk_en`; [reset] 1..5-cycle resets (7,154 one-cycle resets with a
+  product in flight); [idct] the whole `idct` against a renamed copy wired to the old
+  multiplier (256,000 coefficients: 169,425 clipped, 85,948 in range). M1 (no `p_clr`)
+  fails [reset] only, M4 (a wrong cosine outside the multiplier) [idct] only.
+- **Fit** (`DVD_reclaim_20261028_0049`, SEED 7, vs the save-states build `_2214`): `idct`
+  860.5 → **651.2 ALM (−209)**, 1,364 → 857 ALUTs; each `mult22x16` ~46 → ~10 ALM, 0
+  ALUTs. Device 61,776 → **61,211 ALUTs (−565)**; DSP 91 and M10K 533 unchanged; the
+  "ALMs needed" line only 41,100 → 41,075 (packing). `clk_dec` 89.54 / 90.78 MHz,
+  `clk_mem` 93.4 / 95.2: PASS.
+
+### 11c. The AC-3 IMDCT on the audio engine (§10a; ✅ fitted, HW ⏳)
+
+`imdct_512` leaves the build; the transform runs as `dts_vec` op 25, a term program
+(`docs/imdct_engine.md`). Bit-identical PCM to `imdct_512` on every gate stream
+(`run_ac3_ab.sh`), worst AC-3 frame 53.5 % of real time. **Fit** (`_0538`, SEED 7):
+`dvd_audio_decode` −1,546 ALM / −2,503 ALUTs / −13 M10K / −7 DSP. Device against the
+save-states build `_2214`: **61,776 → 59,074 ALUTs (−2,702, F included)**, M10K 533 → 520,
+DSP 91 → 84, "ALMs needed" 98 % → 91 % (below v0.9.1's 92 %). Timing PASS. **This clears
+the save-states merge gate** (~370 ALM, M10K not up, timing) about four times over; the
+gate still wants I4 (by ear on the rig) before anything is pushed.
+
+### 11b. ⛔ `no_rw_check` on `xfifo_sc` does nothing (tried, reverted)
+
+The map report warns (276020) "pass-through logic has been added" for 34 inferred RAMs,
+20 of them `xfifo_sc` (~1,480 ALM in all). The RTL never reads and writes one slot in
+the same cycle (it reads only while `~empty`, writes only while `~full`), so
+`(* ramstyle = "no_rw_check" *)` looked free. **It is ignored**, in every spelling
+(`"no_rw_check"`, `"M10K, no_rw_check"`, the `/* synthesis */` comment): a standalone fit
+of a 64×16 `xfifo_sc` (`tools/fit_unit.sh`) stays 117 ALM, 150 registers, warning intact.
+A full fit was netlist-identical.
+- **Why:** `dout` has a synchronous reset, which an M10K output register cannot hold, so
+  Quartus moves the read register to the RAM's address side and the RAM reads a cycle
+  earlier than the RTL. A word written into an EMPTY fifo is then read from the slot being
+  written on the next edge, which is the normal path, not a corner. The pass-through is
+  real; removing it means changing when `empty` falls, i.e. the fifo's timing.
+- The same holds for `dpram_sc` (same reset-on-`dout` shape). Do not retry either without
+  changing that shape, and then it is not bit-identical.

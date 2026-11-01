@@ -2,7 +2,7 @@
 
 Nearly all commercial film DVDs store 24 fps material and mark it for **3:2 pulldown**
 rather than storing 60 fields per second. The core handles that two ways, and
-**`Film 24p Out`** (Debug page, default **Auto**) picks between them.
+**`Film 24p Out`** (Video page, default **Auto**) picks between them.
 
 **Default path** — the core performs the 3:2 pulldown itself, following the flags in the
 stream, and outputs at the display's native 59.94 Hz (50 Hz for PAL).

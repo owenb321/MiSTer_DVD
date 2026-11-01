@@ -4,7 +4,7 @@ Interactive DVDs are real games. Wickles Manor in *Scooby-Doo 2*, the question d
 *Scene It?*, the branching paths in *Atmosfear*: they all keep progress, and without save
 states every load starts them from the beginning.
 
-Save states let you keep that progress. You get **four numbered slots per disc**, from the
+Save states let you keep that progress. You get **eight numbered slots per disc**, from the
 OSD.
 
 They also work as bookmarks on ordinary films: stop halfway through a long film, come back
@@ -21,8 +21,9 @@ tomorrow, and carry on.
 
 ## Saving
 
-1. Open the OSD and go to the **Save State** page.
-2. Pick a **Slot** from 1 to 4.
+1. Open the OSD and go to the **Save State** page. It is there only while a DVD-Video disc
+   or image is loaded.
+2. Pick a **Slot** from 1 to 8.
 3. Choose **Save to Slot**. The OSD closes and the player confirms `Saved to slot N`.
 
 ## Loading
@@ -42,8 +43,8 @@ Everything the *disc's own program* is keeping track of, plus where you were:
   given)
 - the disc's random-number state, so a game that rolls dice picks up where it left off
 - where you were in a film, to about a second
-- the button you had highlighted, unless the disc's menu always starts on a particular
-  button. Many menus do, and a set-top player honours that too.
+- the button you had highlighted, even on a menu that normally starts on a particular
+  button whenever you enter it
 - your audio track, subtitle and camera-angle choices
 
 ## What does not
@@ -55,11 +56,14 @@ chapter skip does: there is a brief black moment, then playback resumes.
   saved.
 - **In a menu or a game** it lands back on that menu or at the start of that scene,
   with the disc's variables as they were. That is the natural place to resume, because
-  interactive discs wait for your input there anyway.
+  interactive discs wait for your input there anyway. A scene with on-screen buttons,
+  such as a shooting gallery, always restarts from its beginning: the cursor or reticle is
+  drawn from data the disc sends only at the start of the scene, so a load into the
+  middle would show the scene without it.
 
 ## Slots are per disc
 
-Each disc gets its own four slots, and the player recognises a disc by reading it rather
+Each disc gets its own eight slots, and the player recognises a disc by reading it rather
 than by its filename. That has two useful consequences:
 
 - **Renaming your rip does not lose your saves.**
@@ -82,8 +86,8 @@ number.
 
 Save states save and restore the disc's own program, which only runs with **Disc Menus**
 set to On. With it set to Off the player skips the disc's menus and plays the main feature
-by itself, so there is nothing to save or restore. Both rows then say
-`Save states need Disc Menus on`.
+by itself, so there is nothing to save or restore. The **Save State** page is then shown
+greyed out. If a press does reach the player, it says `Save states need Disc Menus on`.
 
 ## Limitations
 

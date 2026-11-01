@@ -232,7 +232,7 @@ const char *dvd_sstate_disc_id(void)
 int dvd_sstate_slot_path(int slot, char *out, size_t cap)
 {
 	resolve_pending_phys();
-	if (!disc_id[0] || slot < 0 || slot > 3 || cap < 8) return 0;
+	if (!disc_id[0] || slot < 0 || slot >= DVD_SSTATE_SLOTS || cap < 8) return 0;
 	// The framework's directory and naming (savestates/<core>/<name>_N.ss, relative to
 	// getRootDir() like every other file Main opens), keyed on the DISC.
 	//

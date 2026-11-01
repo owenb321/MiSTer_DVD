@@ -13,12 +13,12 @@ passes every bench, and saves a place the viewer was never at.
 
 WHAT IS PINNED
   emu.sv        every vm_snap port, by expression; the Save State rows' bits in
-                CONF_STR (Slot O[54:53], Save R[55], Load R[56]) and their edges; dvd_vm's five snap_* ports on the
+                CONF_STR (Slot O[59:57], Save R[55], Load R[56]) and their edges; dvd_vm's five snap_* ports on the
                 same nets; nav_dsi's 1stref_ea / prev_video connected to the nets
                 vm_snap reads (it left them open before); the EXT_BUS OR and mux
   dvd_vm.sv     snap_we is the O_SNAP output strobe; snap_d the output bus; the
                 request is offered only after every event and only with no held part
-  vm_snap.sv    CMD 0x7D, MAGIC 0x5E02 with bit 15 clear, HDR 13; no other EXT_BUS
+  vm_snap.sv    CMD 0x7D, MAGIC 0x5E03 with bit 15 clear, HDR 13; no other EXT_BUS
                 module answers 0x7D
   DVD.qsf       names dvd/vm_snap.sv
   dvd_vmsnap.h  UIO_DVD_VMSNAP / DVD_VMSNAP_MAGIC / DVD_VMSNAP_HDR equal the RTL's;
@@ -70,8 +70,13 @@ SNAP_PORTS = {
     'rst_seek_secs': 'rst_seek_secs', 'rst_seek_rbn': 'rst_seek_rbn',
     # the OSD's Save State rows (save states step 4, docs/nav_engine.md §11): one edge
     # per press, the Slot row, and Disc Menus (the VM's own enable: a restore needs it)
-    'ui_save': 'ss_save_edge', 'ui_load': 'ss_load_edge', 'ui_slot': 'status[54:53]',
+    'ui_save': 'ss_save_edge', 'ui_load': 'ss_load_edge', 'ui_slot': 'status[59:57]',
     'vm_en': 'menus_on',
+    # the restored highlight (docs/nav_engine.md §11c): nav_pci's arms end keep_sel,
+    # which nav_pci reads (pinned on both ends below)
+    'hli_arm': 'hli_arm_w', 'keep_sel': 'ss_keep_sel',
+    # buttons armed when a snapshot is taken: the Main saves no exact time (docs/nav_engine.md 11g)
+    'hl_armed_in': 'hl_btns_armed',
 }
 VM_PORTS = {'snap_req': 'vm_snap_req', 'snap_we': 'vm_snap_we', 'snap_d': 'vm_snap_d',
             'snap_done': 'vm_snap_done', 'snap_fmt': 'vm_snap_fmt',
@@ -134,15 +139,28 @@ def run(txt, verbose=True):
        'spst_wb_val: {display, the effective stream}, or SPRM2\'s stream with display off')
     ok(re.search(r'else\s+if\s*\(\s*vm_rst_done\s*\)\s*begin\s*aud_cur\s*<=', em) is not None,
        'a restore syncs aud_cur / sub_on / sub_idx from the restored SPRMs')
-    for bits, row in (('O[54:53]', 'Slot,1,2,3,4'), ('R[55]', 'Save to Slot'), ('R[56]', 'Load Slot')):
-        ok(re.search(r'"P2' + re.escape(bits + ',' + row) + r';"', em) is not None,
-           f'CONF_STR has P2{bits},{row}')
+    for bits, row in (('O[59:57]', 'Slot,1,2,3,4,5,6,7,8'), ('R[55]', 'Save to Slot'), ('R[56]', 'Load Slot')):
+        ok(re.search(r'"P6' + re.escape(bits + ',' + row) + r';"', em) is not None,
+           f'CONF_STR has P6{bits},{row}')
+    # the page shows only with a DVD-Video disc (H1) and greys with Disc Menus off (D2):
+    # the menu mask's bit 1 must be ~the reader's dvd_video, bit 2 Disc Menus Off
+    ok(re.search(r'"H1D2P6,Save State;"', em) is not None,
+       'CONF_STR has H1D2P6,Save State (hidden with no DVD-Video, greyed with Disc Menus off)')
+    hp = connections(em, 'hps_io')
+    mm = norm((hp or {}).get('status_menumask'))
+    ok(re.fullmatch(r"\{13'd0,status\[1\],~(\w+),interlaced_eff\}", mm or '') is not None,
+       "hps_io.status_menumask = {13'd0, status[1], ~<dvd_video net>, interlaced_eff}"
+       + ('' if mm else '   got: None'))
+    dv = re.fullmatch(r"\{13'd0,status\[1\],~(\w+),interlaced_eff\}", mm or '')
+    pin(rd, 'dvd_iso_reader', 'dvd_video', dv.group(1) if dv else 'rdr_dvd_video_w')
     for n, b in (('save', 55), ('load', 56)):
         ok(re.search(r'\bss_%s_q\s*<=\s*status\[%d\]\s*;' % (n, b), em) is not None and
            re.search(r'\bwire\s+ss_%s_edge\s*=\s*status\[%d\]\s*&\s*~\s*ss_%s_q\s*;' % (n, b, n), em) is not None,
            f'ss_{n}_edge = the rising edge of status[{b}]')
     pc = connections(em, 'nav_pci')
     pin(pc, 'nav_pci', 'vobu_sptm', 'hl_vobu_sptm_w')
+    pin(pc, 'nav_pci', 'keep_sel', 'ss_keep_sel')      # a restore's landing keeps its button
+    pin(pc, 'nav_pci', 'hli_arm', 'hli_arm_w')         # ...and the arm that ends it is nav_pci's
     ds = connections(em, 'nav_dsi')
     for port, want in DSI_PORTS.items():
         pin(ds, 'nav_dsi', port, want)
@@ -215,15 +233,23 @@ def run(txt, verbose=True):
     ok(mx is not None and words is not None and rtl_buf is not None and words <= mx <= rtl_buf,
        f'DVD_VMSNAP_MAXW ({mx}) holds a snapshot and no more than the buffer')
     ok(re.search(r'spi_uio_cmd_cont\(\s*UIO_DVD_VMSNAP\s*\)', s['vcpp']) is not None, 'the Main issues UIO_DVD_VMSNAP')
+    # word 4's armed bit: the RTL's concatenation puts p_armed at bit 2, and the Main's
+    # landing rule (no exact time) reads that same bit
+    m4 = re.search(r"5'd4:\s*dout_r\s*<=\s*\{([^}]*)\}\s*;", t)
+    f4 = [x.strip() for x in m4.group(1).split(',')] if m4 else []
+    ok(f4[-3:] == ["p_armed", "p_fresh", "p_video"] if f4 else False,
+       f'vm_snap word 4 ends {{p_armed, p_fresh, p_video}} (bit 2 = armed): {f4}')
+    ok(re.search(r'if\s*\(\(h\[4\]\s*>>\s*2\)\s*&\s*1\)\s*return\s*-1\s*;', s['vcpp']) is not None,
+       'the Main lands at the cell start (no time) when word 4 bit 2 is set')
     # word 2's fields: the RTL's concatenation, MSB first, against the Main's shifts
     m2 = re.search(r"5'd2:\s*dout_r\s*<=\s*\{([^}]*)\}\s*;", t)
     order = [x.strip() for x in m2.group(1).split(',')] if m2 else []
-    widths = {'busy_s': 1, 'vm_en': 1, 'slot_l': 2, 'ld_n': 2, 'sv_n': 2, 'len_s': 8}
+    widths = {'busy_s': 1, 'vm_en': 1, 'slot_l': 3, 'ld_n': 2, 'sv_n': 2, 'len_s': 7}
     pos, at = {}, 16
     for f in order:
         at -= widths.get(f, 99)
         pos[f] = at
-    want = {'busy_s': ('VMSNAP_BUSY', 1), 'vm_en': ('VMSNAP_VM_EN', 1), 'slot_l': ('VMSNAP_SLOT', 3),
+    want = {'busy_s': ('VMSNAP_BUSY', 1), 'vm_en': ('VMSNAP_VM_EN', 1), 'slot_l': ('VMSNAP_SLOT', 7),
             'ld_n': ('VMSNAP_LOAD_N', 3), 'sv_n': ('VMSNAP_SAVE_N', 3)}
     ok(at == 0 and set(order) == set(widths), f'vm_snap word 2 is the six fields, 16 bits ({order})')
     for f, (mac, mask) in want.items():
@@ -234,6 +260,11 @@ def run(txt, verbose=True):
 
 
 MUTATIONS = [
+    ('emu', '.hl_armed_in  (hl_btns_armed),', ".hl_armed_in  (1'b0),", 'the snapshot never records armed buttons'),
+    ('vcpp', 'if ((h[4] >> 2) & 1) return -1;', 'if ((h[4] >> 3) & 1) return -1;', 'the Main reads the armed bit one off'),
+    ('emu', ".keep_sel   (ss_keep_sel),", ".keep_sel   (1'b0),", 'nav_pci never keeps the restored button'),
+    ('emu', ".hli_arm        (hli_arm_w),        // the landing's HLI ends keep_sel",
+     ".hli_arm        (1'b0),        // the landing's HLI ends keep_sel", 'keep_sel never ends (no HLI arm)'),
     ('emu', '.nv_pck_lbn   (dsi_nv_pck_lbn),', '.nv_pck_lbn   (lin_blk_w),', 'position from the fetch pointer'),
     ('emu', '.first_ref_ea (dsi_1stref_ea),', '.first_ref_ea (dsi_vobu_ea),', 'has_video from the VOBU end'),
     ('emu', '.pos_clr      (load_flush),', ".pos_clr      (1'b0),", 'freshness never cleared'),
@@ -250,10 +281,10 @@ MUTATIONS = [
     ('emu', '.rst_done     (vm_rst_done),', ".rst_done     (1'b0),", 'vm_snap never hears the restore end'),
     ('snap', "parameter [7:0]  WORDS = 8'd96", "parameter [7:0]  WORDS = 8'd95", 'loads checked against the wrong length'),
     ('qsf', 'set_global_assignment -name SYSTEMVERILOG_FILE dvd/vm_snap.sv\n', '', 'qsf forgets the module'),
-    ('ctl', '#define DVD_VMSNAP_MAGIC    0x5E02', '#define DVD_VMSNAP_MAGIC    0x5E01', 'Main magic drifts'),
+    ('ctl', '#define DVD_VMSNAP_MAGIC    0x5E03', '#define DVD_VMSNAP_MAGIC    0x5E02', 'Main magic drifts (a 4-slot-layout Main)'),
     ('ctl', '#define UIO_DVD_VMSNAP      0x7D', '#define UIO_DVD_VMSNAP      0x7C', 'Main asks nav_trace'),
     ('ctl', '#define DVD_VMSNAP_HDR      19', '#define DVD_VMSNAP_HDR      18', 'Main header one short'),
-    ('ctl', '#define VMSNAP_SLOT(w2)     (((w2) >> 12) & 3)', '#define VMSNAP_SLOT(w2)     (((w2) >> 10) & 3)',
+    ('ctl', '#define VMSNAP_SLOT(w2)     (((w2) >> 11) & 7)', '#define VMSNAP_SLOT(w2)     (((w2) >> 11) & 3)',
      'the Main reads the load count as the slot'),
     ('snap', "5'd2: dout_r <= {busy_s, vm_en, slot_l, ld_n, sv_n, len_s};",
      "5'd2: dout_r <= {busy_s, vm_en, slot_l, sv_n, ld_n, len_s};", 'the RTL swaps the two counts'),
@@ -262,11 +293,15 @@ MUTATIONS = [
     ('emu', '.eltm         (whole_eltm_w),       // the HUD clock, at the demux front',
      '.eltm         (dsi_c_eltm),', 'the cell clock instead of the PGC clock'),
     ('emu', '.video_live   (video_live_s2),', ".video_live   (1'b1),", 'the seek fires before a picture'),
-    ('emu', '.ui_slot      (status[54:53]),', '.ui_slot      (status[53:52]),', 'the slot read off the wrong bits'),
+    ('emu', '.ui_slot      (status[59:57]),', '.ui_slot      (status[58:56]),', 'the slot read off the wrong bits'),
     ('emu', '.ui_load      (ss_load_edge),', '.ui_load      (ss_save_edge),', 'a save press counted as a load'),
     ('emu', '.vm_en        (menus_on),', ".vm_en        (1'b1),", 'loads sent to a disabled VM'),
     ('emu', 'wire ss_save_edge = status[55] & ~ss_save_q;', 'wire ss_save_edge = status[55];', 'a held bit is many saves'),
-    ('emu', '"P2R[56],Load Slot;",', '"P2R[57],Load Slot;",', 'the Load row on a bit the core never reads'),
+    ('emu', '"P6R[56],Load Slot;",', '"P6R[57],Load Slot;",', 'the Load row on a bit the core never reads'),
+    ('emu', '"H1D2P6,Save State;",', '"P6,Save State;",', 'the Save State page shown with no DVD-Video disc'),
+    ('emu', "status[1], ~rdr_dvd_video_w, interlaced_eff}", "status[1], rdr_dvd_video_w, interlaced_eff}",
+     'the Save State page hidden exactly when a DVD-Video disc IS mounted'),
+    ('emu', '.dvd_video      (rdr_dvd_video_w),', ".dvd_video      (),", 'the reader\'s dvd_video left open'),
     ('emu', '.ast_set       (ast_wb),', ".ast_set       (1'b0),", 'the Audio write-back never reaches the VM'),
     ('emu', 'if (aud_step_q) begin ast_wb <= 1\'b1; ast_wb_val <= {5\'d0, aud_log}; end',
      'if (aud_step_q) begin ast_wb <= 1\'b1; ast_wb_val <= {5\'d0, aud_cur}; end', 'the write-back from the user register, not the effective track'),

@@ -23,18 +23,21 @@
 // READOUT (the dvd_telem / nav_trace protocol: io_enable frames, io_strobe clocks one
 // word, the first strobe carries the command, the word answered at strobe k is word k;
 // io_din at strobe 1 is the host's control word)
-//   word 0  MAGIC 0x5E02 -- bit 15 clear: a core without this module never drives the
+//   word 0  MAGIC 0x5E03 -- bit 15 clear: a core without this module never drives the
 //           bus for 0x7D and hps_io answers 0, so 0 = ABSENT
 //   word 1  seq      completed snapshots (wrapping), latched at the command
-//   word 2  {busy, vm_en, slot[1:0], load_n[1:0], save_n[1:0], len[7:0]}  busy =
+//   word 2  {busy, vm_en, slot[2:0], load_n[1:0], save_n[1:0], len[6:0]}  busy =
 //           requested, not yet complete; len = words in the last completed snapshot
 //           (0 = none yet). The OSD's Save State rows (save states step 4,
 //           docs/nav_engine.md §11): save_n / load_n count "Save to Slot" / "Load
 //           Slot" presses (2-bit, wrapping: the Main acts when one MOVES, from a
 //           baseline it latches first), slot = the Slot row AT the last press, vm_en =
-//           Disc Menus is on (the VM runs; a restore needs it)
+//           Disc Menus is on (the VM runs; a restore needs it). 8 slots (2026-10-30):
+//           slot took len's top bit (len <= 127: the buffer is 128 words) and MAGIC
+//           went 0x5E02 -> 0x5E03, so a Main built for the 4-slot layout refuses this
+//           core rather than reading its counters off the wrong bits.
 //   word 3  fmt      the layout id the words follow (tools/nav_isa.py snap_fmt())
-//   word 4  {verdict[2:0], rcount[4:0], 6'd0, pos_fresh, has_video}: the last LOAD's
+//   word 4  {verdict[2:0], rcount[4:0], 5'd0, hl_armed, pos_fresh, has_video}: the last LOAD's
 //           verdict (0 none, 1 pending -- checked, waiting for the VM to rest, 2 applied,
 //           3 refused: format, 4 refused: length, 5 refused: checksum, 6 refused: a
 //           restore or a snapshot was still pending, 7 refused: Disc Menus is off --
@@ -43,7 +46,11 @@
 //           pos_fresh = a NAV pack has been parsed since
 //           the last flush (else the position below is stale); has_video = that VOBU's
 //           1stref_ea != 0, i.e. it carries a picture (docs/save_states.md §5g: a
-//           restore must not land in a VOBU without one)
+//           restore must not land in a VOBU without one); hl_armed = buttons were armed
+//           when the snapshot was taken (nav_pci btns_armed, latched at snap_done): the
+//           Main then saves no exact time and a load lands at the cell's start, because
+//           a shootout's reticle bitmap arrives with the window's first frames and an
+//           exact landing skips it (docs/nav_engine.md 11g)
 //   word 5,6    nv_pck_lbn[31:16], [15:0]   the playhead: the VOBU on screen
 //   word 7,8    prev_video[31:16], [15:0]   VOBU_SRI prev_video: the last VOBU with video
 //   word 9,10   c_eltm[31:16], [15:0]       cell elapsed time (BCD)
@@ -95,7 +102,7 @@
 
 module vm_snap #(
     parameter [15:0] CMD   = 16'h007D,   // free: Main 0x00-0x44, 0x61-63, 0xF0-F9; 0x7A/0x7B dvd_telem, 0x7C nav_trace
-    parameter [15:0] MAGIC = 16'h5E02,
+    parameter [15:0] MAGIC = 16'h5E03,
     parameter [7:0]  WORDS = 8'd96,      // = USNAP_WORDS (check_vm_snap_wiring.py pins it)
     parameter [26:0] SEEK_WD = 27'd81_000_000   // ~3 s at clk_sys: give the landing up
 ) (
@@ -136,17 +143,22 @@ module vm_snap #(
     // --- the OSD's Save State rows (save states step 4) -------------------------
     input         ui_save,               // pulse: "Save to Slot" pressed
     input         ui_load,               // pulse: "Load Slot" pressed
-    input   [1:0] ui_slot,               // the Slot row (0 = slot 1)
+    input   [2:0] ui_slot,               // the Slot row (0 = slot 1 .. 7 = slot 8)
     input         vm_en,                 // Disc Menus on: dvd_vm's enable
 
     // --- the landing's time seek (emu ORs it into the scrub seek) ---------------
     input         pgc_loaded,            // the reader loaded a PGC
     input         video_live,            // the display shows a decoded picture
     input         menu_active,           // the loaded PGC is a menu
+    input         hl_armed_in,           // nav_pci: buttons are armed now (latched into the header at snap_done)
     input         mount,                 // start_streaming: a new disc
     output reg        rst_seek_pulse,
     output reg [16:0] rst_seek_secs,
-    output reg [31:0] rst_seek_rbn
+    output reg [31:0] rst_seek_rbn,
+
+    // --- the restored highlight (nav_pci) ----------------------------------------
+    input         hli_arm,               // nav_pci: an HLI with buttons was promoted
+    output reg    keep_sel               // the restored SPRM8 beats the HLI's forced select
 );
 
     localparam [4:0] HDR = 5'd19;
@@ -181,8 +193,9 @@ module vm_snap #(
     reg  [4:0]  rcount;
     reg  [15:0] seq;
     reg  [7:0]  len;
-    reg  [1:0]  sv_n, ld_n, slot_l;      // the OSD's presses, and the slot at the last one
-    reg         p_fresh, p_video;
+    reg  [1:0]  sv_n, ld_n;              // the OSD's presses
+    reg  [2:0]  slot_l;                  // ...and the slot at the last one
+    reg         p_fresh, p_video, p_armed;
     reg  [31:0] p_lbn, p_prev, p_eltm, p_tm, p_sptm, p_stc;
     reg  [15:0] p_vob;
     reg  [7:0]  p_cid;
@@ -192,10 +205,10 @@ module vm_snap #(
             snap_req <= 1'b0; busy <= 1'b0; wa <= 7'd0; seq <= 16'd0; len <= 8'd0;
             restore_req <= 1'b0; rbusy <= 1'b0; verdict <= 3'd0; rcount <= 5'd0;
             l_tm <= 16'hFFFF; l_rbn <= 32'd0;
-            fresh <= 1'b0; p_fresh <= 1'b0; p_video <= 1'b0;
+            fresh <= 1'b0; p_fresh <= 1'b0; p_video <= 1'b0; p_armed <= 1'b0;
             p_lbn <= 32'd0; p_prev <= 32'd0; p_eltm <= 32'd0; p_vob <= 16'd0; p_cid <= 8'd0;
             p_tm <= 32'd0; p_sptm <= 32'd0; p_stc <= 32'd0;
-            sv_n <= 2'd0; ld_n <= 2'd0; slot_l <= 2'd0;
+            sv_n <= 2'd0; ld_n <= 2'd0; slot_l <= 3'd0;
         end else begin
             if (ui_save) sv_n <= sv_n + 2'd1;
             if (ui_load) ld_n <= ld_n + 2'd1;
@@ -228,7 +241,7 @@ module vm_snap #(
             if (snap_done) begin
                 busy <= 1'b0; seq <= seq + 16'd1;
                 len  <= {1'b0, wa};          // snap_done trails the last word by a cycle
-                p_fresh <= fresh; p_video <= |first_ref_ea;
+                p_fresh <= fresh; p_video <= |first_ref_ea; p_armed <= hl_armed_in;
                 p_lbn <= nv_pck_lbn; p_prev <= prev_video; p_eltm <= c_eltm;
                 p_vob <= vob_idn; p_cid <= c_idn;
                 p_tm <= eltm; p_sptm <= vobu_sptm; p_stc <= stc[31:0];
@@ -267,6 +280,34 @@ module vm_snap #(
         end
     end
 
+    // ---- the restored highlight -------------------------------------------------
+    // A save on a menu stores the live selection in SPRM8 (dvd_vm's sprm8_eff), and the
+    // restore writes it back; nav_pci re-seeds from it after the flush. But the landing
+    // re-presents the menu's HLI to a fresh nav_pci, and an HLI authoring a forced select
+    // (fosl) takes the highlight there, as on any entry: Mad Dog's route menu (VTS 12,
+    // fosl 1) saved on button 2 loaded on button 1 (2026-10-30, maintainer's report).
+    // keep_sel tells nav_pci the restored selection wins, for the landing's HLI only:
+    // set as the restore issues its jump; held through the restore's own PGC load and
+    // the landing's time seek (an HLI armed before that seek is not the landing's);
+    // dropped by the first HLI armed after it, or by any later PGC load (something else
+    // came first: every other entry keeps libdvdnav's forced select).
+    reg own_pgc;
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            keep_sel <= 1'b0; own_pgc <= 1'b0;
+        end else if (mount) begin
+            keep_sel <= 1'b0; own_pgc <= 1'b0;
+        end else if (rst_done && rbusy) begin
+            keep_sel <= 1'b1; own_pgc <= 1'b0;
+        end else if (keep_sel) begin
+            if (pgc_loaded) begin
+                if (own_pgc) keep_sel <= 1'b0;   // a later PGC: not the landing's
+                own_pgc <= 1'b1;
+            end else if (hli_arm && own_pgc && rs == RS_IDLE)
+                keep_sel <= 1'b0;                // the landing's HLI took it
+        end
+    end
+
     // ---- readout ---------------------------------------------------------------
     reg  [4:0]  wcnt;                    // header word index, saturates at HDR
     reg  [7:0]  bcnt;                    // strobes in this transaction (a load's word index)
@@ -274,13 +315,13 @@ module vm_snap #(
     reg  [15:0] dout_r;
     reg  [7:0]  left;                    // payload words still to send
     reg  [15:0] seq_s;
-    reg  [7:0]  len_s;
+    reg  [6:0]  len_s;                   // len <= 127 (wa is 7 bits): word 2 has 7
     reg         busy_s;
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             wcnt <= 5'd0; active <= 1'b0; dout_r <= 16'd0; left <= 8'd0; raddr <= 7'd0;
-            seq_s <= 16'd0; len_s <= 8'd0; busy_s <= 1'b0; req_l <= 1'b0;
+            seq_s <= 16'd0; len_s <= 7'd0; busy_s <= 1'b0; req_l <= 1'b0;
             load_l <= 1'b0; h_we <= 1'b0; h_wa <= 7'd0; h_wd <= 16'd0;
             h_fmt <= 16'd0; h_len <= 16'd0; h_sum <= 16'd0; h_acc <= 16'd0; h_cnt <= 8'd0;
             h_tm <= 16'hFFFF; h_rbnh <= 16'd0; h_rbnl <= 16'd0;
@@ -317,7 +358,7 @@ module vm_snap #(
                 active <= (io_din == CMD);
                 if (io_din == CMD) begin
                     seq_s  <= seq;
-                    len_s  <= len;
+                    len_s  <= len[6:0];
                     busy_s <= busy;
                     left   <= busy ? 8'd0 : len;   // never stream a buffer being written
                     dout_r <= MAGIC;
@@ -330,7 +371,7 @@ module vm_snap #(
                     end
                     5'd2: dout_r <= {busy_s, vm_en, slot_l, ld_n, sv_n, len_s};
                     5'd3: dout_r <= snap_fmt;
-                    5'd4: dout_r <= {verdict, rcount, 6'd0, p_fresh, p_video};
+                    5'd4: dout_r <= {verdict, rcount, 5'd0, p_armed, p_fresh, p_video};
                     5'd5: dout_r <= p_lbn[31:16];
                     5'd6: dout_r <= p_lbn[15:0];
                     5'd7: dout_r <= p_prev[31:16];

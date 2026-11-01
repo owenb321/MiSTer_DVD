@@ -29,7 +29,7 @@ core.
 3. **A connection that carries line 21.** Composite and S-video always do. Component does
    on many sets. **Consumer sets generally do not slice captions from RGB**, so an RGB
    SCART path often will not work even though the waveform is present on all three channels.
-4. **`Line-21 CC` on** — Debug page, default On.
+4. **`Line-21 CC` on** — Subtitles & CC page, default On.
 5. **Your television set to `C1`.** Not the DVD's own subtitle menu — the TV's caption
    setting. `C1` is the correct choice: CC1 and CC2 both ride field 1, and field 2 is empty
    on practically every disc surveyed, so `C2`, `T1` and `T2` will show nothing.
