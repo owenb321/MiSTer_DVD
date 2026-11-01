@@ -654,7 +654,7 @@ the layer-0 end or with a VOB boundary. The layer break itself is logged once pe
 READ DVD STRUCTURE format 0: `layers: 2, opposite track path, layer 0 ends at LBA … (layer 1
 from …)`.
 
-## A plain .iso behind the ring (2026-11-01, `feature/iso-readahead`)
+## A plain .iso behind the ring (2026-11-01, ✅ HIL A/B on the rig, MERGED PR #184)
 
 **Why.** The read-ahead below was built for drives, but it named network shares as its job
 and plain images never reached it: `dvd_css_open_image()` returned 0 for anything not
