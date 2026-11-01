@@ -45,6 +45,19 @@ int dvd_vmsnap_peek(uint16_t *w2)
 	return 1;
 }
 
+int dvd_vmsnap_peek4(uint16_t *w2, uint16_t *w4)
+{
+	uint16_t m = spi_uio_cmd_cont(UIO_DVD_VMSNAP);
+	spi_w(0);
+	uint16_t v2 = spi_w(0);
+	spi_w(0);
+	uint16_t v4 = spi_w(0);
+	DisableIO();
+	if (m != DVD_VMSNAP_MAGIC) return 0;
+	*w2 = v2; *w4 = v4;
+	return 1;
+}
+
 // THE DISPLAYED PICTURE'S TIME (docs/nav_engine.md §10). The core's clock (eltm, BCD
 // dvd_time) is the PGC time of the VOBU the demux just parsed, which leads the picture
 // by the decoder's buffer -- seconds in a low-bitrate cell. sptm is that VOBU's start

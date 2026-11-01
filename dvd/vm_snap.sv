@@ -37,7 +37,8 @@
 //           went 0x5E02 -> 0x5E03, so a Main built for the 4-slot layout refuses this
 //           core rather than reading its counters off the wrong bits.
 //   word 3  fmt      the layout id the words follow (tools/nav_isa.py snap_fmt())
-//   word 4  {verdict[2:0], rcount[4:0], 5'd0, hl_armed, pos_fresh, has_video}: the last LOAD's
+//   word 4  {verdict[2:0], rcount[4:0], 4'd0, auto, hl_armed, pos_fresh, has_video}: auto = the Slot
+//           row was "Autosave" at the last press (autosave, docs/nav_engine.md §11i); the last LOAD's
 //           verdict (0 none, 1 pending -- checked, waiting for the VM to rest, 2 applied,
 //           3 refused: format, 4 refused: length, 5 refused: checksum, 6 refused: a
 //           restore or a snapshot was still pending, 7 refused: Disc Menus is off --
@@ -144,6 +145,7 @@ module vm_snap #(
     input         ui_save,               // pulse: "Save to Slot" pressed
     input         ui_load,               // pulse: "Load Slot" pressed
     input   [2:0] ui_slot,               // the Slot row (0 = slot 1 .. 7 = slot 8)
+    input         ui_auto,               // the Slot row's ninth value: the Autosave (ui_slot is 0)
     input         vm_en,                 // Disc Menus on: dvd_vm's enable
 
     // --- the landing's time seek (emu ORs it into the scrub seek) ---------------
@@ -195,6 +197,7 @@ module vm_snap #(
     reg  [7:0]  len;
     reg  [1:0]  sv_n, ld_n;              // the OSD's presses
     reg  [2:0]  slot_l;                  // ...and the slot at the last one
+    reg         auto_l;                  // ...and whether it was the Autosave (word 4 bit 3)
     reg         p_fresh, p_video, p_armed;
     reg  [31:0] p_lbn, p_prev, p_eltm, p_tm, p_sptm, p_stc;
     reg  [15:0] p_vob;
@@ -208,11 +211,11 @@ module vm_snap #(
             fresh <= 1'b0; p_fresh <= 1'b0; p_video <= 1'b0; p_armed <= 1'b0;
             p_lbn <= 32'd0; p_prev <= 32'd0; p_eltm <= 32'd0; p_vob <= 16'd0; p_cid <= 8'd0;
             p_tm <= 32'd0; p_sptm <= 32'd0; p_stc <= 32'd0;
-            sv_n <= 2'd0; ld_n <= 2'd0; slot_l <= 3'd0;
+            sv_n <= 2'd0; ld_n <= 2'd0; slot_l <= 3'd0; auto_l <= 1'b0;
         end else begin
             if (ui_save) sv_n <= sv_n + 2'd1;
             if (ui_load) ld_n <= ld_n + 2'd1;
-            if (ui_save | ui_load) slot_l <= ui_slot;
+            if (ui_save | ui_load) begin slot_l <= ui_slot; auto_l <= ui_auto; end
             snap_req <= 1'b0;
             restore_req <= 1'b0;
             if (pos_clr)         fresh <= 1'b0;
@@ -371,7 +374,7 @@ module vm_snap #(
                     end
                     5'd2: dout_r <= {busy_s, vm_en, slot_l, ld_n, sv_n, len_s};
                     5'd3: dout_r <= snap_fmt;
-                    5'd4: dout_r <= {verdict, rcount, 5'd0, p_armed, p_fresh, p_video};
+                    5'd4: dout_r <= {verdict, rcount, 4'd0, auto_l, p_armed, p_fresh, p_video};
                     5'd5: dout_r <= p_lbn[31:16];
                     5'd6: dout_r <= p_lbn[15:0];
                     5'd7: dout_r <= p_prev[31:16];

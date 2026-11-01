@@ -128,7 +128,7 @@ PYEOF
 
     # ---- the OSD's Save State rows (save states step 4) ----
     mut "S22 the slot read live, not at the press" "ui" \
-        "if (ui_save | ui_load) slot_l <= ui_slot;" "slot_l <= ui_slot;"
+        "if (ui_save | ui_load) begin slot_l <= ui_slot; auto_l <= ui_auto; end" "begin slot_l <= ui_slot; auto_l <= ui_auto; end"
     mut "S23 a load press counted as a save"     "ui" \
         "if (ui_load) ld_n <= ld_n + 2'd1;" "if (ui_load) sv_n <= sv_n + 2'd1;"
     # [ui] runs with enable on, so a constant 1 only shows once Disc Menus goes off
@@ -137,11 +137,16 @@ PYEOF
     mut "S25 a load with Disc Menus off accepted" "menusoff" \
         "else if (!vm_en)                verdict <= 3'd7;   // Disc Menus off: never taken" "else if (1'b0)                  verdict <= 3'd7;"
 
+    mut "S38 the autosave flag read live"         "ui" \
+        "5'd4: dout_r <= {verdict, rcount, 4'd0, auto_l, p_armed, p_fresh, p_video};" "5'd4: dout_r <= {verdict, rcount, 4'd0, ui_auto, p_armed, p_fresh, p_video};"
+    mut "S39 the autosave flag never latched"     "ui" \
+        "begin slot_l <= ui_slot; auto_l <= ui_auto; end" "begin slot_l <= ui_slot; auto_l <= 1'b0; end"
+
     # ---- the armed bit (the Main lands at the cell start: Mad Dog's hideout reticle) ----
     mut "S36 hl_armed never latched"             "armed" \
         "p_video <= |first_ref_ea; p_armed <= hl_armed_in;" "p_video <= |first_ref_ea; p_armed <= 1'b0;"
     mut "S37 hl_armed read live, not at done"    "armed" \
-        "5'd4: dout_r <= {verdict, rcount, 5'd0, p_armed, p_fresh, p_video};" "5'd4: dout_r <= {verdict, rcount, 5'd0, hl_armed_in, p_fresh, p_video};"
+        "5'd4: dout_r <= {verdict, rcount, 4'd0, auto_l, p_armed, p_fresh, p_video};" "5'd4: dout_r <= {verdict, rcount, 4'd0, auto_l, hl_armed_in, p_fresh, p_video};"
 
     # ---- the restored highlight (keep_sel -> nav_pci; Mad Dog's route menu) ----
     mut "S31 keep_sel never set"                 "keep" \

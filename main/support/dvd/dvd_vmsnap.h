@@ -30,6 +30,12 @@
 #define VMSNAP_SAVE_N(w2)   (((w2) >> 7) & 3)
 #define VMSNAP_LEN(w2)      ((w2) & 0x7F)
 
+// Header word 4 [3]: the Slot row was "Autosave" at the last press (the slot field of
+// word 2 is then 0). [2:0] = {hl_armed, pos_fresh, has_video}. docs/nav_engine.md §11i.
+#define VMSNAP_AUTO(w4)     (((w4) >> 3) & 1)
+#define VMSNAP_FRESH(w4)    (((w4) >> 1) & 1)
+#define VMSNAP_ARMED(w4)    (((w4) >> 2) & 1)
+
 // Header word 4 [15:13]: the last LOAD's verdict.
 enum { VL_NONE = 0, VL_PENDING, VL_APPLIED, VL_BAD_FMT, VL_BAD_LEN, VL_BAD_SUM,
        VL_BUSY, VL_MENUS_OFF };
@@ -46,6 +52,9 @@ int dvd_vmsnap_fetch(uint16_t seq0, uint16_t *h, uint16_t *w);
 // Read header words 0..2 only: the cheap poll for the OSD's requests.
 // -> 1 and *w2 = word 2, or 0 the core has no 0x7D.
 int dvd_vmsnap_peek(uint16_t *w2);
+
+// Like dvd_vmsnap_peek, and word 4 too (*w4: the Autosave flag and the position bits).
+int dvd_vmsnap_peek4(uint16_t *w2, uint16_t *w4);
 
 // The displayed picture's whole PGC seconds from a snapshot's header, or -1 when it
 // cannot be trusted (a load then lands at the saved cell's start). docs/nav_engine.md §10.

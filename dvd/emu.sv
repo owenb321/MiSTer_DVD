@@ -1033,6 +1033,10 @@ parameter CONF_STR = {
     // the Slot row AT each one, so moving the row afterwards cannot redirect it.
     // ⚠ Bits 53-56 were never allocated: no "v,N" bump, nobody's settings reset. It
     // IS a CONF_STR edit, so it re-rolls the pinned fitter SEED.
+    // Autosave (2026-10-31): the Slot row's ninth value, 8 in O[60:57] = bit 60 set over a
+    // zero slot. Bit 60 was never allocated, so a saved config reads slots 1-8 as before
+    // and no "v,N" bump is needed. "Load Slot" with it loads the file the Main wrote at
+    // the last disc change or core exit (docs/nav_engine.md §11i).
     // 8 slots (2026-10-30): the Slot row moved to fresh bits 57-59 rather than
     // widening onto bit 52, so an older saved config reads slot 1, not a shifted
     // number; 53-54 are retired (still never released, still no "v,N" bump).
@@ -1041,7 +1045,7 @@ parameter CONF_STR = {
     // D2: greyed with Disc Menus off (bit 2 = ~menus_on: the VM a save state is
     // made of is not running). check_vm_snap_wiring.py pins both. Page 6.
     "H1D2P6,Save State;",
-    "P6O[59:57],Slot,1,2,3,4,5,6,7,8;",
+    "P6O[60:57],Slot,1,2,3,4,5,6,7,8,Autosave;",
     "P6R[55],Save to Slot;",
     "P6R[56],Load Slot;",
     // (DVD-FORK dual raster: the bogus "O[10],Direct Video,Off,On;" entry that used
@@ -6720,6 +6724,7 @@ vm_snap vm_snap_inst (
     .ui_save      (ss_save_edge),       // the OSD's "Save to Slot"
     .ui_load      (ss_load_edge),       // the OSD's "Load Slot"
     .ui_slot      (status[59:57]),      // the Slot row (8 slots)
+    .ui_auto      (status[60]),         // ...and its ninth value, Autosave (bit 60: never allocated)
     .vm_en        (menus_on),           // = dvd_vm's enable
     .pgc_loaded   (pgc_loaded),
     .video_live   (video_live_s2),

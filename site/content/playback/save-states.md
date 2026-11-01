@@ -5,7 +5,7 @@ Interactive DVDs are real games. Wickles Manor in *Scooby-Doo 2*, the question d
 states every load starts them from the beginning.
 
 Save states let you keep that progress. You get **eight numbered slots per disc**, from the
-OSD.
+OSD, and the player keeps an [autosave](#autosave) of its own.
 
 They also work as bookmarks on ordinary films: stop halfway through a long film, come back
 tomorrow, and carry on.
@@ -33,6 +33,27 @@ straight back to where you were and confirms `Loaded slot N`.
 
 You can load at any time: during a film, in a menu, or while the disc is still playing its
 opening logos.
+
+## Autosave
+
+The player also keeps your place by itself. When you **load another disc**, **eject**, or
+**leave the DVD core** (to the MiSTer menu or another core), it writes the disc's state to
+a separate autosave file, without a message. It never touches your eight slots.
+
+To go back: mount the disc, open the **Save State** page, set **Slot** to **Autosave** and
+choose **Load Slot**. The player confirms `Loaded autosave`. If there is none, it says
+`Autosave is empty`. Choosing **Save to Slot** on **Autosave** does nothing but say
+`Autosave is written for you`.
+
+Each disc has one autosave, and each new one replaces the last. It is deliberately careful
+not to overwrite a good one with a bad one:
+
+- **A disc only just mounted is not saved.** Nothing is kept in the first ten seconds
+  after a mount, and nothing is kept if the disc has shown neither a picture nor a menu
+  since it started, so leaving straight away cannot replace the place you actually left.
+- **Disc Menus must be on**, as for any save state.
+- **Only an orderly exit counts.** Switching off the power, pressing the reset button or a
+  crash does not write one. Use a numbered slot before you do any of those.
 
 ## What gets saved
 
@@ -108,6 +129,8 @@ greyed out. If a press does reach the player, it says `Save states need Disc Men
 | `Saved to slot N` | Done. |
 | `Loaded slot N` | Done. |
 | `Slot N is empty` | Nothing has been saved there yet for this disc. |
+| `Loaded autosave` / `Autosave is empty` | The same, for the **Autosave** value of **Slot**. See [Autosave](#autosave). |
+| `Autosave is written for you` | **Save to Slot** was pressed with **Slot** on **Autosave**. Pick 1 to 8 to save by hand. |
 | `That save is from a different disc` | The file was copied or renamed from another disc. |
 | `This disc has no save slots` | Nothing is loaded, or what is loaded is not a DVD-Video disc (a VCD, an SVCD, a video file). |
 | `Save states need Disc Menus on` | Disc Menus is Off. See [Disc Menus must be on](#disc-menus-must-be-on). |

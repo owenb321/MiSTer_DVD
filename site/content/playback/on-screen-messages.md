@@ -86,6 +86,8 @@ notice box rather than over the picture.
 | `Saved to slot N` | The state was written. |
 | `Loaded slot N` | The state was restored; playback re-seeks. |
 | `Slot N is empty` | Nothing has been saved there for this disc yet. |
+| `Loaded autosave` / `Autosave is empty` | The autosave (the **Autosave** value of **Slot**) was restored, or the disc has none. |
+| `Autosave is written for you` | **Save to Slot** was pressed on **Autosave**; pick a number to save by hand. |
 | `That save is from a different disc` | The file was copied or renamed from another disc, and was refused. |
 | `This disc has no save slots` | Nothing is loaded, or the loaded item is not a DVD-Video disc (VCD, SVCD, a video file). |
 | `Save states need Disc Menus on` | Disc Menus is Off, so the disc's own program, which a save state holds, is not running. |

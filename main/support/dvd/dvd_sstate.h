@@ -15,6 +15,9 @@
 
 // The OSD's Slot row (O[59:57], 1..8; vm_snap word 2's 3-bit slot). Four until 2026-10-30.
 #define DVD_SSTATE_SLOTS 8
+// The Slot row's ninth value (O[60:57] = 8, vm_snap word 4 bit 3): the file the Main writes
+// itself at a disc change and a core exit, <id>_auto.ss. Never a manual save target.
+#define DVD_SSTATE_AUTO  DVD_SSTATE_SLOTS
 
 #include <stddef.h>
 #include <stdint.h>
@@ -54,6 +57,15 @@ void dvd_sstate_note_mount(const char *src);
 
 // "<provider>-<16 hex>" (or "DVD-<16 hex>"), or NULL when nothing identifiable is mounted.
 const char *dvd_sstate_disc_id(void);
+
+// AUTOSAVE (docs/nav_engine.md §11i): write the player's state to the disc's autosave file
+// NOW, silently, or do nothing. Called where the old disc is about to be torn down: a new
+// mount or an eject (dvd_sstate_note_mount calls it itself) and a core switch
+// (fpga_load_rbf, integration step 60). It waits (bounded, ~300 ms) for the VM to rest,
+// because after it returns the state is gone; so it runs on the poll thread and raises
+// no UI. Skipped without a disc identity, with Disc Menus off, with no picture or buttons
+// since the last flush, and in the first seconds after a mount (the boot is not progress).
+void dvd_sstate_autosave_flush(void);
 
 // Poll the core's Save/Load counters and run the request. Self-throttled to 20 ms.
 void dvd_sstate_tick(void);

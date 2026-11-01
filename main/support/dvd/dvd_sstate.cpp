@@ -64,6 +64,8 @@ static unsigned ss_now_ms(void)
 #define DIR_MAX_SECTORS 16
 
 static char disc_id[80] = {0};
+static unsigned mount_t;          // when the current disc was mounted (autosave's grace)
+static int      mounted;           // ... and whether any mount has been seen
 
 typedef int (*sec_read_fn)(void *ctx, uint32_t lba, uint8_t *buf);
 
@@ -189,6 +191,10 @@ static void resolve_pending_phys(void)
 
 void dvd_sstate_note_mount(const char *src)
 {
+	// The old disc is still playing here (the core has not seen the new mount yet), so
+	// this is the moment to keep its place. A no-op when nothing was playing.
+	dvd_sstate_autosave_flush();
+	mount_t = ss_now_ms(); mounted = 1;
 	disc_id[0] = 0;
 	phys_pending = 0;
 	if (!src || !*src) return;
@@ -232,7 +238,7 @@ const char *dvd_sstate_disc_id(void)
 int dvd_sstate_slot_path(int slot, char *out, size_t cap)
 {
 	resolve_pending_phys();
-	if (!disc_id[0] || slot < 0 || slot >= DVD_SSTATE_SLOTS || cap < 8) return 0;
+	if (!disc_id[0] || slot < 0 || slot > DVD_SSTATE_AUTO || cap < 8) return 0;
 	// The framework's directory and naming (savestates/<core>/<name>_N.ss, relative to
 	// getRootDir() like every other file Main opens), keyed on the DISC.
 	//
@@ -241,7 +247,9 @@ int dvd_sstate_slot_path(int slot, char *out, size_t cap)
 	// sprintf(NULL) -- that SIGSEGV is what killed the Main on the shelved branch's
 	// first rig round (docs/save_states.md §5b there).
 	create_path(SAVESTATE_DIR, CoreName2);
-	int n = snprintf(out, cap, "%s/%s/%s_%d.ss", SAVESTATE_DIR, CoreName2, disc_id, slot + 1);
+	int n = slot == DVD_SSTATE_AUTO
+		? snprintf(out, cap, "%s/%s/%s_auto.ss", SAVESTATE_DIR, CoreName2, disc_id)
+		: snprintf(out, cap, "%s/%s/%s_%d.ss", SAVESTATE_DIR, CoreName2, disc_id, slot + 1);
 	return n > 0 && (size_t)n < cap;
 }
 
@@ -313,7 +321,15 @@ static uint16_t op_seq0;
 static void say(const char *fmt, int slot)
 {
 	char msg[96];
-	snprintf(msg, sizeof(msg), fmt, slot + 1);
+	// The Autosave is not a numbered slot: "Loaded slot %d" -> "Loaded autosave",
+	// "Slot %d is empty" -> "Autosave is empty".
+	const char *p = slot == DVD_SSTATE_AUTO ? strstr(fmt, "lot %d") : 0;
+	if (p)
+	{
+		snprintf(msg, sizeof(msg), "%.*s%s%s", (int)(p - 1 - fmt), fmt,
+		         p[-1] == 'S' ? "Autosave" : "autosave", p + 6);
+	}
+	else snprintf(msg, sizeof(msg), fmt, slot + 1);
 	ss_log("DVD_SSTATE: %s", msg);
 	InfoMessage(msg, 2500, "DVD");
 }
@@ -339,6 +355,7 @@ static int refuse_common(uint16_t w2, char *path, size_t cap, int slot)
 static void start_save(uint16_t w2, int slot)
 {
 	char path[1024];
+	if (slot == DVD_SSTATE_AUTO) { say("Autosave is written for you", slot); return; }
 	if (refuse_common(w2, path, sizeof(path), slot)) return;
 	if (!dvd_vmsnap_ask(&op_seq0)) return;            // no 0x7D: cannot happen after a peek
 	op = SS_SAVING; op_slot = slot; op_t0 = ss_now_ms();
@@ -425,9 +442,83 @@ static void poll_load(unsigned now)
 	}
 }
 
-void dvd_sstate_tick(void)
+// ---------------------------------------------------------------------------
+// Autosave (docs/nav_engine.md §11i)
+// ---------------------------------------------------------------------------
+#define AUTO_WAIT_MS   300      // the most a mount or a core switch waits for the VM to rest
+#define AUTO_STEP_MS   10
+#define AUTO_GRACE_MS  10000    // a disc younger than this has not played anything worth keeping
+#ifndef DVD_SSTATE_SLEEP_MS
+#define DVD_SSTATE_SLEEP_MS(ms) usleep((ms) * 1000)
+#endif
+
+static void abs_path(const char *p, char *out, size_t cap)
+{
+	if (p[0] == '/') snprintf(out, cap, "%s", p);
+	else snprintf(out, cap, "%s/%s", getRootDir(), p);
+}
+
+void dvd_sstate_autosave_flush(void)
 {
 	if (!is_dvd()) return;
+	// ⚠ A boot is not progress. A disc mounted a moment ago is at its logos or its first
+	// menu, and keeping THAT would replace the place the user actually left it at (the
+	// core's own remount of the last disc at load, then an immediate core switch). The
+	// snapshot's pos_fresh / armed bits below catch a core that has played nothing at all.
+	if (!mounted || ss_now_ms() - mount_t < AUTO_GRACE_MS) return;
+	char path[1024];
+	if (!dvd_sstate_slot_path(DVD_SSTATE_AUTO, path, sizeof(path))) return;
+	uint16_t w2, w4;
+	if (!dvd_vmsnap_peek4(&w2, &w4) || !VMSNAP_VM_EN(w2)) return;
+
+	op = SS_IDLE;               // a manual request in flight dies with the disc
+	uint16_t seq0, h[DVD_VMSNAP_HDR];
+	static uint16_t w[DVD_VMSNAP_MAXW];
+	if (!dvd_vmsnap_ask(&seq0)) return;
+	int n;
+	unsigned t0 = ss_now_ms();
+	while ((n = dvd_vmsnap_fetch(seq0, h, w)) == 0)
+	{
+		if (ss_now_ms() - t0 >= AUTO_WAIT_MS) break;
+		DVD_SSTATE_SLEEP_MS(AUTO_STEP_MS);
+	}
+	if (n <= 0) { ss_log("DVD_SSTATE: autosave skipped: no snapshot in %d ms", AUTO_WAIT_MS); return; }
+	if (!VMSNAP_FRESH(h[4]) && !VMSNAP_ARMED(h[4]))
+	{
+		ss_log("DVD_SSTATE: autosave skipped: no NAV pack or buttons since the last flush");
+		return;
+	}
+	static uint8_t buf[DVD_SSTATE_MAX];
+	size_t len = build_file(buf, h, w, n);
+	// Written beside the file and renamed over it: a power cut mid-write must leave the
+	// previous autosave, not half of the new one.
+	char tmp[1100], a_tmp[1200], a_dst[1200];
+	snprintf(tmp, sizeof(tmp), "%s.tmp", path);
+	fileTYPE f = {};
+	if (!FileOpenEx(&f, tmp, O_CREAT | O_TRUNC | O_RDWR | O_SYNC))
+	{
+		ss_log("DVD_SSTATE: autosave: cannot create %s", tmp);
+		return;
+	}
+	int wrote = FileWriteAdv(&f, buf, (int)len);
+	FileClose(&f);
+	abs_path(tmp, a_tmp, sizeof(a_tmp));
+	abs_path(path, a_dst, sizeof(a_dst));
+	if (wrote != (int)len || rename(a_tmp, a_dst))
+	{
+		ss_log("DVD_SSTATE: autosave: could not write %s", path);
+		remove(a_tmp);
+		return;
+	}
+	ss_log("DVD_SSTATE: autosave -> %s: %d words, fmt %04x, land at %d s", path, n, h[3],
+	       dvd_vmsnap_disp_secs_h(h));
+}
+
+void dvd_sstate_tick(void)
+{
+	// Another core is running: the next DVD core load is a fresh session, whatever mount
+	// it replays first (autosave's grace starts again at that mount).
+	if (!is_dvd()) { mounted = 0; return; }
 
 	// Self-throttled: user_io_poll() spins with no sleep.
 	static unsigned last = 0;
@@ -445,8 +536,8 @@ void dvd_sstate_tick(void)
 
 	static int have_ref = 0;
 	static int ref_save = 0, ref_load = 0;
-	uint16_t w2;
-	if (!dvd_vmsnap_peek(&w2))
+	uint16_t w2, w4;
+	if (!dvd_vmsnap_peek4(&w2, &w4))
 	{
 		// An older core: drop the baseline, so a newer core re-latches rather than
 		// diffing against a stale one.
@@ -463,7 +554,7 @@ void dvd_sstate_tick(void)
 	}
 	// 2-bit wrapping counts: act if one MOVED, once, whatever it moved by. Two presses
 	// between polls are one save of the state as it is now.
-	int slot = VMSNAP_SLOT(w2);
+	int slot = VMSNAP_AUTO(w4) ? DVD_SSTATE_AUTO : VMSNAP_SLOT(w2);
 	if (sv != ref_save) { ref_save = sv; start_save(w2, slot); return; }
 	if (ld != ref_load) { ref_load = ld; start_load(w2, slot); return; }
 }

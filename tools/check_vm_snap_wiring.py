@@ -13,7 +13,7 @@ passes every bench, and saves a place the viewer was never at.
 
 WHAT IS PINNED
   emu.sv        every vm_snap port, by expression; the Save State rows' bits in
-                CONF_STR (Slot O[59:57], Save R[55], Load R[56]) and their edges; dvd_vm's five snap_* ports on the
+                CONF_STR (Slot O[60:57], Save R[55], Load R[56]) and their edges; dvd_vm's five snap_* ports on the
                 same nets; nav_dsi's 1stref_ea / prev_video connected to the nets
                 vm_snap reads (it left them open before); the EXT_BUS OR and mux
   dvd_vm.sv     snap_we is the O_SNAP output strobe; snap_d the output bus; the
@@ -71,6 +71,7 @@ SNAP_PORTS = {
     # the OSD's Save State rows (save states step 4, docs/nav_engine.md §11): one edge
     # per press, the Slot row, and Disc Menus (the VM's own enable: a restore needs it)
     'ui_save': 'ss_save_edge', 'ui_load': 'ss_load_edge', 'ui_slot': 'status[59:57]',
+    'ui_auto': 'status[60]',
     'vm_en': 'menus_on',
     # the restored highlight (docs/nav_engine.md §11c): nav_pci's arms end keep_sel,
     # which nav_pci reads (pinned on both ends below)
@@ -139,7 +140,7 @@ def run(txt, verbose=True):
        'spst_wb_val: {display, the effective stream}, or SPRM2\'s stream with display off')
     ok(re.search(r'else\s+if\s*\(\s*vm_rst_done\s*\)\s*begin\s*aud_cur\s*<=', em) is not None,
        'a restore syncs aud_cur / sub_on / sub_idx from the restored SPRMs')
-    for bits, row in (('O[59:57]', 'Slot,1,2,3,4,5,6,7,8'), ('R[55]', 'Save to Slot'), ('R[56]', 'Load Slot')):
+    for bits, row in (('O[60:57]', 'Slot,1,2,3,4,5,6,7,8,Autosave'), ('R[55]', 'Save to Slot'), ('R[56]', 'Load Slot')):
         ok(re.search(r'"P6' + re.escape(bits + ',' + row) + r';"', em) is not None,
            f'CONF_STR has P6{bits},{row}')
     # the page shows only with a DVD-Video disc (H1) and greys with Disc Menus off (D2):
@@ -294,6 +295,7 @@ MUTATIONS = [
      '.eltm         (dsi_c_eltm),', 'the cell clock instead of the PGC clock'),
     ('emu', '.video_live   (video_live_s2),', ".video_live   (1'b1),", 'the seek fires before a picture'),
     ('emu', '.ui_slot      (status[59:57]),', '.ui_slot      (status[58:56]),', 'the slot read off the wrong bits'),
+    ('emu', '.ui_auto      (status[60]),', '.ui_auto      (1\'b0),', 'the Autosave value never reaches the core'),
     ('emu', '.ui_load      (ss_load_edge),', '.ui_load      (ss_save_edge),', 'a save press counted as a load'),
     ('emu', '.vm_en        (menus_on),', ".vm_en        (1'b1),", 'loads sent to a disabled VM'),
     ('emu', 'wire ss_save_edge = status[55] & ~ss_save_q;', 'wire ss_save_edge = status[55];', 'a held bit is many saves'),

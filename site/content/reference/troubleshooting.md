@@ -823,6 +823,11 @@ See [Install](../getting-started/install.md).
 **`Save states need Disc Menus on`.** A save state is the disc's own program, which runs
 only with Disc Menus set to On. Set it to On, then save or load again.
 
+**`Autosave is empty`.** Nothing was kept for this disc. The player writes the autosave when
+you load another disc, eject, or leave the DVD core, and not in the first ten seconds
+after a mount or before the disc has shown a picture or a menu. Power-off, the reset
+button and a crash never write one. See [Autosave](../playback/save-states.md#autosave).
+
 **`This disc has no save slots`.** VCDs, SVCDs and plain video files get no slots: there is
 no disc identity to key them to. Use the seek controls instead.
 

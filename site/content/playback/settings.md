@@ -106,7 +106,7 @@ If lip sync is wrong in a way this does not fix, that is a bug rather than a set
 
 ## Save State page
 
-Eight numbered save slots per disc. The full explanation, including what is and is not
+Eight numbered save slots per disc, plus an automatic one. The full explanation, including what is and is not
 kept, is on [Save states](save-states.md).
 
 The page appears only while a DVD-Video disc or image is loaded: a VCD, a video file, a
@@ -115,7 +115,7 @@ greyed out, because save states need the disc's menus running.
 
 | Setting | Options | What it does |
 |---|---|---|
-| **Slot** | **1** / 2 / 3 / 4 / 5 / 6 / 7 / 8 | Picks which slot **Save to Slot** and **Load Slot** act on. It is only a selector: moving it does nothing on its own. |
+| **Slot** | **1** / 2 / 3 / 4 / 5 / 6 / 7 / 8 / Autosave | Picks which slot **Save to Slot** and **Load Slot** act on. It is only a selector: moving it does nothing on its own. **Autosave** is the place the player kept by itself when you changed disc or left the core; only **Load Slot** works on it. |
 | **Save to Slot** | (action) | Saves the disc's navigation state and your position to that slot, then closes the OSD. |
 | **Load Slot** | (action) | Restores them. Playback re-seeks, the way a chapter skip does, so there is a brief black moment before it resumes. |
 

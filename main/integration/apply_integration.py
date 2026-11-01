@@ -598,8 +598,21 @@ fio = insert_before(fio, '\tusleep(500000);',
     'dvd_hdmi_audio_teardown();   // dvd:hdmibs - the HPS resets, the ADV7513 does not\n',
     37, 'dvd:hdmibs - the HPS resets')
 
+# 60. autosave on a core switch (docs/nav_engine.md §11i). fpga_load_rbf() is the one door
+# every core switch goes through (the OSD core browser, an MGL, the return to menu.rbf),
+# and at its top the DVD core is still running: its fpga_core_reset(1) comes after the
+# next .rbf is read. The flush reads the VM's snapshot over SPI, which is why it must be
+# here and not after the reset. Silent and bounded (~300 ms). A power cut or the reset
+# button never reaches this line. Anchor checked against stock 7317947: it occurs once.
+fio = insert_after(fio, '#include "support/dvd/dvd_hdmi_audio.h"   // dvd:hdmibs',
+    '#include "support/dvd/dvd_sstate.h"       // dvd:autosave\n',
+    60, 'support/dvd/dvd_sstate.h')
+fio = insert_after(fio, '\tOsdDisable();\n\tstatic char path[1024];',
+    '\tdvd_sstate_autosave_flush();   // dvd:autosave - keep the place before the core goes away\n',
+    60, 'dvd_sstate_autosave_flush')
+
 write(fio_path, fio)
-print("[integration] fpga_io.cpp patched (hdmi bitstream teardown)")
+print("[integration] fpga_io.cpp patched (hdmi bitstream teardown, autosave flush)")
 
 # ---------------------------------------------------------------- video.cpp
 # 38. Self-heal at our own init. Teardown covers every ORDERLY exit; a crash, a

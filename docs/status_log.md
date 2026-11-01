@@ -22,6 +22,15 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- 🔧 **AUTOSAVE AT A DISC CHANGE AND A CORE EXIT (2026-10-31, `feature/autosave`; sim and host
+  tests green; HW ⏳).** The Main writes `savestates/DVD/<id>_auto.ss` silently when a new disc is
+  mounted, a disc is ejected (`dvd_sstate_note_mount`) and a core is switched (`fpga_load_rbf`,
+  integration step 60); it is restored by hand with the Slot row's ninth value `Autosave` and **Load
+  Slot** (O[60:57]; `vm_snap` word 4 bit 3). Auto-resume on mount was weighed and left out. Guards: 10 s
+  grace after a mount, Disc Menus on, a picture or buttons since the last flush, ~300 ms bounded wait,
+  atomic tmp + rename. Power-off and the reset button are not covered. Full design, rejected options and
+  limitations: `nav_engine.md` §11i. **Next:** HIL (T2 across a disc swap, a core switch, Mad Dog), merge.
+
 - 🔧 **LOGIC RECLAIM F, STACKED ON SAVE STATES (2026-10-28, branch
   `feature/logic-reclaim-f` on `feature/vm-snapshot`; sim-proven, fitted; HW ⏳; not
   pushed).** The save-states merge gate wanted ~370 ALM back. Two items: `mult22x16` as one
