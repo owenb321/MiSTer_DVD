@@ -96,9 +96,9 @@ physical-disc branch, the encrypted-ISO branch, and an `else if` back to `x2trd`
 			else if (is_dvd() && len > 4 && !strcasecmp(name + len - 4, ".iso")
 			         && dvd_css_open_image(name))
 			{
-				// CSS-encrypted ISO image (no drive needed). dvd_css_open_image()
-				// claims the mount only when the image is genuinely scrambled; a
-				// decrypted ISO returns 0 and takes the normal direct-file path.
+				// ISO image (no drive needed): decrypted if it is scrambled, and
+				// behind the read-ahead either way. dvd_css_open_image() returns 0
+				// only when it cannot open the file: the direct-file path below.
 				sd_type[index] = SD_TYPE_DVDCSS;
 				sd_image[index].size = dvd_css_size();
 				writable = 0;

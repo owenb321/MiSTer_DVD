@@ -202,6 +202,44 @@ if [ "$RED" -eq 1 ]; then
         "acked (old core still engages)" \
         "s/core_fmt_v2      = (fmt >> 15) \& 1;/core_fmt_v2      = 1;/" assumes-fmt-version
 
+    # ---- dvd_css: a plain .iso behind the read-ahead ---------------------------
+    # The behaviour before this feature: no libdvdcss means the direct path, no ring.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "\[30\] claimed" \
+        "s/if (!load_library()) return open_plain_image(path, full, (uint64_t)st.st_size);/if (!load_library()) return 0;/" \
+        iso-nolib-direct
+    # ...and a decrypted rip with libdvdcss installed, the common case.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "\[32\] claimed" \
+        "/Plaintext image (decrypted rip/,/open_plain_image/ s/return open_plain_image(path, full, (uint64_t)st.st_size);/return 0;/" \
+        iso-plaintext-direct
+    # Claimed but unbuffered: it would play and buy nothing.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "\[30\] ring running" \
+        "/css_log(\"plain image/,/return 1;/ s/css_ra_start();//" \
+        iso-plain-no-ring
+    # The byte offset in 32 bits: every sector past 4 GiB reads from the wrong place.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "\[31\] the right sector" \
+        "s/const off64_t at = (off64_t)lba \* 2048;/const off64_t at = (off64_t)(lba * 2048u);/" \
+        iso-plain-lba32
+    # A partial last sector dropped instead of padded.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "\[31\] a window past 4 GiB" \
+        "s/if (eof \&\& (got % 2048))/if (0)/" \
+        iso-plain-tail
+    # The file reader left behind: the next physical disc would pread its block device
+    # instead of READ(10), which a drive refusing plain reads turns into a black screen.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "\[31\] raw_rd is the drive's again" \
+        "/^\traw_rd = raw_read10;   \/\/ a plain image/d" \
+        iso-plain-rd-stale
+    # A plain read error reported as success.
+    red_case dvd_css.cpp dvd_css_test.cpp \
+        "\[36\] pread error is -1" \
+        "s/return got >= 2048 ? (int)(got \/ 2048) : -1;/return (int)(got \/ 2048);/" \
+        iso-plain-err-zero
+
     # ---- dvd_css: where a title key is asked for -------------------------------
     # The shipped-until-now behaviour, restored exactly: re-key on ANY
     # discontinuity, at the read LBA. libdvdcss caches title keys by EXACT block,
