@@ -174,9 +174,9 @@ Implemented. `dvd_css_open_image()` reuses the exact decrypt / VOB-walk machiner
 **file** source instead of `/dev/srN`, so a CSS-encrypted `.iso` rip plays directly —
 removing the "decrypt on PC first" step and, notably, **needing no optical drive at all**
 (broadens the audience). On an `.iso` mount under the DVD core, `user_io_file_mount` opens
-the image through libdvdcss and claims it (`SD_TYPE_DVDCSS`) **only if
-`dvdcss_is_scrambled()`**; a decrypted ISO returns 0 and keeps the fast direct-file mount,
-so clean rips pay nothing. With no drive to authenticate, title keys are cracked from the
+the image through libdvdcss and decrypts it **only if it is scrambled**; a decrypted ISO
+pays no per-sector libdvdcss (since 2026-11-01 it is served as a plain file behind the
+read-ahead, see "A plain .iso behind the ring"). With no drive to authenticate, title keys are cracked from the
 data (same slow path as a no-region drive) and cached under `DVDCSS_CACHE`
 (`/media/fat/dvdcss/cache`), so it is a one-time cost per disc.
 
@@ -653,6 +653,57 @@ whether the stall is the drive, where on the disc it happened, and whether it li
 the layer-0 end or with a VOB boundary. The layer break itself is logged once per mount, from
 READ DVD STRUCTURE format 0: `layers: 2, opposite track path, layer 0 ends at LBA … (layer 1
 from …)`.
+
+## A plain .iso behind the ring (2026-11-01, ✅ HIL A/B on the rig, MERGED PR #184)
+
+**Why.** The read-ahead below was built for drives, but it named network shares as its job
+and plain images never reached it: `dvd_css_open_image()` returned 0 for anything not
+scrambled, so the commonest setup of all, a decrypted `.iso` on a NAS, stayed on the
+framework's synchronous direct path. A stall blocked the poll thread, then the core.
+
+**What.** `dvd_css_open_image()` now claims every `.iso` it can open. A scrambled one stays on
+libdvdcss. Anything else (`open_plain_image()`: decrypted rip, never-CSS, no libdvdcss,
+`dvdcss_open` failed, no VIDEO_TS) is the file on the existing raw path, with a `pread64`
+`raw_rd` (`file_read`) replacing SG_IO, and `dvd_css_close()` restoring it. That one seam
+brings the ring, `css_src_read`'s full-window contract, slow-read logging and the IFO/BUP
+mirror, with no new read path. `0` now means only "could not open it": the direct path remains
+the fallback.
+
+**Rejected:**
+- A separate source and a new `SD_TYPE`: another integration step for each anchor to break,
+  for the same behaviour.
+- Claiming only when the file is on a network filesystem: the ring costs an SD card nothing
+  measurable (no late, no ring-dry over 45 s), and two paths for one format is more to test.
+
+**A surprise worth keeping: it fixes read-only shares for `.iso`.** The direct path opens
+`O_RDWR|O_SYNC` (`docs/roadmap.md` "EACCES"); this one opens `O_RDONLY`.
+
+**Measured (rig, MiB 7 GB over CIFS, same core, control = the Main without this):**
+
+| | Control | With the ring |
+|---|---|---|
+| CIFS dropped 20 s (`iptables`, port 445) | Main frozen 13.5 s, 12.1 s of silence, 728 lates | no gap, no silence, 0 lates; `slow read 1721704+8: 13954 ms` |
+| Read-only bind mount | black, 0 pictures | plays, 24 fps, 0 lates |
+| Buffer refill after a chapter skip (median of ~5) | 1.25 s | 1.0-1.25 s |
+
+Also on the ring, no control needed: SD card 45 s, 0 lates, no slow reads, no ring-dry;
+`hil_suite` 14/14 PASS (Mad Dog's arms on time, no freeze, no silence); `sstate_stress` on MiB 8
+loads, 0 fails.
+
+⚠ **A stall under ~5 s proves nothing on this rig.** CIFS `rsize=4194304` gives the kernel its
+own read-ahead, and a 5 s drop showed nothing on the control either. An A/B needs a longer one.
+
+**Known limitations:**
+- `.iso` only: `.VOB`, `.mpg` and a VCD's `.bin` as plain files stay on the direct path, read-write
+  and unbuffered. Nobody has asked; the same seam would take them.
+- The custom Main only. Stock Main never runs this.
+- A stall longer than the ring (~25 s at the DVD maximum rate, longer at real rates) still reaches
+  the core, as `readahead: ring ran dry`.
+- Closing the source waits for a read in flight (`dvd_ra_stop`), so a mount or eject during a dead
+  share blocks until that read returns. The direct path blocked there too.
+- The no-libdvdcss arm is host-tested only (`dvd_css_test` [30]); the rig has libdvdcss.
+
+**Gates:** `main/tests/run_tests.sh --red` (`dvd_css_test` [30]-[36]; `iso-*` mutations).
 
 ## Read-ahead: a RAM ring between the drive and the core (2026-09-24, branch `feature/disc-readahead`)
 

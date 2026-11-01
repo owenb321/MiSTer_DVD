@@ -91,9 +91,17 @@ DVD images are large, though, so **loading from a NAS share works and is often m
 practical than filling the SD card**. USB storage works too. One requirement catches
 people out:
 
-!!! danger "The share must be mounted read-write"
+!!! danger "Mount the share read-write"
     The MiSTer framework opens disk images read-write (`O_RDWR|O_SYNC`) whether or not
     anything writes to them, so a read-only mount fails with `EACCES`. You get a **black
     screen with the core sitting idle and no error message**. The same file plays fine
     from the SD card, which makes it look like a size or filesystem problem. It is not —
     re-mount the share read-write.
+
+    The one exception is an `.iso` with `MiSTer_DVDcss` installed, which opens read-only
+    and so plays from a read-only share. Every other file type, and every file on the
+    stock Main, needs the share read-write.
+
+With `MiSTer_DVDcss` installed, an `.iso` is also read up to about 25 seconds ahead into
+memory, so a short network stall does not reach the picture or the sound. On the stock Main,
+and for other file types, a stall can interrupt playback.

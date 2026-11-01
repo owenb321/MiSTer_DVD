@@ -71,7 +71,7 @@ static uint64_t css_size = 0;   // bytes
 static int css_pos = -1;        // last block position, to avoid redundant seeks
 static int cur_key = -1;        // key block (g_vobs[].key) whose title key is selected
 static int key_ok = 0;          // ...and that key was actually obtained (see dvd_css_read)
-static int raw_fd = -1;         // raw drive fd when libdvdcss is absent (no decrypt)
+static int raw_fd = -1;         // raw drive fd when libdvdcss is absent, or a plain .iso (no decrypt)
 static int region_set = 1;      // 0 if the drive has no CSS region set (keys will crack)
 static time_t warn_until = 0;   // deadline for re-asserting the "install libdvdcss" popup
 
@@ -218,6 +218,36 @@ static int raw_read10(int fd, uint32_t lba, void *buf, int count)
 }
 // The no-libdvdcss read, behind a pointer so the host tests can drive the raw path.
 static int (*raw_rd)(int fd, uint32_t lba, void *buf, int count) = raw_read10;
+
+// The same seam for a plain .iso FILE (dvd_css_open_image): raw_read10 is SG_IO, which
+// a regular file refuses. A final partial sector (an image that is not a whole number
+// of sectors) reads as zero-padded, the way the ring treats the source's end. A short
+// read that ended in an ERROR drops its partial sector instead, so css_src_read's
+// zero-fill and first-sector rules see it. pread64 because this Main is 32-bit ARM and
+// a dual-layer image runs past 4 GiB.
+static int file_read(int fd, uint32_t lba, void *buf, int count)
+{
+	uint8_t *p = (uint8_t *)buf;
+	const size_t want = (size_t)count * 2048;
+	const off64_t at = (off64_t)lba * 2048;
+	size_t got = 0;
+	int eof = 0;
+	while (got < want)
+	{
+		ssize_t r = pread64(fd, p + got, want - got, at + (off64_t)got);
+		if (r < 0 && errno == EINTR) continue;
+		if (r < 0) break;
+		if (r == 0) { eof = 1; break; }
+		got += (size_t)r;
+	}
+	if (eof && (got % 2048))
+	{
+		size_t pad = 2048 - (got % 2048);
+		memset(p + got, 0, pad);
+		got += pad;
+	}
+	return got >= 2048 ? (int)(got / 2048) : -1;
+}
 
 // Can the drive answer the CSS key exchange? RPC-II drives refuse the title-key
 // ioctl (ReadTitleKey) unless a region matching the disc is set, which forces
@@ -981,22 +1011,42 @@ int dvd_css_open(void)
 	return 1;
 }
 
-// Open a CSS-encrypted DVD-Video ISO *image file* (no optical drive needed) and
-// claim it only if it is actually scrambled — a decrypted ISO must keep the fast
-// direct-file mount, not pay per-sector libdvdcss. Returns 1 (use dvd_css_read for
-// this slot) or 0 (not encrypted / no libdvdcss / not a DVD -> caller falls back to
-// the normal file path). libdvdcss reads image files directly; with no drive to
-// authenticate, title keys are cracked from the data (the same slow path as a
-// no-region drive), cached under DVDCSS_CACHE so it is a one-time cost per disc.
+// A plain .iso: no libdvdcss in the path, just the file behind the read-ahead ring, so
+// a network share's hiccup is absorbed the way a drive's is. The raw path already does
+// everything else: css_src_read's contract, slow-read logging and the IFO/BUP mirror.
+// enumerate_vobs() may fail (a UDF-only or non-DVD .iso) and that is fine: the VOB table
+// only feeds the mirror and the log, and the core decides what the image is.
+// O_RDONLY, unlike the framework's direct path (O_RDWR|O_SYNC): nothing here writes.
+static int open_plain_image(const char *path, const char *full, uint64_t size)
+{
+	raw_fd = open(full, O_RDONLY | O_CLOEXEC);
+	if (raw_fd < 0)
+	{
+		css_log("image %s: open(%s) failed (%s) -> direct path", path, full, strerror(errno));
+		return 0;
+	}
+	raw_rd = file_read;
+	seek_log_arm();
+	css_size = size;
+	css_pos = -1;
+	enumerate_vobs();
+	css_log("plain image %s (%llu MB), %d VOBs", path, (unsigned long long)(size >> 20), g_nvobs);
+	css_ra_start();
+	return 1;
+}
+
+// Open a DVD-Video ISO *image file* (no optical drive needed). A scrambled one is read
+// through libdvdcss: with no drive to authenticate, title keys are cracked from the
+// data (the same slow path as a no-region drive), cached under DVDCSS_CACHE so it is a
+// one-time cost per disc. Anything else (decrypted rip, never-CSS, no libdvdcss, not a
+// DVD) is served as a plain file (open_plain_image) so it gets the ring too; a scrambled
+// image with no libdvdcss lands there as well and trips the core's CSS ENCRYPTED notice.
+// Returns 1 (use dvd_css_read for this slot) or 0 (the file cannot be opened -> the
+// caller falls back to the normal file path).
 int dvd_css_open_image(const char *path)
 {
 	if (css || raw_fd >= 0) return 0;   // a source is already open
 	if (!path) return 0;
-
-	// Decrypting an image needs libdvdcss. Without it, let the normal file path
-	// handle the mount: a decrypted ISO plays; an encrypted one trips the core's
-	// CSS ENCRYPTED notice (raw scrambled sectors), same as before this existed.
-	if (!load_library()) { css_log("image %s: no libdvdcss -> direct path", path); return 0; }
 
 	// MiSTer passes a storage-relative path (e.g. "cifs/games/DVD/x.iso"); stat() and
 	// dvdcss_open() need the absolute path. getFullPath() returns a shared static buffer,
@@ -1007,11 +1057,18 @@ int dvd_css_open_image(const char *path)
 	struct stat st;
 	if (stat(full, &st) != 0 || st.st_size <= 0) { css_log("image %s: stat(%s) failed", path, full); return 0; }
 
+	// Decrypting an image needs libdvdcss. Without it the image is read as it is.
+	if (!load_library()) return open_plain_image(path, full, (uint64_t)st.st_size);
+
 	// Persist cracked keys per disc (shared with the drive path).
 	setup_cache();
 
 	dvdcss_t h = p_open(full);
-	if (!h) { css_log("dvdcss_open(image) FAILED: %s", full); return 0; }
+	if (!h)
+	{
+		css_log("dvdcss_open(image) FAILED: %s", full);
+		return open_plain_image(path, full, (uint64_t)st.st_size);
+	}
 	mark_cloexec_to(full);
 
 	css = h;
@@ -1024,9 +1081,9 @@ int dvd_css_open_image(const char *path)
 
 	if (!enumerate_vobs())
 	{
-		css_log("image %s: no VIDEO_TS/VOBs -> direct path", path);
+		css_log("image %s: no VIDEO_TS/VOBs", path);
 		dvd_css_close();
-		return 0;
+		return open_plain_image(path, full, (uint64_t)st.st_size);
 	}
 
 	// Decide from the BITSTREAM (are the sectors actually scrambled?), NOT from
@@ -1041,9 +1098,9 @@ int dvd_css_open_image(const char *path)
 	        path, g_nvobs, scrambled, bs_scr, lib_scr);
 	if (!scrambled)
 	{
-		// Plaintext image (decrypted rip or never-CSS) -> keep the fast direct-file mount.
+		// Plaintext image (decrypted rip or never-CSS): no per-sector libdvdcss.
 		dvd_css_close();
-		return 0;
+		return open_plain_image(path, full, (uint64_t)st.st_size);
 	}
 
 	// No drive -> always a crack, but an image's random I/O is far quicker than an
@@ -1671,6 +1728,7 @@ void dvd_css_close(void)
 	if (raw_fd >= 0) close(raw_fd);
 	css = NULL;
 	raw_fd = -1;
+	raw_rd = raw_read10;   // a plain image swapped it; the next source may be the drive
 	css_pos = -1;
 	cur_key = -1;
 	key_ok  = 0;

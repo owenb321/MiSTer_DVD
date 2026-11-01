@@ -20,10 +20,10 @@
 // success, 0 if libdvdcss is unavailable or no readable DVD is present.
 int dvd_css_open(void);
 
-// Open a CSS-encrypted DVD-Video ISO *image file* (no drive needed). Returns 1 only
-// if the image is genuinely scrambled and libdvdcss is present (reads then go via
-// dvd_css_read); 0 otherwise, so the caller keeps the normal direct-file mount for
-// decrypted ISOs. Keys are cracked from the data and cached under DVDCSS_CACHE.
+// Open a DVD-Video ISO *image file* (no drive needed). A scrambled image with libdvdcss
+// present is decrypted (keys cracked from the data, cached under DVDCSS_CACHE); any other
+// image is served as it is. Either way reads go via dvd_css_read, behind the read-ahead.
+// Returns 0 only when the file cannot be opened: the caller keeps the direct-file mount.
 int dvd_css_open_image(const char *path);
 
 // An audio CD image (a .cue sheet, dvd_cue.cpp): serve `toc`'s virtual WAV with

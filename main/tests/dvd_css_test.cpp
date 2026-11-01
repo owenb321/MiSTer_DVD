@@ -76,7 +76,7 @@
 // declared them -- no second copy of Main's API here to drift out of date.
 void ProgressMessage(const char * = 0, const char * = 0, int = 0, int = 0) {}
 void InfoMessage(const char *, int = 2000, const char * = 0) {}
-char *getFullPath(const char *) { static char p[8] = ""; return p; }
+char *getFullPath(const char *p) { return (char *)p; }
 int dvd_launch_ui_busy(void) { return 0; }
 
 // The CD-DA source shares this module's front door (see the two-source note in
@@ -993,6 +993,106 @@ int main(void)
         check("[29] window returned", dvd_css_read(w, IFO1, 8), 8);
         check("[29] slot 1 served from BUP+1", from(w, 1, BUP1 + 1), 1);
         raw_fd = -1; raw_rd = raw_read10; css = (dvdcss_t)1; p_seek = fake_seek; p_read = fake_read;
+    }
+
+    // ---- a plain .iso behind the read-ahead -----------------------------------
+    // Real files through the real worker, so these score what the core is handed.
+    {
+        static uint8_t rw[8 * 2048];
+        const char *img = "/tmp/dvd_css_test_plain.iso";
+        const uint64_t HIGH = 2500000;              // past 4 GiB: lba * 2048 overflows 32 bits
+        const uint64_t size = (HIGH + 1) * 2048 + 100;
+        FILE *f = fopen(img, "wb");
+        uint8_t sec[2048];
+        memset(sec, 0, sizeof(sec)); put_stamp(sec, 777, 0);
+        fseeko(f, (off_t)777 * 2048, SEEK_SET); fwrite(sec, 1, 2048, f);
+        memset(sec, 0, sizeof(sec)); put_stamp(sec, (uint32_t)HIGH, 0);
+        fseeko(f, (off_t)HIGH * 2048, SEEK_SET); fwrite(sec, 1, 2048, f);
+        memset(sec, 0xEE, 100);
+        fseeko(f, (off_t)(HIGH + 1) * 2048, SEEK_SET); fwrite(sec, 1, 100, f);
+        fclose(f);
+
+        struct local {
+            static int ring_read(void *b, uint32_t lba, uint32_t n)
+            {
+                for (int i = 0; i < 400 && !dvd_ra_ready(lba, n); i++) usleep(5000);
+                return dvd_css_read(b, lba, n);
+            }
+            static dvdcss_t open_null(const char *) { return 0; }
+            static dvdcss_t open_ok(const char *)   { return (dvdcss_t)1; }
+            static int close_ok(dvdcss_t)           { return 0; }
+            static int scram_yes(dvdcss_t)          { return 1; }
+            static int scram_no(dvdcss_t)           { return 0; }
+        };
+
+        printf("[30] no libdvdcss: a plain .iso is claimed, behind the ring\n");
+        setup();
+        dvd_css_close();
+        css_lib = NULL; css_lib_names[0] = NULL;   // the list now ends at once: no library
+        check("[30] claimed", dvd_css_open_image(img), 1);
+        check("[30] active", dvd_css_active(), 1);
+        check("[30] ring running", dvd_ra_active(), 1);
+        check("[30] size is the file's", (long)(dvd_css_size() == size), 1);
+        check("[30] a window", local::ring_read(rw, 777, 8), 8);
+        check("[30] it holds the file's sector", (long)get_lba(rw), 777);
+
+        printf("[31] past 4 GiB, and the partial last sector\n");
+        check("[31] a window past 4 GiB", local::ring_read(rw, (uint32_t)HIGH, 2), 2);
+        check("[31] the right sector", (long)get_lba(rw), (long)HIGH);
+        check("[31] partial tail is the file's", rw[2048 + 99], 0xEE);
+        check("[31] partial tail is zero-padded", rw[2048 + 100], 0);
+        dvd_css_close();
+        check("[31] closed", dvd_css_active(), 0);
+        check("[31] ring stopped", dvd_ra_active(), 0);
+        check("[31] raw_rd is the drive's again", raw_rd == raw_read10, 1);
+
+        printf("[32] libdvdcss present, image not scrambled: the file, not libdvdcss\n");
+        setup();
+        iso_begin();
+        vob("VTS_01_1.VOB;1", 600u, 300u);
+        iso_end();
+        dvd_css_close();
+        css_lib = (void *)1; p_open = local::open_ok; p_close = local::close_ok;
+        p_seek = fake_seek; p_read = fake_read; p_scram = local::scram_no;
+        check("[32] claimed", dvd_css_open_image(img), 1);
+        check("[32] libdvdcss closed", css == NULL, 1);
+        check("[32] ring running", dvd_ra_active(), 1);
+        reads_decrypt = reads_raw = 0;
+        check("[32] a window", local::ring_read(rw, 777, 8), 8);
+        check("[32] it holds the file's sector", (long)get_lba(rw), 777);
+        dvd_css_close();
+
+        printf("[33] libdvdcss present, image scrambled: still libdvdcss\n");
+        setup();
+        iso_begin();
+        vob("VTS_01_1.VOB;1", 600u, 300u);
+        iso_end();
+        dvd_css_close();
+        css_lib = (void *)1; p_open = local::open_ok; p_close = local::close_ok;
+        p_seek = fake_seek; p_read = fake_read; p_scram = local::scram_yes;
+        check("[33] claimed", dvd_css_open_image(img), 1);
+        check("[33] through libdvdcss", css != NULL && raw_fd < 0, 1);
+        dvd_css_close();
+
+        printf("[34] dvdcss_open fails on the image: still served, as a file\n");
+        setup();
+        dvd_css_close();
+        css_lib = (void *)1; p_open = local::open_null; p_scram = 0;
+        check("[34] claimed", dvd_css_open_image(img), 1);
+        check("[34] a window", local::ring_read(rw, 777, 8), 8);
+        check("[34] it holds the file's sector", (long)get_lba(rw), 777);
+        dvd_css_close();
+
+        printf("[35] a file that is not there: the direct path, as before\n");
+        check("[35] not claimed", dvd_css_open_image("/tmp/dvd_css_test_no_such.iso"), 0);
+        check("[35] nothing active", dvd_css_active(), 0);
+
+        printf("[36] a read error on the first sector is -1, never a short success\n");
+        // A directory opens O_RDONLY and every pread fails with EISDIR.
+        int dirfd = open("/tmp", O_RDONLY);
+        check("[36] pread error is -1", file_read(dirfd, 0, rw, 2), -1);
+        close(dirfd);
+        unlink(img);
     }
 
     printf("\ndvd_css_test: %s (%d error%s)\n", errs ? "FAIL" : "PASS", errs, errs == 1 ? "" : "s");
