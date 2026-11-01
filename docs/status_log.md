@@ -22,8 +22,8 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
-- 🔧 **AUTOSAVE AT A DISC CHANGE AND A CORE EXIT (2026-10-31, `feature/autosave`; host
-  tests green; HW: menu swap + core exit + Load verified, film position ⏳).** The Main writes `savestates/DVD/<id>_auto.ss` silently when a new disc is
+- ✅ **AUTOSAVE AT A DISC CHANGE AND A CORE EXIT (2026-10-31, `feature/autosave`; host
+  tests green; HW: menu swap + core exit + Load verified, maintainer's play-test OK; MERGED).** The Main writes `savestates/DVD/<id>_auto.ss` silently when a new disc is
   mounted, a disc is ejected (`dvd_sstate_note_mount`) and a core is switched (`fpga_load_rbf`,
   integration step 60); it is restored by hand with the Slot row's ninth value `Autosave` and **Load
   Slot** (O[60:57]; `vm_snap` word 4 bit 3). Auto-resume on mount was weighed and left out. Guards: 10 s
