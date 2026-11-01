@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include <unistd.h>
 #include <time.h>
+#include <sched.h>
 
 #define RA_CAP 1024u      // small ring, so a few thousand sectors wrap it
 #include "dvd_readahead.cpp"
@@ -34,6 +35,7 @@ static volatile uint32_t bad_lba   = 0xFFFFFFFFu;
 static volatile int      per_call_ms = 0;           // every call costs this much
 static volatile int      calls;
 static volatile int      fail_all  = 0;             // every read fails: an open tray
+static volatile int      src_on_cpu0 = -1;          // was the last read made from CPU 0 only?
 
 static void put_stamp(uint8_t *q, uint32_t lba) { memcpy(q, &lba, 4); q[4] = 0x5A; }
 static uint32_t stamp_of(const uint8_t *q) { uint32_t v; memcpy(&v, q, 4); return v; }
@@ -41,6 +43,12 @@ static uint32_t stamp_of(const uint8_t *q) { uint32_t v; memcpy(&v, q, 4); retur
 static int fake_src(void *buf, uint32_t lba, uint32_t count)
 {
 	calls++;
+	{
+		cpu_set_t now;
+		CPU_ZERO(&now);
+		sched_getaffinity(0, sizeof(now), &now);
+		src_on_cpu0 = CPU_COUNT(&now) == 1 && CPU_ISSET(0, &now);
+	}
 	if (per_call_ms) usleep(per_call_ms * 1000);
 	if (lba <= stall_at && stall_at < lba + count && stall_ms)
 	{
@@ -284,6 +292,26 @@ int main(void)
 		check("drive idle within 300 ms of the tray opening", first_idle >= 0 && first_idle < 300, 1);
 	}
 	dvd_ra_stop();
+
+	// [10] The worker runs off the poll thread's core. main() pins itself to CPU 1 and
+	//      never sleeps; a worker sharing that core waits for a turn after every read,
+	//      and an interactive disc's jumps pay for it (rig: Weakest Link 0.14 -> 0.08 s).
+	printf("[10] the worker runs on CPU 0, and the caller stays where it was\n");
+	reset_src();
+	{
+		cpu_set_t one, before, after;
+		CPU_ZERO(&one);
+		CPU_SET(1, &one);
+		sched_getaffinity(0, sizeof(before), &before);
+		sched_setaffinity(0, sizeof(one), &one);   // as main() does
+		dvd_ra_start(fake_src, 100000);
+		usleep(20000);
+		check("the worker's reads are on CPU 0 only", src_on_cpu0, 1);
+		sched_getaffinity(0, sizeof(after), &after);
+		check("the poll thread is still on CPU 1 only", CPU_COUNT(&after) == 1 && CPU_ISSET(1, &after), 1);
+		dvd_ra_stop();
+		sched_setaffinity(0, sizeof(before), &before);
+	}
 
 	check("idle: every request may be serviced (stock behaviour)", dvd_readahead_ready(123, 1, (uint64_t)-1, 8), 1);
 

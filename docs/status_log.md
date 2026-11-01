@@ -22,6 +22,14 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Hardware status (THIS fork, verified 2026-06-21)
 
+- ✅ **READ-AHEAD JUMP LATENCY (2026-11-01; host tests green; HIL A/B on the rig).** Found by the v0.10.0
+  smoke test, against PR #184: on interactive discs over CIFS the ring doubled the time from a jump to
+  video (Dragon's Lair 20th 0.12 -> 0.27 s, Weakest Link 0.06 -> 0.14 s), with every `hil_suite` check
+  green. Causes: the kernel's own read-ahead (`POSIX_FADV_RANDOM` on plain images) and the worker sharing
+  the poll thread's core (now on CPU 0, every ring source). Result 0.16 s and 0.08 s; 20-40 ms accepted as
+  the price of the ring. Refuted on the way: PR #184's "refill unchanged" was true of a film's chapter skip
+  and said nothing about a jump every 2 s. Open: a heavily loaded share can still starve a cell and cost a
+  move. Instrument: `tools/hil_jumps.py`. Detail: `physical_disc.md` "What the ring costs a jump".
 - ✅ **PLAIN .ISO BEHIND THE READ-AHEAD (2026-11-01, MERGED PR #184; host tests green; HIL A/B
   on the rig).** `dvd_css_open_image()` claims every `.iso` it can open, so a decrypted rip on a NAS gets
   the ring. 20 s CIFS drop: control froze the Main 13.5 s with 12.1 s of silence and 728 lates; with the

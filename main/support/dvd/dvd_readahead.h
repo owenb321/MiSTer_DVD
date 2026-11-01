@@ -16,7 +16,8 @@
 //
 // A request far from the ring (a seek, a chapter skip, the mount's IFO reads)
 // retargets the worker to that LBA; the first burst after a retarget is one Main
-// window, so a seek costs what it cost before.
+// window. A seek still costs a little more than a synchronous read, because the burst
+// in flight has to finish first (docs/physical_disc.md "What the ring costs a jump").
 //
 // Source contract (the same one dvd_css_read / dvd_vcd_read / dvd_cdda_read keep):
 // return `count` -- a FULL window, unreadable sectors zero-filled -- or -1 when the

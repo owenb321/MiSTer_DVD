@@ -188,6 +188,10 @@ for c in film_ac3 film_dts film_lpcm; do tools/audio_check.py "$R/$(jq -r .$c to
 DVD_ISO_DIR=<library> tools/nav_offline.py --library --limit 100 --jobs 8   # no rig; ~40 min
 ```
 
+- **Jump latency:** `tools/hil_jumps.py control=$OUT/hil_suite/control build=$OUT/hil_suite/build`.
+  A median well above the control is a NO-GO lead even with every row green: the suite scores
+  where a jump lands, not how long it took (v0.10.0: the plain-ISO ring doubled it unnoticed).
+  ⚠ A control too old for the nav FIFO reads "no jumps": compare against the previous release.
 - `hil_suite`: 0 REGRESSION rows. It flashes cores only, on the Main deployed in step 2,
   which is the draft's — correct here. ⚠ It leaves the rig on whichever build `--leave`
   names; check `state` afterwards. It runs both builds, so this is where the time goes.
@@ -196,7 +200,8 @@ DVD_ISO_DIR=<library> tools/nav_offline.py --library --limit 100 --jobs 8   # no
 - `nav_offline`: 0 `DIFF` / `nolanding` (both are leads); `oracle-err`, `rnd`, `cap-edge`,
   `udf-only` are not findings. ⚠ The whole library (~1,600 images) takes ~11 h at 8 jobs
   (measured 2026-10-31: 125 discs in 50 min), so a smoke test runs `--limit 100`; run it
-  alongside `hil_suite`, it needs no rig. A full sweep is for an overnight run, not a gate.
+  **after** `hil_suite`, never alongside: it needs no rig, but 8 jobs loading the rig's share
+  cost a real move on Dragon's Lair (2026-11-01). A full sweep is for an overnight run, not a gate.
 
 **A share stall**, on `film_ac3` from the share: 45 s in (so the ring has filled), drop CIFS for
 20 s, and capture across it. PASS = no telemetry gap, no silence, 0 lates, and a `slow read` line
