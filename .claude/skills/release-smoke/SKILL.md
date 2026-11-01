@@ -1,6 +1,6 @@
 ---
 name: release-smoke
-description: Smoke-test a DRAFT GitHub release of the DVD core on the real MiSTer before it is published — verify the draft's own assets, flash them, check every new feature in the release, and run the regression sweep (format matrix, audio, pacing, interactive-disc suite) against a control build. Produces a GO / NO-GO report. Use at step 6 of the release skill, or whenever asked to smoke-test, sanity-check or regression-test a release or release candidate.
+description: Smoke-test a release candidate of the DVD core on the real MiSTer before it is published — verify its assets (a local package, then the draft's), flash them, check every new feature in the release, and run the regression sweep (format matrix, audio, pacing, interactive-disc suite) against a control build. Produces a GO / NO-GO report. Use at steps 5 and 6 of the release skill, or whenever asked to smoke-test, sanity-check or regression-test a release or release candidate.
 ---
 
 # Release smoke test
@@ -17,10 +17,13 @@ tool, and the traps that cost real hardware time, are in `.claude/skills/hil-tes
 
 ## Rules
 
-- **Test the draft's assets, never the local build.** Download them from the draft. The
-  point is to catch what CI packaged — a Main built from the wrong commit, an `.rbf` that
-  is not the one the manifest names, a zip missing a file. A local `releases/*.rbf` that
-  "is the same build" proves none of that.
+- **Two runs, in this order.** The **full run** comes first, on a zip packaged locally from
+  the unpushed release commit (`tools/package_release.sh`): `$OUT/draft` is then that zip, the
+  `.rbf`, its manifest, the Main and `dvd_report.py`, and nothing is public. The **draft
+  check** comes after the maintainer approves and the draft exists: step 1 on the assets
+  downloaded from the draft, plus a boot and a disc playing from them. That is what catches
+  what CI packaged differently (a Main built from the wrong commit, a zip missing a file),
+  and it has to be quick, because the release commit is public by then.
 - **Every check has a control.** Run the same check on the control build (below) whenever
   the result could be the disc or the harness rather than the core. A FAIL that the control
   shares is a pre-existing issue to note, not a release blocker; a FAIL the control does not

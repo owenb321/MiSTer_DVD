@@ -82,8 +82,13 @@ would cost a second compile.
 
    **One commit, one netlist, one compile.** `CORE_VERSION` lives in `CONF_STR`, so
    splitting the bump from the docs commit buys a second netlist and a second seed decision
-   for nothing. Push it — the workflow checks out this exact commit, so anything uncommitted
-   would silently not be in the released Main, Scripts or `DVD_INSTALL.txt`.
+   for nothing. Commit everything: the workflow checks out this exact commit, so anything
+   uncommitted would silently not be in the released Main, Scripts or `DVD_INSTALL.txt`.
+
+   ⛔ **Do NOT push it yet.** This repository is public, so a pushed release commit announces
+   the release, and "cut a release" is not permission to push. It stays local through the
+   build and the smoke test, and goes out at step 5, on the maintainer's word (2026-11-01,
+   by user decision, after one was pushed hours before anyone was ready).
    Verify locally first: `python3 tools/docs_check.py && mkdocs build --strict`.
 
 3. **Build the core (timing-clean).** Quartus, in the pinned container:
@@ -108,7 +113,10 @@ would cost a second compile.
    all four corners, which `fmax_check` cannot (`docs/timing.md`). A FAIL blocks the release;
    a WARN is a judgement to record.
 
-5. **Create the draft and package it:**
+5. **Smoke-test locally, then push and create the draft.** Run the `release-smoke` skill on a
+   zip packaged locally (`tools/package_release.sh`, with a Main from `USE_DOCKER=1
+   ./main/build_main.sh`): same script as CI, nothing public yet. Show the maintainer the
+   report and the notes. Only when they approve: `git push origin main`, then:
    ```bash
    ./tools/publish_draft.sh v<semver> --notes /tmp/relnotes.md --title "v<semver> — <headline>"
    ```
@@ -123,12 +131,12 @@ would cost a second compile.
    checking out the SHA from the manifest rather than `refs/tags/`. Do not "simplify" it to
    `on: release`.
 
-6. **Smoke-test the draft, then publish.** This is the point of drafting. Run the
-   **`release-smoke` skill**: it downloads the draft's own assets, checks them against each
-   other and the manifest, flashes them, checks every feature in the release and runs the
-   regression sweep against a control build, and ends with a GO / NO-GO report plus a short
-   list of maintainer items (the OSD About line reading `DVD v<semver> <yymmdd>` is one,
-   since a screenshot cannot see the OSD). Publish only on GO and the maintainer's word.
+6. **Check what CI packaged, then publish.** The full test ran in step 5, so keep the public
+   window short: run `release-smoke`'s step 1 on the draft's own assets, which catches what CI
+   packaged differently (a Main from the wrong commit, a missing file), plus a boot and a disc
+   playing from them. The full run ends with a GO / NO-GO report plus a short list of
+   maintainer items (the OSD About line reading `DVD v<semver> <yymmdd>` is one, since a
+   screenshot cannot see the OSD). Publish only on GO and the maintainer's word.
    ```bash
    gh release view v<semver> --web        # confirm all five assets are attached
    gh release edit v<semver> --draft=false
