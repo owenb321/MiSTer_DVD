@@ -731,6 +731,8 @@ empty) so its window's NAV pack arrived after the window opened; the window arme
 ~1 s fallback, at the cell's end, and the move was lost. It did not recur in 4 idle runs on
 that Main. So a heavily loaded share can still cost a move; the ring cannot help a share that
 delivers below the video rate just after a jump, when it is empty.
+Under the same load the fixed Main played 3 runs with no wrong move (113 right, lates 228-290,
+median jump 0.26-0.32 s). That is a small sample, so the question stays open.
 
 **Instrument:** `tools/hil_jumps.py`, on any two `hil_suite` output directories. The suite's
 checks score where a jump lands, not how long it took.
