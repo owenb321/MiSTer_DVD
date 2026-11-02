@@ -20,6 +20,19 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ---
 
+## Read-ahead: a jump past a full ring's head deadlocked (2026-11-01, found in the v0.10.0 smoke)
+
+**Report:** Ultimate T2, DTS selected, Next a few seconds into the DTS logo clip: frozen, Menu
+and Title do nothing, the core otherwise alive. Every time for the maintainer, never for scripts.
+**Cause:** a request just past a full ring's head waits for the worker, and the worker waits for
+a served request to free room. **Fix:** an "on its way" request frees room behind itself.
+**Refuted on the way:** the gamepad, OSD load, menu route, snapshot polling and hold length, each
+by a clean run; it was the moment of the press (window ~5.7-6.0 s). Full account, A/B numbers and
+limits: `physical_disc.md`, beside "What the ring costs a jump".
+**Lesson for HIL sweeps:** scripted presses land at the same offsets every run, so "never
+reproduces" can mean the script keeps missing a window. Sweep the press time.
+**Next:** maintainer's retest; physical disc and encrypted image on the rig.
+
 ## Hardware status (THIS fork, verified 2026-06-21)
 
 - ✅ **READ-AHEAD JUMP LATENCY (2026-11-01, MERGED PR #186; host tests green; HIL A/B on the rig).** Found by the v0.10.0
