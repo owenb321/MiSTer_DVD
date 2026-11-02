@@ -749,6 +749,22 @@ checks score where a jump lands, not how long it took.
 
 **Gates:** `main/tests/run_tests.sh --red` (`dvd_css_test` [30]-[36]; `iso-*` mutations).
 
+A jump just past a full ring's head (fixed before v0.10.0 shipped). `classify_hit()` treats
+a request up to `RA_SLACK` past the head, or a window straddling it, as "on its way" and
+does not retarget. But only a served request frees room, and a full ring parks the worker
+until room is freed, so the two waited for each other for ever. The core's read stayed in
+flight, so `jump_go` could not fire and Menu and Title did nothing, though the VM did move.
+The window is about 264 sectors at about the ring's 32 MB ahead of the consumer, so a forward
+jump of that length can land in it. Field report: Ultimate T2, Next ~5.8 s into the DTS logo
+clip (VTS 3), whose second program is a 4-sector cell at sector 19918. It looked like a
+gamepad problem because the maintainer's press landed there every time and scripted presses
+never did; a press sweep found the window, and the gamepad was cleared with presses at other
+times. A/B, same core: ring Main froze 3/3 in the window, pre-ring Main 0/4, v0.9.1 0/8, fix 0/8.
+The request itself now frees everything further behind than `RA_BEHIND`. Physical discs and
+encrypted images have had this since the ring landed in v0.8.0; PR #184 added plain `.iso`.
+Gate: `main/tests` readahead `[11]`, mutation `ra-full-ring-deadlock`. No rig check of a
+physical disc or encrypted image yet.
+
 ## Read-ahead: a RAM ring between the drive and the core (2026-09-24, branch `feature/disc-readahead`)
 
 **Status: host-proven (`main/tests/dvd_readahead_test.cpp`, 8 arms; 7 RED mutations,

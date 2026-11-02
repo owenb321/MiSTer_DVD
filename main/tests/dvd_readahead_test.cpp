@@ -313,6 +313,32 @@ int main(void)
 		sched_setaffinity(0, sizeof(before), &before);
 	}
 
+	// [11] A jump to just past the head of a FULL ring. The worker sleeps until a served
+	//      request frees room, and this request can't be served until the worker reads
+	//      more: a deadlock, with the core's read in flight so Menu could not leave
+	//      either (Ultimate T2's logo clip: Next ~5.8 s in froze every time).
+	printf("[11] a jump just past a full ring's head is served\n");
+	reset_src();
+	{
+		static const struct { const char *what; int off; } jumps[] = {
+			{ "a window starting past the head",     50 },
+			{ "the last sector the ring calls near", (int)RA_SLACK },
+			{ "a window straddling the head",        -4 },
+		};
+		for (unsigned j = 0; j < sizeof(jumps) / sizeof(jumps[0]); j++)
+		{
+			dvd_ra_start(fake_src, 100000);
+			long t0 = now_ms();
+			while (fill < RA_CAP && now_ms() - t0 < 2000) usleep(1000);
+			check("the ring filled before the jump", fill, RA_CAP);
+			uint32_t lba = (uint32_t)((int)(base + fill) + jumps[j].off);
+			static uint8_t jw[8 * 2048];
+			check(jumps[j].what, serve(jw, lba, 8, 1000) >= 0, 1);
+			check("...and it is the sector asked for", stamp_of(jw), lba);
+			dvd_ra_stop();
+		}
+	}
+
 	check("idle: every request may be serviced (stock behaviour)", dvd_readahead_ready(123, 1, (uint64_t)-1, 8), 1);
 
 	printf("\ndvd_readahead_test: %s (%d error%s)\n", errs ? "FAIL" : "PASS", errs, errs == 1 ? "" : "s");
