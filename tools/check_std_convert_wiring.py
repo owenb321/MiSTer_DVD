@@ -14,6 +14,8 @@ cannot see what emu.sv connects. Each seam below fails silently when wrong:
   pal_eff inverted       overlays, half_scan and disp_fps follow the raster instead of the
                          source: subtitles land wrong and cell_secs grants false stills.
   pass_mode unguarded    a bitstream with no valid timing goes to the receiver.
+  no std_conv_wait       passthrough starts in the gap after a mount and is torn down just as
+                         audio starts: lip sync up to 210 ms off, intermittently.
   vsync arm missing      NTSC's vsync lands inside the 576-line cross mode.
 
 strip_comments() runs first: the comments quote these nets, so a grep would pass a reverted file.
@@ -110,8 +112,10 @@ def main():
     has('val_sync', "pal_val_s1 <= pal_valid_dec;", 'the verdict-valid flag crosses into clk_sys')
 
     # Audio.
-    has('pass', "wire pass_mode = status[6] & ~cdda_mode_w & ~std_conv_active;",
-        'a speed change cannot be passed through')
+    has('pass', "wire pass_mode = status[6] & ~cdda_mode_w & ~std_conv_active & ~std_conv_wait;",
+        'a speed change cannot be passed through, nor may a session start before the verdict')
+    has('pass_wait', "assign std_conv_wait = (std_conv_sel != 2'd0) & ~pal_val_s2;",
+        'passthrough rising in the post-mount gap delays audio by up to 210 ms')
 
     if fails:
         print(f'FAIL check_std_convert_wiring: {len(fails)}')

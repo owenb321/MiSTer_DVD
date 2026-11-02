@@ -119,10 +119,40 @@ because NTSC's 488..494 would land inside 576 active lines.
 - Timed stills use wall-clock seconds (`SEC_DIV`), so they don't scale. Nothing is synchronised to
   them, so a still is just 4 % long or short relative to the speed.
 
+## Hardware results (2026-11-02, `.236`, against v0.10.0)
+
+Rates come from telemetry counters: `refreshes` and `aud_play` over `t`, and STC from two `snap`s.
+120 s of title playback with Disc Menus off, `vga_scaler=1` for this core:
+
+| Arm | Raster Hz | Audio Hz | STC Hz | Lates/s | `av_drift` first → last quarter, ms |
+|---|---|---|---|---|---|
+| Control, BBB 25p | 24.997 | 47,999 | 89,997 | 0 | −75.9 → −84.4 |
+| To NTSC, BBB | 23.981 | 46,033 | 86,315 | 0 | −82.2 → −84.9 |
+| Control, The Office 25i | 49.999 | 47,999 | 89,998 | 0 | −1.6 → −1.0 |
+| To NTSC, The Office | 23.972 | 46,034 | 86,312 | 0 | 3.3 → 2.8 |
+| Control, MiB soft telecine | 23.974 | 48,000 | 90,000 | 0.016 | −31.5 → −32.6 |
+| To PAL, MiB | 24.996 | 50,049 | 93,842 | 0.008 | −28.2 → −27.1 |
+
+Expected: 23.976 Hz, 46,034 Hz and 86,314 Hz slowed; 25 Hz, 50,050 Hz and 93,844 Hz sped up.
+Screenshots show the right geometry on both cross modes, and HDMI capture has audible audio.
+
+**True 30i on To PAL drops exactly 1 in 5,** as the arithmetic says: MiB's animated menu reads
+6.26 lates/s and 6.24 drops/s (31.25 pictures/s on a 25 Hz raster). That is the expected price, not
+a fault, and it sits right at `DROP_COOL`'s limit of about 6/s, so `disp_lag` rides at −60 to −105 ms.
+
+**Defect found and fixed: passthrough rising after a mount.** To PAL with Passthru selected read
+`play_err` 241, 31 and 84 ms over three runs, against 31 ms on every run without Passthru. Cause: a
+mount drops `valid`, conversion is off in the gap, and a passthrough session starts and is torn
+down just as audio starts. `std_conv_wait` holds passthrough off until the verdict.
+
+⚠ **Trap for the next measurement:** telemetry counters are zeroed by a flush, so a decrease is
+usually not a 16-bit wrap. Treating it as one gave 3,167 pickups/s on The Office, which crosses two
+transitions in the first 60 s. Measure rates with Disc Menus off, away from menus.
+
 ## Not done yet
 
-- ⏳ **Next step:** build, then HIL against the v0.10.0 control. First check that ascal locks to
-  875×1287 with 576 active and 864×1250 with 480 active; nothing has exercised those yet.
+- ⏳ **Next step:** confirm the passthrough fix on hardware, then pause, seek, track switch, subtitles
+  and save state while converting.
 - Phase 3's cadence for `pf=0` pictures: decided at Phase 3 (maintainer, 2026-11-02), when real CRT
   output can show how bad the wrong one looks.
 - The census scripts are still scratch files. Add them to `tools/` before this note's numbers are

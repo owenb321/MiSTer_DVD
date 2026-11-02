@@ -103,7 +103,9 @@ if [ "${1:-}" = "--red" ]; then
     wmutant "W2 nav_trace scaled"       ".tick        (stc_div == 9'd299)," ".tick        (stc_rate_tick)," trace_tick
     wmutant "W3 trim tied to 0"         ".nco_trim (dec_nco_trim)" ".nco_trim ()" trim_out
     wmutant "W4 raster not inverted"    "wire pal_out = pal_eff ^ std_conv_active;" "wire pal_out = pal_eff;" raster
-    wmutant "W5 passthrough unguarded"  "status[6] & ~cdda_mode_w & ~std_conv_active;" "status[6] & ~cdda_mode_w;" pass
+    wmutant "W5 passthrough unguarded"  "status[6] & ~cdda_mode_w & ~std_conv_active & ~std_conv_wait;" "status[6] & ~cdda_mode_w & ~std_conv_wait;" pass
+    wmutant "W11 passthrough in the gap" "status[6] & ~cdda_mode_w & ~std_conv_active & ~std_conv_wait;" "status[6] & ~cdda_mode_w & ~std_conv_active;" pass
+    wmutant "W12 wait never asserts"     "assign std_conv_wait = (std_conv_sel != 2'd0) & ~pal_val_s2;" "assign std_conv_wait = 1'b0;" pass_wait
     wmutant "W6 acts on a stale verdict" "assign std_conv_active = pal_val_s2 & " "assign std_conv_active = " active
     wmutant "W7 both directions swapped" "? 2'd1 : 2'd2),   // PAL disc" "? 2'd2 : 2'd1),   // PAL disc" rate_mode
     wmutant "W8 walk ignores conversion" "|| (conv_s2 != conv_prev)" "" walk_kick

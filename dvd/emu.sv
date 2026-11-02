@@ -460,7 +460,11 @@ wire        wav_bad_w;
 wire        cdda_afull_w;
 // ~std_conv_active: compressed frames are locked to a real 48 kHz, so a speed change can only
 // be decoded here. Clearing this takes the normal PCM teardown (docs/hdmi_bitstream.md §5a).
-wire        pass_mode  = status[6] & ~cdda_mode_w & ~std_conv_active;   // O6: 1 = IEC 61937 passthrough
+// ~std_conv_wait: conversion is selected but this file has no verdict yet. A mount drops the
+// verdict, and without this term passthrough rises in that gap and is torn down just as audio
+// starts: HW measured audio up to 210 ms late, intermittently (docs/standard_convert.md).
+wire        std_conv_wait;
+wire        pass_mode  = status[6] & ~cdda_mode_w & ~std_conv_active & ~std_conv_wait;   // O6: 1 = IEC 61937 passthrough
 wire        pass_bswap = status[7];   // O7: 1 = swap payload byte order
 assign AUDIO_S      = 1;
 assign AUDIO_MIX    = 2'd0;
@@ -5971,6 +5975,7 @@ assign p240_eff = interlaced_eff & sif_det_s2;
 //                    Auto (no analog display holds it). Direct analog is a later phase.
 // Every input is debounced or human-speed; none depends on this, so it cannot self-feed.
 wire [1:0] std_conv_sel = status[54:53];
+assign std_conv_wait = (std_conv_sel != 2'd0) & ~pal_val_s2;
 assign std_conv_active = pal_val_s2 & ~sif_det_s2 & ~cdda_mode_w & ~interlaced_eff & ~analog_want
                        & (pal_det_s2 ? (std_conv_sel == 2'd1) : (std_conv_sel == 2'd2));
 assign pal_eff = std_conv_active ? pal_det_s2 :
