@@ -35,6 +35,7 @@ again. A custom `boot.rom` logo survives the reset.
 | **Deinterlace** | **Weave** / Bob / Blend | How the two fields of a true-interlaced picture (video-sourced 29.97i/25i, laserdisc-style FMV) are shown. **Weave** shows both at once: full detail, but combing on motion. **Bob** shows one field at a time with the missing lines filled in: smooth motion, half the vertical detail. **Blend** mixes each line with its neighbours, turning the comb into a soft ghost at the cost of some sharpness. The choices follow `Video Output`: **Progressive** offers all three; **Interlaced** offers Weave and Bob, and there they only change how HDMI shows the 480i/576i signal (a CRT always gets the real fields). Film and progressive content are never touched. See [Deinterlace](../video/interlaced.md#deinterlace). |
 | **Video Standard** | **Auto** / NTSC / PAL | Auto detects from the stream's vertical size (480 = NTSC, 576 = PAL). |
 | **Film 24p Out** | **Auto** / Off / On | 23.976 Hz output for film content — see [Film (24p)](../video/film-24p.md). |
+| **Standard Convert** | **Off** / To NTSC / To PAL | Plays a disc of the other standard by changing its speed about 4 %, which also shifts its pitch and turns passthrough off. HDMI and `vga_scaler` only. See [Standard Convert](../video/film-24p.md#standard-convert). |
 
 !!! note "Deinterlace replaces `480i Deint` (v0.8.0)"
     **Deinterlace** replaces the `480i Deint` setting and adds Bob and Blend for the

@@ -115,6 +115,8 @@ module dvd_audio_decode #(
     // A/V sync (dvd/av_sync.sv): signed trim added to the 48 kHz NCO increment to
     // genlock audio to the video-referenced STC; PTS of each dispatched frame out.
     input  logic signed [21:0] nco_trim,
+    // The NCO's current rate, for the trim's source (dvd/std_rate.sv picks a constant per rate).
+    output logic         [1:0] nco_fs_out,
     // DVD-FORK (telemetry): free-running observation counters, see below
     output logic        [15:0] dbg_play_cnt,   // aud_ce_play ticks / 16
     output logic        [15:0] dbg_gate_cnt,   // drain-gate closures
@@ -297,9 +299,11 @@ module dvd_audio_decode #(
     // (where `draining`/`cur_codec` are in scope — declaration-before-use).
     wire [1:0] mp2_fs;                       // the engine's (MFS: the MP2 header's rate)
     logic [1:0] nco_fs;
+    assign nco_fs_out = nco_fs;
 
-    // Effective increment = nominal + av_sync trim (signed, ±0.5% so always > 0).
-    // av_sync genlocks the audio sample rate to the video-referenced STC.
+    // Effective increment = nominal + trim (signed, ±4.3% at most, so always > 0). The trim
+    // is 0 except during standard conversion (dvd/std_rate.sv, docs/standard_convert.md),
+    // where it follows the STC's scaled rate. The old av_sync genlock is retired.
     wire [31:0] nco_inc_base = (nco_fs == 2'd0) ? NCO_INC_441 :
                                (nco_fs == 2'd2) ? NCO_INC_32K :
                                (nco_fs == 2'd3) ? NCO_INC_96K : NCO_INC;

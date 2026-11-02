@@ -100,3 +100,42 @@ left to detect. Nothing can infer it from the stream, which is why the manual **
   raster cannot carry interlaced fields, so it is unavailable while
   [Interlaced mode](interlaced.md) is active. Film on a CRT plays with its normal 3:2
   field cadence instead.
+
+## Standard Convert
+
+**`Standard Convert`** (Video page, default **Off**) plays a disc made for the other TV
+standard by changing its speed slightly, the way film has long been moved between the two.
+
+| Setting | Disc | Speed | Output |
+|---|---|---|---|
+| **To NTSC** | PAL (576 lines) | 4.1 % slower, 25 → 23.976 frames per second | 23.976 Hz, which the scaler turns into 3:2 at 59.94 Hz |
+| **To PAL** | NTSC (480 lines) | 4.3 % faster, 23.976 → 25 frames per second | 25 Hz, which the scaler doubles to 50 Hz |
+
+A disc already in the chosen standard plays normally, so you can leave this set.
+
+**Set your display chain to match.** The cadence is only clean when the HDMI `video_mode` in
+`MiSTer.ini` is the target rate: 59.94 Hz for To NTSC, 50 Hz for To PAL.
+
+**What changes while it is converting:**
+
+- **The speed applies to the whole disc,** including menus and logos, and it never changes
+  partway through. Running times are about 4 % longer or shorter than the clock on screen, which
+  keeps showing the disc's own time.
+- **Pitch shifts with the speed,** about 0.7 of a semitone. Many PAL discs were sped up without
+  correcting their pitch, so slowing one can restore its original sound. A disc that was
+  pitch-corrected when it was mastered sounds slightly low, and nothing on the disc says which
+  you have.
+- **Passthrough is off.** Compressed audio cannot change speed, so the core decodes it to stereo
+  PCM even with `Audio Out` set to Passthru. Your setting returns when conversion stops.
+- **`Film 24p Out` and `Video Standard` are overridden** for that disc. The film raster stays on
+  from start to finish.
+
+**Limits:**
+
+- It needs the scaler path, so it does nothing with `Video Output` on Interlaced, or on a rig
+  configured for direct analog output.
+- True interlaced video is shown as woven frames, so motion combs. `Deinterlace = Blend` softens
+  that; Bob has no effect on this raster. Logos and video-shot extras are where you are most
+  likely to see it.
+- Hard-telecined NTSC discs keep their baked-in pulldown, so they do not become clean 25 fps film.
+- VCD and other SIF-height discs, audio CDs and WAV files always play at their true speed.

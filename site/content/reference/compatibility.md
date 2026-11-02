@@ -36,6 +36,7 @@ What plays, what does not, and what is untested. Current as of **v0.10.0**.
 | Native 240p / 288p for VCD and MPEG-1 SIF | Supported, automatic on the analog raster |
 | PAL 576i on an analog CRT | Confirmed working on real PAL sets |
 | 3:2 pulldown / film cadence | [Supported](../video/film-24p.md), automatic |
+| PAL disc on NTSC output, NTSC disc on PAL output | By speed change with [Standard Convert](../video/film-24p.md#standard-convert), HDMI and `vga_scaler` only |
 
 **Sub-720 content is scaled to fill the analog output** in fabric — SVCD, sub-D1 DVD
 (704, 544) and any other sub-720 width get a horizontal stretch. **SIF-height content

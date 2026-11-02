@@ -329,7 +329,10 @@ wire        film_want  = (film_mode == 2'b10) | ((film_mode == 2'b00) & film_det
 // already resolves such a rig to Interlaced, where filmp_eff is 0 anyway, so the gate
 // only ever bit the deliberate case). An HDMI-only rig (analog_want=0) is unaffected.
 wire        film_forced = (film_mode == 2'b10);      // O[25:24] = On (not Auto)
-wire        filmp_eff  = film_want & ~interlaced_eff & (film_forced | ~analog_want);
+// DVD-FORK (Standard Convert, docs/standard_convert.md): converting holds the film raster
+// for the whole disc, whatever Film 24p Out says. Resolved beside pal_eff, near the decoder.
+wire        std_conv_active;
+wire        filmp_eff  = (film_want & ~interlaced_eff & (film_forced | ~analog_want)) | std_conv_active;
 wire        film24_eff = filmp_eff & ~pal_eff;       // NTSC 23.976 Hz path
 wire        film25_eff = filmp_eff &  pal_eff;        // PAL  25.000 Hz path
 // il_eff: the decoder/main-raster fields mode — now simply the resolved Video Output
@@ -455,7 +458,9 @@ wire        cdda_mode_w;
 wire [1:0]  cdda_fs_w;
 wire        wav_bad_w;
 wire        cdda_afull_w;
-wire        pass_mode  = status[6] & ~cdda_mode_w;   // O6: 1 = IEC 61937 passthrough
+// ~std_conv_active: compressed frames are locked to a real 48 kHz, so a speed change can only
+// be decoded here. Clearing this takes the normal PCM teardown (docs/hdmi_bitstream.md §5a).
+wire        pass_mode  = status[6] & ~cdda_mode_w & ~std_conv_active;   // O6: 1 = IEC 61937 passthrough
 wire        pass_bswap = status[7];   // O7: 1 = swap payload byte order
 assign AUDIO_S      = 1;
 assign AUDIO_MIX    = 2'd0;
@@ -827,6 +832,7 @@ parameter CONF_STR = {
     // The governor's SHOW_N=2 gives 25 fps from a 50 Hz display. See
     // docs/frame_rate_governor.md / docs/av_sync.md / docs/interlaced_auto.md.
     "P1O[17:16],Video Standard,Auto,NTSC,PAL;",
+    "P1O[54:53],Standard Convert,Off,To NTSC,To PAL;",
     // Flap probe: release a passthrough frame up to N ms EARLY so a marginally
     // not-yet-due frame doesn't cost a whole silence burst on the wire (the STC
     // advances in ~16.7 ms refresh quanta, so an on-the-margin equilibrium
@@ -1374,7 +1380,10 @@ wire       av_freerun = status[13];
 // entry-side set-point disagrees with the drain-set phase by the (variable) buffer
 // occupancy, so the integrator would slowly grind the correct phase away at ±0.5%.
 // av_sync stays for the STC + re-anchor + drift telemetry; its trim goes unused.
-wire signed [21:0] dec_nco_trim = 22'sd0;
+// ★ Standard Convert is not that slew: it is a CONSTANT ratio matching the STC's (dvd/std_rate.sv,
+// instanced beside the tick), and it is exactly 0 with conversion off.
+wire signed [21:0] dec_nco_trim;
+wire         [1:0] dec_nco_fs;
 
 // O[23:21] A/V Offset: signed playback-start trim in 90 kHz ticks (1 ms = 90).
 // >0 = audio later. Index 0 = 0 ms (nominal) power-on default as of 2026-09-07:
@@ -4759,9 +4768,10 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000),
     .cdda_wr_data(stream_data),
     .cdda_flush  (aud_flush),
     .cdda_full   (cdda_afull_w),
-    // 48 kHz NCO trim: hardwired 0 since the 2026-07-02 trim retirement — NOT a
-    // function of O[13]. See dec_nco_trim above for why the slew is gone.
+    // NCO trim: 0 unless converting (the slew retired 2026-07-02 stays gone) — NOT a
+    // function of O[13]. See dec_nco_trim above.
     .nco_trim           (dec_nco_trim),
+    .nco_fs_out         (dec_nco_fs),
     .dbg_play_cnt       (aud_play_cnt),          // DVD-FORK (telemetry)
     .dbg_gate_cnt       (aud_gate_cnt),          // DVD-FORK (telemetry)
     .dispatch_pts       (aud_dispatch_pts),
@@ -5195,12 +5205,26 @@ pts_cdc #(.W(33)) pts_cdc_vid (
 // lost) and counted by dvd/disp_sched.sv inside mpeg2video, which owns the
 // clock's phase. Everything in clk_sys reads a MIRROR that the scheduler sends
 // across on every tick.
+// ★ Standard Convert scales this tick (dvd/std_rate.sv), and at unity it lands on the same
+// cycles as stc_div == 299. stc_div itself stays a TRUE clk_sys/300: nav_trace's `free`
+// counter maps entries onto the HPS's clock and must not scale with the STC.
 reg  [8:0] stc_div;
 reg        stc_tog;
+wire       stc_rate_tick;
+std_rate std_rate_i (
+    .clk      (clk_sys),
+    .rst_n    (reset_n),
+    .mode     (~std_conv_active ? 2'd0 : pal_eff ? 2'd1 : 2'd2),   // PAL disc slows, NTSC disc speeds up
+    .nco_fs   (dec_nco_fs),
+    .tick     (stc_rate_tick),
+    .nco_trim (dec_nco_trim)
+);
 always @(posedge clk_sys or negedge reset_n)
     if (!reset_n) begin stc_div <= 9'd0; stc_tog <= 1'b0; end
-    else if (stc_div == 9'd299) begin stc_div <= 9'd0; stc_tog <= ~stc_tog; end
-    else stc_div <= stc_div + 9'd1;
+    else begin
+        stc_div <= (stc_div == 9'd299) ? 9'd0 : stc_div + 9'd1;
+        if (stc_rate_tick) stc_tog <= ~stc_tog;
+    end
 reg  stc_t1, stc_t2, stc_t3;
 always @(posedge clk_dec or negedge reset_n)
     if (!reset_n) begin stc_t1 <= 1'b0; stc_t2 <= 1'b0; stc_t3 <= 1'b0; end
@@ -5209,6 +5233,8 @@ wire stc_tick_dec = stc_t2 ^ stc_t3;
 
 // half the raster's image-scan period in ticks: 1501.5/2 at 480p and per 480i
 // field, 900 PAL, 1876.9 film24, 1800 film25 -- the pickup-opportunity grid.
+// Keyed on pal_eff = the SOURCE: while converting, the STC is scaled so one refresh of the
+// film raster is still one source picture period in ticks (3600 PAL, 3753.75 NTSC).
 // Mode flags are levels that change at human speed; a 2-FF sync suffices.
 reg  pal_s1_dec, pal_dec_l;
 always @(posedge clk_dec) begin pal_s1_dec <= pal_eff; pal_dec_l <= pal_s1_dec; end
@@ -5393,7 +5419,8 @@ localparam [3:0] REG_WR_VID_MODE = 4'h5;
 localparam [3:0] REG_WR_TRICK    = 4'hb;
 
 wire il_out  = il_eff;       // native 480i (NTSC) / 576i (PAL) HDMI fields raster (see il_eff)
-wire pal_out = pal_eff;      // resolved PAL flag: 720x576p @ 50 Hz (else NTSC 720x480p @ 59.94)
+// The RASTER's standard. pal_eff is the source's, and converting means they differ.
+wire pal_out = pal_eff ^ std_conv_active;      // resolved PAL flag: 720x576p @ 50 Hz (else NTSC 720x480p @ 59.94)
 // DVD-FORK (single-raster analog, 2026-09-03): there is no separate CRT branch — the
 // il_prev branch below IS the 15 kHz raster (pixrep + half-line), for HDMI and the
 // analog pins alike (docs/single_raster_analog.md).
@@ -5411,6 +5438,7 @@ reg        il_s1, il_s2, il_prev, il_init;
 reg        pal_s1, pal_s2, pal_prev;
 reg        filmp_s1, filmp_s2, filmp_prev;
 reg        p240_s1, p240_s2, p240_prev;
+reg        conv_s1, conv_s2, conv_prev;
 reg  [2:0] seq_step;       // 0..5 register-write walk
 reg        seq_run;        // sequencer active (reg_wr_en held high while running)
 
@@ -5518,7 +5546,12 @@ always @(*) begin
                     // progressive raster must be told 240/288 directly; vertical_length
                     // is UNCHANGED from the interlaced branch (261/311 = 262/312 lines),
                     // which is exactly what makes this 60.055 / 50.06 Hz.
-                    wr_data = (pal_prev && filmp_prev) ? {4'b0, 12'd576, 4'b0, 12'd1249}  // PAL 25p: vtotal 1250 => 25.000 Hz
+                    // Standard Convert: the raster's TOTALS with the SOURCE's active lines,
+                    // which are the other standard's. Both rates stay exact (1250 x 864 = 25 Hz,
+                    // 1287 x 875 = 24000/1001 Hz) and ascal scales the active window.
+                    wr_data = conv_prev ? (pal_prev ? {4'b0, 12'd480, 4'b0, 12'd1249}
+                                                    : {4'b0, 12'd576, 4'b0, 12'd1286})
+                            : (pal_prev && filmp_prev) ? {4'b0, 12'd576, 4'b0, 12'd1249}  // PAL 25p: vtotal 1250 => 25.000 Hz
                             : (pal_prev && p240_prev)   ? {4'b0, 12'd288, 4'b0, 12'd311}   // PAL 288p: 312 lines => ~50.06 Hz
                             : (pal_prev && il_prev)     ? {4'b0, 12'd576, 4'b0, 12'd311}   // PAL 576i: 312 lines/field => ~50.06 Hz
                             : pal_prev    ? {4'b0, 12'd576, 4'b0, 12'd624}   // 625 lines/frame (576p @ 50 Hz)
@@ -5538,7 +5571,10 @@ always @(*) begin
                     // unchanged (244..247 / 292..295). csync_smpte's VSS_N/VSS_P are
                     // written against exactly these lines, so the nine-line block lands
                     // in blanking on the 262/312-line raster with no new constants.
-                    wr_data = (pal_prev && (il_prev || p240_prev)) ? {4'b0, 12'd292, 4'b0, 12'd295}   // PAL per-field vsync
+                    // Standard Convert: below 576 active lines on both rasters. NTSC's 488..494
+                    // would land INSIDE the picture on the 576-line cross mode.
+                    wr_data = conv_prev ? {4'b0, 12'd581, 4'b0, 12'd586}
+                            : (pal_prev && (il_prev || p240_prev)) ? {4'b0, 12'd292, 4'b0, 12'd295}   // PAL per-field vsync
                             : pal_prev ? {4'b0, 12'd581, 4'b0, 12'd586}   // PAL per-frame vsync 581..586
                             : (il_prev || p240_prev) ? {4'b0, 12'd244, 4'b0, 12'd247}   // NTSC per-field vsync
                                        : {4'b0, 12'd488, 4'b0, 12'd494}; end // per-frame vsync
@@ -5607,6 +5643,7 @@ always @(posedge clk_dec) begin
         pal_s1 <= 1'b0; pal_s2 <= 1'b0; pal_prev <= 1'b0;
         filmp_s1 <= 1'b0; filmp_s2 <= 1'b0; filmp_prev <= 1'b0;
         p240_s1 <= 1'b0; p240_s2 <= 1'b0; p240_prev <= 1'b0;
+        conv_s1 <= 1'b0; conv_s2 <= 1'b0; conv_prev <= 1'b0;
         il_init <= 1'b0; seq_run <= 1'b0; seq_step <= 3'd0;
     end else begin
         il_s1  <= il_out;
@@ -5617,16 +5654,19 @@ always @(posedge clk_dec) begin
         filmp_s2 <= filmp_s1;                    // 2-FF sync
         p240_s1 <= p240_out;
         p240_s2 <= p240_s1;                      // 2-FF sync
+        conv_s1 <= std_conv_active;
+        conv_s2 <= conv_s1;                      // 2-FF sync
         if (seq_run) begin
             if (seq_step == 3'd5) seq_run <= 1'b0;
             seq_step <= seq_step + 3'd1;
         end else if (dec_ready &&
                      (!il_init || (il_s2 != il_prev) || (pal_s2 != pal_prev) || (filmp_s2 != filmp_prev)
-                                || (p240_s2 != p240_prev))) begin
+                                || (p240_s2 != p240_prev) || (conv_s2 != conv_prev))) begin
             il_prev  <= il_s2;                   // latch the values being applied
             pal_prev <= pal_s2;
             filmp_prev <= filmp_s2;
             p240_prev <= p240_s2;
+            conv_prev <= conv_s2;
             il_init  <= 1'b1;
             seq_run  <= 1'b1;                    // kick a 6-register write walk
             seq_step <= 3'd0;
@@ -5886,21 +5926,26 @@ wire        pal_detect_dec;
 // flips the raster, the flush perturbs the parse the detector feeds on, and it flips again.
 // pal_detect already owns the bound, the sustained-disagreement hold and the mount re-arm.
 wire        sif_detect_dec;
+wire        pal_valid_dec;
 pal_detect pal_detect_i (
     .clk       (clk_dec),               // the domain vertical_size is parsed in
     .rst_n     (reset_n),
     .mount_arm (mnt_arm_dec),
     .vsize     (core_vertical_size),
     .pal       (pal_detect_dec),
-    .sif       (sif_detect_dec)
+    .sif       (sif_detect_dec),
+    .valid     (pal_valid_dec)
 );
 reg         pal_det_s1, pal_det_s2;
 reg         sif_det_s1, sif_det_s2;
+reg         pal_val_s1, pal_val_s2;
 always @(posedge clk_sys or negedge reset_n) begin
     if (!reset_n) begin pal_det_s1 <= 1'b0; pal_det_s2 <= 1'b0;
-                        sif_det_s1 <= 1'b0; sif_det_s2 <= 1'b0; end
+                        sif_det_s1 <= 1'b0; sif_det_s2 <= 1'b0;
+                        pal_val_s1 <= 1'b0; pal_val_s2 <= 1'b0; end
     else          begin pal_det_s1 <= pal_detect_dec; pal_det_s2 <= pal_det_s1;
-                        sif_det_s1 <= sif_detect_dec; sif_det_s2 <= sif_det_s1; end
+                        sif_det_s1 <= sif_detect_dec; sif_det_s2 <= sif_det_s1;
+                        pal_val_s1 <= pal_valid_dec;  pal_val_s2 <= pal_val_s1; end
 end
 // ★ The engage condition is the debounced verdict AND the 15 kHz raster. It is deliberately
 // NOT user-selectable: a CONF_STR row would re-roll the pinned fitter SEED, and there is no
@@ -5914,7 +5959,22 @@ end
 assign p240_eff = interlaced_eff & sif_det_s2;
 // pal_eff: resolved PAL flag (clk_sys). O[17:16] = 0 Auto / 1 NTSC / 2 PAL.
 // Auto follows the detected frame height; NTSC/PAL force the choice.
-assign pal_eff = (status[17:16] == 2'b10) ? 1'b1 :        // force PAL
+// ★ pal_eff IS THE SOURCE'S STANDARD WHILE CONVERTING, which is what every consumer but the
+// modeline wants: active lines, overlay geometry, half_scan, disp_fps (so cell_secs stays in
+// authored seconds) and the film verdict all follow the picture. Only pal_out inverts it.
+// Standard Convert (O[54:53]: 0 Off, 1 To NTSC, 2 To PAL) therefore reads the detection
+// directly, past the force row. It acts only when:
+//   pal_val_s2       this file has a verdict: not the idle screen, not the last disc's
+//   ~sif_det_s2      full-height video; SIF has its own raster and stays at true speed
+//   ~cdda_mode_w     CD-DA/WAV has no picture, and its audio must keep its true rate
+//   ~interlaced_eff, ~analog_want   the film raster is on the scaler path only, as Film 24p's
+//                    Auto (no analog display holds it). Direct analog is a later phase.
+// Every input is debounced or human-speed; none depends on this, so it cannot self-feed.
+wire [1:0] std_conv_sel = status[54:53];
+assign std_conv_active = pal_val_s2 & ~sif_det_s2 & ~cdda_mode_w & ~interlaced_eff & ~analog_want
+                       & (pal_det_s2 ? (std_conv_sel == 2'd1) : (std_conv_sel == 2'd2));
+assign pal_eff = std_conv_active ? pal_det_s2 :
+                 (status[17:16] == 2'b10) ? 1'b1 :        // force PAL
                  (status[17:16] == 2'b01) ? 1'b0 :        // force NTSC
                                             pal_det_s2;   // Auto: detected
 // DVD-FORK (CRT anamorphic overlay align): frame width from the sequence header

@@ -1,6 +1,9 @@
 # Standard conversion by speed change
 
-**Status:** 🔧 design and Phase 0 measurements only; no RTL yet. Branch `feature/std-convert`.
+**Status:** 🔧 Phases 1 and 2 wired in and bench-proven on `feature/std-convert`. ⏳ Not yet
+built or run on hardware.
+**Files:** `dvd/std_rate.sv`, `dvd/emu.sv`, `dvd/pal_detect.sv` (`valid`), `dvd/dvd_audio_decode.sv`
+(`nco_fs_out`). **Gates:** `bench/dvd/run_std_rate.sh --red`, `tools/check_std_convert_wiring.py`.
 
 PAL film slowed by 960/1001 plays at 23.976 frames/s and maps onto 3:2 at 59.94 Hz. NTSC film
 sped up by 1001/960 plays at 25 frames/s and maps onto 2:2 at 50 Hz. Both ratios are exact from
@@ -80,11 +83,47 @@ and true 50i may be under-called. The ratio is not exact, but the conclusion doe
 - **The interlaced-frame branch of the `resample_addrgen.v` image build has no third-field arm,**
   so 3:2 on a `pf=0` picture needs more than synthetic `rff`.
 
+## Phases 1 and 2 as built
+
+**`pal_eff` stays the SOURCE's standard; only `pal_out` takes the target.** The plan expected to
+split about 20 uses of `pal_eff`. Because the raster's active lines equal the source's on this
+path, nearly every consumer already wants the source, and each comes out right with no new
+constant:
+
+- `half_scan` stays 1800 or 1877: under the scaled STC one film-raster refresh is still one source
+  picture period in ticks.
+- `disp_fps` stays 25 or 24, which keeps `cell_secs` in authored seconds.
+- Overlays, `act_vres` and SPU `pal_mode` follow the active lines.
+
+**Cross modes** use the raster's totals with the source's active lines: 875×1287 with 576 active
+(exactly 24000/1001 Hz), 864×1250 with 480 active (exactly 25 Hz). Vsync is 581..586 on both,
+because NTSC's 488..494 would land inside 576 active lines.
+
+**Gates on `std_conv_active`:**
+
+- `pal_val_s2`, from `pal_detect`'s new `valid`: `pal` keeps the previous file's value across a
+  mount and reads 0 at power-on, so without this `To PAL` would convert the idle screen and a new
+  disc would start on the last disc's verdict.
+- `~interlaced_eff`, `~analog_want`: no analog display holds the film raster.
+- `~sif_det_s2`, `~cdda_mode_w`: SIF has its own raster, and CD-DA/WAV has no picture.
+
+**Accepted consequences:**
+
+- Non-SIF is broader than "480 or 576 lines": `pal_detect` has no whitelist on purpose, so a flat
+  `.mpg` at another height converts too, judged by whether it is over 480 lines. A 480-line file
+  that isn't 23.976 fps also gets the fixed ratio. Neither is a DVD-Video case.
+- A mount drops `valid`, so a convert user sees the raster walk at each disc change, and a
+  passthrough user sees a PCM-to-bitstream switch if the new disc needs no conversion.
+- `dec_duty`'s per-picture budget thresholds assume the source's true rate, so they are about 4 %
+  off while converting. Instrument only.
+- Timed stills use wall-clock seconds (`SEC_DIV`), so they don't scale. Nothing is synchronised to
+  them, so a still is just 4 % long or short relative to the speed.
+
 ## Not done yet
 
-- The ascal lock check at 875×1287 with 576 active and 864×1250 with 480 active needs a build, so
-  it moves to the start of Phase 2.
-- ⏳ **Next step:** the maintainer's call on how Phase 3 picks a cadence for `pf=0` pictures. Phases
-  1 and 2 don't depend on it.
+- ⏳ **Next step:** build, then HIL against the v0.10.0 control. First check that ascal locks to
+  875×1287 with 576 active and 864×1250 with 480 active; nothing has exercised those yet.
+- Phase 3's cadence for `pf=0` pictures: decided at Phase 3 (maintainer, 2026-11-02), when real CRT
+  output can show how bad the wrong one looks.
 - The census scripts are still scratch files. Add them to `tools/` before this note's numbers are
   relied on elsewhere.

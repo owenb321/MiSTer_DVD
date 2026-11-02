@@ -701,6 +701,15 @@ save-states build, M10K 533 → 520, DSP 91 → 84, 98 % → 91 % ALM, timing PA
 against `main` (5.1, short blocks, stereo; `audio_check.py`), then the maintainer's call on
 pushing both branches.**
 
+### ⏳ Standard Convert: PAL ↔ NTSC by speed change (`docs/standard_convert.md`)
+
+- [~] Clock, audio and the scaler path, both directions (`feature/std-convert`): bench-proven, ⏳ not
+  yet built or run on hardware. **Next:** does ascal lock to the two cross modes?
+- [ ] PAL→NTSC on direct analog: 5/6 and 5/8 `disp_vscale`, 3:2 field path. ⏳ First decide how to
+  pick a cadence for `progressive_frame=0` pictures, which the flag alone can't answer.
+- Deferred: NTSC→PAL on direct analog (6/5 upscale; 60i needs 1-in-5 drops against B-only drops
+  limited to about 6/s), and inverse telecine for hard-telecined NTSC.
+
 ### ⏳ 2026-10-01 spec-audit: DVD Demystified 3rd-edition follow-ups (items 1–8 and 10b ✅; the rest re-ranked 2026-10-06, PR #165)
 
 The audit, with evidence and the user's decisions, is in

@@ -95,6 +95,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/vm_snap.sv
 # cannot flip it (issue #42 leg 2): a pal_eff change restarts the raster with NO flush.
 # See bench/dvd/pal_detect_tb.sv.
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/pal_detect.sv
+# Standard conversion by speed change: the STC tick and audio NCO trim (docs/standard_convert.md).
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/std_rate.sv
 # Mode-switch reader re-align (issue #42): a live raster-mode change issues a seek to the
 # current VOBU instead of flushing mid-parse, so seek_ack drives the trio and the decoder
 # gets a GOP boundary. See bench/dvd/mode_realign_tb.sv.

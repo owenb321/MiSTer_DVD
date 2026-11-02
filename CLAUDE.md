@@ -416,6 +416,7 @@ otherwise; `--red` runs its mutation arms).
 | Mode-switch re-align + switch blank; `pal_detect` hardening | ✅ | `single_raster_analog.md` §6 | `run_mode_realign.sh` |
 | Post-seek reference re-align (issue #45) | ✅ | `seek_realign.md` | `run_seek_realign.sh` |
 | Film 24p evidence gate (no flapping) | ✅ | `film_24p_plan.md` §14 | `run_film_evidence.sh` |
+| Standard Convert: PAL ↔ NTSC by speed change (scaler path) | 🔧 ⏳ bench only, not yet on hardware; CRT path is Phase 3 | `standard_convert.md` | `run_std_rate.sh --red`, `check_std_convert_wiring.py` |
 | PAL/NTSC runtime modeline | ✅ | `roadmap.md` | — |
 | Native 240p/288p for SIF, 352→720 horizontal fill | ✅ ⏳ PAL 288p, long VCD | `mpeg1.md` §B.3b | `run_p240.sh`, `check_p240_wiring.py` |
 | Line-21 closed captions (`cc_vbi`, pickup-paced) | ✅ | `closed_captions.md` | `cc_extract_tb`, `cc_line21_tb` |
