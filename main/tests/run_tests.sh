@@ -527,6 +527,11 @@ if [ "$RED" -eq 1 ]; then
         "FAIL the worker's reads are on CPU 0 only" \
         "s/^\tCPU_SET(0, \&set);/\tCPU_SET(1, \&set);/" \
         ra-worker-on-poll-core
+    # A jump to just past a full ring's head: nothing frees room, so it never finishes.
+    red_case dvd_readahead.cpp dvd_readahead_test.cpp \
+        "FAIL a window starting past the head" \
+        "s/^\t\tadvance(lba);$/\t\t;/" \
+        ra-full-ring-deadlock
 
     # ---- the support bundle's argv (issue #81) ---------------------------------
     # The shipped-until-#81 behaviour: no NAV-pack capture at all, so a highlight

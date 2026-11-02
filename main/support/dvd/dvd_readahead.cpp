@@ -129,7 +129,17 @@ static int classify_hit(uint32_t lba, uint32_t end)
 		retarget(lba);
 		if (!waiting) { waiting = 1; wait_seek = 1; wait_lba = lba; clock_gettime(CLOCK_MONOTONIC, &wait_t0); }
 	}
-	else if (!waiting) { waiting = 1; wait_seek = 0; wait_lba = lba; clock_gettime(CLOCK_MONOTONIC, &wait_t0); }
+	else
+	{
+		// On its way, so the worker has to be able to get there. Only a served request
+		// frees room, and a FULL ring parks the worker until room is freed: a jump to
+		// just past the head would wait for the worker while the worker waited for it,
+		// for ever, with the core's read in flight so not even a Menu press could leave
+		// (Ultimate T2, Next ~5.8 s into its logo clip). The request itself says the
+		// consumer has moved here, so everything further behind is free.
+		advance(lba);
+		if (!waiting) { waiting = 1; wait_seek = 0; wait_lba = lba; clock_gettime(CLOCK_MONOTONIC, &wait_t0); }
+	}
 	return 0;
 }
 
