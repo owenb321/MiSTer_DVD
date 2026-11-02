@@ -483,9 +483,10 @@ if [ "$RED" -eq 1 ]; then
         ra-serves-partial
 
     # The consumer never frees room: the worker parks once the ring is full and
-    # playback stops dead one ring-length in.
+    # playback waits at every ring-length (a request past a full ring frees room, so
+    # since the deadlock fix it is a stall each time around, not a dead stop).
     red_case dvd_readahead.cpp dvd_readahead_test.cpp \
-        "FAIL windows never served" \
+        "FAIL windows the core had to wait for" \
         "/^\tadvance(end);$/d" \
         ra-no-advance
 
