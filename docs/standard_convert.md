@@ -1,7 +1,7 @@
 # Standard conversion by speed change
 
-**Status:** 🔧 Phases 1 and 2 wired in and bench-proven on `feature/std-convert`. ⏳ Not yet
-built or run on hardware.
+**Status:** 🔧 Phases 1 and 2 built and measured on the rig, on `feature/std-convert`
+(`DVD_stdconvert_20261102_2317.rbf`). ⏳ Save state, subtitles by eye and a by-ear check are still open.
 **Files:** `dvd/std_rate.sv`, `dvd/emu.sv`, `dvd/pal_detect.sv` (`valid`), `dvd/dvd_audio_decode.sv`
 (`nco_fs_out`). **Gates:** `bench/dvd/run_std_rate.sh --red`, `tools/check_std_convert_wiring.py`.
 
@@ -143,7 +143,22 @@ a fault, and it sits right at `DROP_COOL`'s limit of about 6/s, so `disp_lag` ri
 **Defect found and fixed: passthrough rising after a mount.** To PAL with Passthru selected read
 `play_err` 241, 31 and 84 ms over three runs, against 31 ms on every run without Passthru. Cause: a
 mount drops `valid`, conversion is off in the gap, and a passthrough session starts and is torn
-down just as audio starts. `std_conv_wait` holds passthrough off until the verdict.
+down just as audio starts. `std_conv_wait` holds passthrough off until the verdict. Six repeats on the
+fixed build read 30 to 34 ms, the same as without Passthru. An NTSC disc with To NTSC and Passthru
+selected still gets a real bitstream session (`eng_frames` 0, as on the v0.10.0 control).
+
+**Transport while converting, To PAL on MiB and To NTSC on The Office:** pause stops pictures and
+audio and resumes at the scaled rates; next and previous chapter, audio and subtitle step and d-pad
+seek all keep video and audio at those rates, with 0 lates and no re-anchor. These are rate
+measurements: they don't prove a subtitle lands right on the picture.
+
+**Unrelated pre-existing fault found: audio dies until a reboot.** After about 25 core loads in one
+boot, `dts_copied`, `dts_ok` and `eng_frames` all read 0 and HDMI capture read −61 dB. The state
+survived further core loads, and **v0.10.0 was equally dead when flashed onto the rig in that state**,
+so this branch did not cause it. A reboot cleared it. Video was unaffected. Cause not established:
+the codebook copy over `ram2` never finishing, with something outside the FPGA holding that state, is
+a guess. See `docs/roadmap.md`. A run whose `dts_ok` reads 0 is void, and it is easy to misread as a
+passthrough session, since `aud_play` also reads 0 there.
 
 ⚠ **Trap for the next measurement:** telemetry counters are zeroed by a flush, so a decrease is
 usually not a 16-bit wrap. Treating it as one gave 3,167 pickups/s on The Office, which crosses two
@@ -151,8 +166,9 @@ transitions in the first 60 s. Measure rates with Disc Menus off, away from menu
 
 ## Not done yet
 
-- ⏳ **Next step:** confirm the passthrough fix on hardware, then pause, seek, track switch, subtitles
-  and save state while converting.
+- ⏳ **Next step:** save state while converting, subtitle placement by eye, and pitch by ear, then Phase 3.
+- ⏳ `tools/hil_suite.py` with conversion Off against v0.10.0 has not run; Off matched the control on
+  rates only.
 - Phase 3's cadence for `pf=0` pictures: decided at Phase 3 (maintainer, 2026-11-02), when real CRT
   output can show how bad the wrong one looks.
 - The census scripts are still scratch files. Add them to `tools/` before this note's numbers are

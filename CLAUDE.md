@@ -416,7 +416,7 @@ otherwise; `--red` runs its mutation arms).
 | Mode-switch re-align + switch blank; `pal_detect` hardening | ✅ | `single_raster_analog.md` §6 | `run_mode_realign.sh` |
 | Post-seek reference re-align (issue #45) | ✅ | `seek_realign.md` | `run_seek_realign.sh` |
 | Film 24p evidence gate (no flapping) | ✅ | `film_24p_plan.md` §14 | `run_film_evidence.sh` |
-| Standard Convert: PAL ↔ NTSC by speed change (scaler path) | 🔧 ⏳ bench only, not yet on hardware; CRT path is Phase 3 | `standard_convert.md` | `run_std_rate.sh --red`, `check_std_convert_wiring.py` |
+| Standard Convert: PAL ↔ NTSC by speed change (scaler path) | 🔧 HIL rates and transport vs v0.10.0, branch only; ⏳ save state, by eye and ear, CRT path (Phase 3) | `standard_convert.md` | `run_std_rate.sh --red`, `check_std_convert_wiring.py` |
 | PAL/NTSC runtime modeline | ✅ | `roadmap.md` | — |
 | Native 240p/288p for SIF, 352→720 horizontal fill | ✅ ⏳ PAL 288p, long VCD | `mpeg1.md` §B.3b | `run_p240.sh`, `check_p240_wiring.py` |
 | Line-21 closed captions (`cc_vbi`, pickup-paced) | ✅ | `closed_captions.md` | `cc_extract_tb`, `cc_line21_tb` |
@@ -483,6 +483,7 @@ otherwise; `--red` runs its mutation arms).
 ### Known gaps
 
 - ❌ HD output (720p/1080p): fixed 27 MHz SD dot clock.
+- ⏳ Audio dead until a reboot after ~25 core loads in one boot, v0.10.0 too (`dts_ok` 0, cause unknown; `standard_convert.md`). `dts_ok` 0 voids a HIL run.
 - ❌ UDF-only images, parental control.
 - ⏳ 3rd-ed. audit tail (1–8 and 10b shipped): `docs/roadmap.md` "2026-10-01 spec-audit".
 - ❌ Trick play (continuous 2×/4×): needs a flush-free I-frame splice (`docs/dvd_nav.md` §2d).

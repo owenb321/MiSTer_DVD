@@ -137,5 +137,7 @@ A disc already in the chosen standard plays normally, so you can leave this set.
 - True interlaced video is shown as woven frames, so motion combs. `Deinterlace = Blend` softens
   that; Bob has no effect on this raster. Logos and video-shot extras are where you are most
   likely to see it.
+- With **To PAL**, true 30i video (often animated menus and extras) loses one picture in five, because
+  31 pictures a second cannot fit a 25 Hz output. Motion there looks less smooth.
 - Hard-telecined NTSC discs keep their baked-in pulldown, so they do not become clean 25 fps film.
 - VCD and other SIF-height discs, audio CDs and WAV files always play at their true speed.

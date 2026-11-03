@@ -20,6 +20,16 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ---
 
+## Standard Convert: PAL ↔ NTSC by speed change (2026-11-02, branch `feature/std-convert`)
+
+**State:** clock, audio and the scaler path in both directions, not merged. Measured on the rig against
+v0.10.0: raster, audio and STC all land on the exact ratios, with A/V stable over 120 s and 0 lates.
+**Found on the way:** passthrough rising in the gap after a mount made audio up to 210 ms late (fixed,
+`std_conv_wait`), and a separate fault, also in v0.10.0, where audio stays dead until a reboot after
+about 25 core loads. **Refuted:** that `pal_eff` needed splitting into source and raster at about 20 sites;
+it stays the source and only `pal_out` inverts. **Open decision:** how Phase 3 picks a CRT cadence, since
+most moving `progressive_frame=0` windows on PAL discs look like film. Full account: `standard_convert.md`.
+
 ## Read-ahead: a jump past a full ring's head deadlocked (2026-11-01, found in the v0.10.0 smoke)
 
 **Report:** Ultimate T2, DTS selected, Next a few seconds into the DTS logo clip: frozen, Menu

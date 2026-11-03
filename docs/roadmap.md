@@ -703,10 +703,13 @@ pushing both branches.**
 
 ### ⏳ Standard Convert: PAL ↔ NTSC by speed change (`docs/standard_convert.md`)
 
-- [~] Clock, audio and the scaler path, both directions (`feature/std-convert`): bench-proven, ⏳ not
-  yet built or run on hardware. **Next:** does ascal lock to the two cross modes?
+- [~] Clock, audio and the scaler path, both directions (`feature/std-convert`): measured on the rig
+  against v0.10.0. ⏳ Save state, subtitle placement by eye, pitch by ear, `hil_suite` with it Off.
 - [ ] PAL→NTSC on direct analog: 5/6 and 5/8 `disp_vscale`, 3:2 field path. ⏳ First decide how to
   pick a cadence for `progressive_frame=0` pictures, which the flag alone can't answer.
+- [ ] ⏳ Separate bug, in v0.10.0 too: audio dead until a reboot after ~25 core loads in one boot
+  (`dts_copied` 0, `eng_frames` 0). Reproduce it by looping core loads and find what survives the
+  reload. Details in `docs/standard_convert.md`.
 - Deferred: NTSC→PAL on direct analog (6/5 upscale; 60i needs 1-in-5 drops against B-only drops
   limited to about 6/s), and inverse telecine for hard-telecined NTSC.
 
