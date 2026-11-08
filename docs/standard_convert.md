@@ -164,9 +164,78 @@ passthrough session, since `aud_play` also reads 0 there.
 usually not a 16-bit wrap. Treating it as one gave 3,167 pickups/s on The Office, which crosses two
 transitions in the first 60 s. Measure rates with Disc Menus off, away from menus.
 
+## Phase 3 plan: PAL→NTSC on direct analog (agreed 2026-11-07)
+
+A 525-line raster has about 486 visible lines, so it can't carry 576 active lines. PAL→NTSC on
+a CRT therefore needs a real vertical scale. Both standards put the same 4:3 picture on 720
+samples over the same active line time, so the scale is purely vertical and keeps geometry
+exact. The horizontal path (`disp_hstretch` Crop, SIF fill) is untouched.
+
+**Decisions (maintainer accepted every recommendation):**
+
+| Analog Aspect | Scale | Lines |
+|---|---|---|
+| Fit | 5/6 | 576 → 480, 288 → 240 per field |
+| Letterbox (16:9 on 4:3) | 5/8, **one pass** rather than 5/6 then 3/4 | 576 → 360 |
+| Crop | 5/6, plus the existing horizontal pan-scan | 576 → 480 |
+
+- **Kernel: 2-tap bilinear per field,** as Letterbox already uses. Slightly soft, but it doesn't
+  alias the way dropping every sixth line would.
+- **Fields are scaled, not frames,** on the field path: `resample_addrgen` hands
+  `disp_vscale` one field's lines contiguously, so neighbours are same-field and motion isn't
+  combed. Both cadences keep every source field in its own parity slot (3:2 gives A: T B T,
+  B: B T; 50i pair-repeat repeats whole pairs), so per-field scaling is safe.
+- **Bottom-field phase done properly.** Output line `y` reads source frame position `y·S`, where
+  S is source lines per output line. A bottom-field output line `2i+1` therefore lands at
+  bottom-field line `i·S + (S−1)/2`, which is a phase of 1/10 at 5/6 and 3/10 at 5/8, not 0.
+  Starting at 0 gives a faint bob on fine detail. The **existing 3/4 Letterbox has the same
+  1/6-line error** and gets the fix in its own small change, so the 5/6 work lands bit-identical
+  for 3/4.
+- **Order:** scaler and overlay mapping first, measured on a progressive-flagged disc. Then the
+  synthetic 3:2 field cadence, and last the `progressive_frame=0` cadence question.
+- **NTSC→PAL on direct analog stays deferred:** 480 → 576 is an upscale, which `disp_vscale`'s
+  flow control can't do as built (output would outrun input).
+
+**Implementation:**
+
+1. **`dvd/disp_vscale.sv`:** the Bresenham remainder moves from sixths to **sixtieths** of a
+   source line, which covers every step (4/3 = 80/60, 6/5 = 72/60, 8/5 = 96/60) and every phase
+   (1/6 = 10, 1/10 = 6, 3/10 = 18, the pause still's 1/2 = 30). The weight is
+   `(r·273 + 32) >> 6`, equal to `round(256·r/60)` at every remainder reachable (multiples of
+   6) and identical to the old sixths table, so 3/4 stays bit-identical. A per-scan ratio
+   (0 = 3/4, 1 = 5/6, 2 = 5/8) rides the input FIFO beside the mode, as the mode does, so a
+   ratio change can't tear a scan. A bottom field is a frame-top of `ROW_1_COL_0` (a frame
+   scan's top is always `ROW_0_COL_0`).
+2. **`dvd/emu.sv`:** conversion splits into two flavours. The **scaler path** is Phase 2
+   unchanged (film cross-mode raster, ascal scales). The **analog path** applies when
+   `interlaced_eff | analog_want`: the plain raster of the target standard (480i, or 480p at
+   31 kHz), with `disp_vscale` doing 5/6 or 5/8. `disp_fps` on that raster is 62 (62.5 exact;
+   62 can only under-hold, see `cell_secs`). `half_scan` is 720 (one 59.94 Hz field is 1440
+   scaled ticks).
+3. **Overlays after the scaler follow the raster, not the source**, on the analog path only.
+   Phase 2 kept `pal_eff` = source everywhere because the active lines were the source's; that
+   stops being true here. HUD, seek bar, idle logo and the mixer's `v_bar`/`v_band` take the
+   raster standard. Subtitles and highlights keep querying source coordinates through
+   `dvd/crt_ov_map.sv`, which gains the 5/6 and 5/8 inverses with the bottom-field phase.
+   `tools/check_std_convert_wiring.py` pins both sides.
+4. **No mixer change:** it places lines by their frame-top codes plus `disp_v_offset`, and the
+   display window is the smaller of the raster and the stream, so 480 scaled lines on a 480-line
+   raster just fit.
+
+**Risks:**
+
+- **Decode pacing** is the real unknown. The display reads 288 source lines per 16.7 ms field,
+  about 20 % more line reads per second than PAL at 50 Hz, and display re-read contention is
+  what caused lates before. Measure `dec_duty`, `pic_max` and lates on The Office and ROGER
+  before adding anything else; stop and discuss if lates appear.
+- **Until step 2 lands,** a film picture on the 59.94 field raster gets 2:2:2:4 (pair re-scan),
+  not 3:2. Progressive analog (480p) already gets 3:2 from the due test, since 23.976 pictures
+  meet 59.94 frames at 2.5 refreshes each, so it's the first thing to judge by eye.
+
 ## Not done yet
 
-- ⏳ **Next step:** save state while converting, subtitle placement by eye, and pitch by ear, then Phase 3.
+- ⏳ **Next step:** Phase 3 step 1, the `disp_vscale` ratios (plan above). Hardware testing waits for
+  the analog path, by the maintainer's choice (2026-11-07).
 - ⏳ `tools/hil_suite.py` with conversion Off against v0.10.0 has not run; Off matched the control on
   rates only.
 - Phase 3's cadence for `pf=0` pictures: decided at Phase 3 (maintainer, 2026-11-02), when real CRT
