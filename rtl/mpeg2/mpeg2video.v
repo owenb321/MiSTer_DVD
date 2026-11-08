@@ -83,6 +83,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
              soft_flush,                                           // DVD-FORK (mount soft reset): watchdog-equivalent decode-pipeline reset on a file mount
              disp_vscale_mode,                                     // DVD-FORK (CRT anamorphic vscale): 0=fit 1=letterbox(dormant) 2=SIF 2x line repeat
              disp_vscale_en,                                       // DVD-FORK (CRT anamorphic letterbox AA): enable downstream disp_vscale 2-tap blend
+             disp_vscale_ratio,                                    // DVD-FORK (Standard Convert): 0 = 3/4, 1 = 5/6, 2 = 5/8
              disp_hcrop_en,                                        // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
              disp_hfill_en,                                        // DVD-FORK FIX (SIF analog fill): stretch sub-D1 lines to the 720 raster
              film24,                                               // DVD-FORK (Film 24p Out): 1 frame/refresh, ascal does the 3:2
@@ -278,6 +279,9 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * disp_vscale has both straddling source lines. 0 => disp_vscale is a pure wire pass-through
    * (Fit/Crop bit-identical). Also gates the mixer's letterbox bar offset below. */
   input            disp_vscale_en;
+  /* DVD-FORK (Standard Convert, docs/standard_convert.md): disp_vscale's ratio. 0 = 3/4 (the
+   * Letterbox it always was), 1 = 5/6 (576 -> 480), 2 = 5/8 (576 -> 360). Quasi-static. */
+  input       [1:0]disp_vscale_ratio;
   /* DVD-FORK (CRT anamorphic horizontal crop / pan-scan): 1 => the resample reads only the
    * centre ~3/4 of the columns and the mixer stretches them to full raster width (Crop
    * mode). 0 outside Crop => full width, mixer stretch off (bit-identical). */
@@ -1751,7 +1755,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * pass-through unless disp_vscale_en (Fit/Crop bit-identical). See dvd/disp_vscale.sv. */
   disp_vscale disp_vscale (
     .clk(clk), .clk_en(1'b1), .rst(sync_rst),
-    .vscale_en(disp_vscale_en),
+    .vscale_en(disp_vscale_en), .vscale_ratio(disp_vscale_ratio),
     .scan_start(still_scan_start), .scan_half(still_scan_half),   // DVD-FORK (pause field still)
     /* from field_blend (= resample unless a scan is blended) */
     .in_y(y_fb), .in_u(u_fb), .in_v(v_fb), .in_osd(osd_fb),
@@ -1873,7 +1877,14 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   /* DVD-FORK FIX (SIF analog fill): key the bar height on the EFFECTIVE (doubled) size so
    * a manually-forced Letterbox over doubled SIF places the bars where crt_ov_map's
    * raster-space v_bar constants (60/72) expect them. */
-  wire [11:0] disp_v_offset = disp_vscale_en ? {1'b0, eff_vertical_size[13:3]} : 12'd0;
+  /* DVD-FORK (Standard Convert): the 5/6 and 5/8 scales put a 576-line source on the 480-line
+   * NTSC raster, so their bars are the RASTER's: none at 5/6 (480 fills it), (480 - 360)/2 = 60
+   * at 5/8. vertical_size/8 would give 72, the PAL 3/4 bar. Only a 576-line source is converted
+   * on this path; another height is top-aligned and the display window clips it. */
+  wire [11:0] disp_v_offset = ~disp_vscale_en               ? 12'd0 :
+                              (disp_vscale_ratio == 2'd1)   ? 12'd0 :
+                              (disp_vscale_ratio == 2'd2)   ? 12'd60 :
+                                                              {1'b0, eff_vertical_size[13:3]};
 
   /* DVD-FORK (CRT anamorphic horizontal crop / pan-scan): the mixer stretches the cropped
    * source line (disp_hsrc_w wide) up to the raster active width (disp_hdst_w) so Crop

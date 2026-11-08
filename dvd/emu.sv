@@ -332,6 +332,7 @@ wire        film_forced = (film_mode == 2'b10);      // O[25:24] = On (not Auto)
 // DVD-FORK (Standard Convert, docs/standard_convert.md): converting holds the film raster
 // for the whole disc, whatever Film 24p Out says. Resolved beside pal_eff, near the decoder.
 wire        std_conv_active;
+wire  [1:0] disp_vscale_ratio;   // disp_vscale: 0 = 3/4, 1 = 5/6, 2 = 5/8; assigned beside disp_vscale_en
 wire        filmp_eff  = (film_want & ~interlaced_eff & (film_forced | ~analog_want)) | std_conv_active;
 wire        film24_eff = filmp_eff & ~pal_eff;       // NTSC 23.976 Hz path
 wire        film25_eff = filmp_eff &  pal_eff;        // PAL  25.000 Hz path
@@ -5797,6 +5798,7 @@ mpeg2video mpeg2video_inst (
     .soft_flush        (soft_flush),                   // DVD-FORK: watchdog-equivalent decode reset on a file mount AND on a ~keep_vbuf VM jump (menu entry/exit) -- docs/quant_matrix.md §11 (async, synchronizers inside)
     .disp_vscale_mode  (disp_vscale_mode),             // DVD-FORK (CRT anamorphic vscale): 0 Fit / 2 SIF 2x line repeat
     .disp_vscale_en    (disp_vscale_en),               // DVD-FORK (CRT anamorphic letterbox AA): downstream 2-tap blend enable
+    .disp_vscale_ratio (disp_vscale_ratio),            // DVD-FORK (Standard Convert): 0 3/4, 1 5/6, 2 5/8
     .disp_hcrop_en     (disp_hcrop_en),                // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
     .disp_hfill_en     (disp_hfill_en),                // DVD-FORK FIX (SIF analog fill): 352->720 stretch + 720 DE window
     .film24            (filmp_dec),                    // DVD-FORK (Film 24p/25p Out): 1 frame/refresh in the governor; ascal does the pulldown
@@ -6200,6 +6202,8 @@ assign analog_letterbox = aa_live & ~sif_det_s2 &
 assign analog_crop      = aa_live & ~sif_det_s2 &
                           ((analog_want_crop & ~menu_crop_to_lb) | (analog_want_lb   & menu_lb_to_crop));
 wire       disp_vscale_en   = analog_letterbox;                             // downstream 2-tap letterbox
+// Standard Convert (docs/standard_convert.md): 3/4 until the analog conversion path is wired.
+assign disp_vscale_ratio = 2'd0;
 // DVD-FORK FIX (SIF analog fill): mode 2 = the re-armed addrgen 2x line repeat (v_step
 // 128) for sub-D1 heights on the analog output; bit 0 stays tied (mode 1 letterbox-NN
 // remains dormant and prunes). Quasi-static into clk_dec like the neighbours.

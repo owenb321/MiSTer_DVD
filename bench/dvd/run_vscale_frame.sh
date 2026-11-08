@@ -55,6 +55,16 @@ green_arms() {   # green_arms <sim> <prefix> <expect>
   run "$sim" "${p}frame_fit_bp"  "$w" +case=frame_fit +bp=1
   run "$sim" "${p}toggle"        "$w" +case=toggle
   run "$sim" "${p}toggle_bp"     "$w" +case=toggle +bp=1
+  # Standard Convert ratios (docs/standard_convert.md): 576 -> 480 / 360, 288 -> 240 / 180 per field
+  run "$sim" "${p}frame_r1"      "$w" +case=frame_r +ratio=1 +lines=480
+  run "$sim" "${p}frame_r2"      "$w" +case=frame_r +ratio=2 +lines=360
+  run "$sim" "${p}frame_r1_bp"   "$w" +case=frame_r +ratio=1 +lines=480 +bp=1
+  run "$sim" "${p}field_r1"      "$w" +case=field_r +ratio=1 +lines=240
+  run "$sim" "${p}field_r2"      "$w" +case=field_r +ratio=2 +lines=180
+  run "$sim" "${p}field_r2_bp"   "$w" +case=field_r +ratio=2 +lines=180 +bp=1
+  run "$sim" "${p}field_r0_cf"   "$w" +case=field_r +ratio=0 +h=240 +lines=180
+  run "$sim" "${p}rtoggle"       "$w" +case=rtoggle
+  run "$sim" "${p}rtoggle_bp"    "$w" +case=rtoggle +bp=1
 }
 
 echo "== disp_vscale frame path: GREEN arms"
@@ -86,6 +96,28 @@ if [ "${1:-}" = "--red" ]; then
   # M4: ROW_1 tag on line 1 of EVERY scan, field scans included (changes the Interlaced path)
   if mutate M4_row1_on_fields 's/(e_line_second \&\& scan_frame) ? ROW_1_COL_0/e_line_second ? ROW_1_COL_0/'; then
     run mut_M4_row1_on_fields M4_row1_on_fields fail +case=field_lb
+  else fail=1; fi
+  # M5: the 5/6 step off by one sixtieth (drift down the picture)
+  if mutate M5_r1_step "s/(scan_ratio == 2'd1) ? 6'd12/(scan_ratio == 2'd1) ? 6'd13/"; then
+    run mut_M5_r1_step M5_r1_step_frame fail +case=frame_r +ratio=1 +lines=480
+    run mut_M5_r1_step M5_r1_step_r2 pass +case=frame_r +ratio=2 +lines=360   # other ratios untouched
+  else fail=1; fi
+  # M6: no bottom-field phase (the bob the plan fixes); the frame path never uses it
+  if mutate M6_no_bot_phase "s/: (h_pos == ROW_1_COL_0) ? bot_phase : 6'd0;/: 6'd0;/"; then
+    run mut_M6_no_bot_phase M6_no_bot_phase fail +case=field_r +ratio=1 +lines=240
+    run mut_M6_no_bot_phase M6_no_bot_phase_frame pass +case=frame_r +ratio=1 +lines=480
+  else fail=1; fi
+  # M7: the head follows the LIVE ratio instead of the scan's (a mid-scan change tears)
+  if mutate M7_live_ratio "s/scan_ratio <= h_ratio;/scan_ratio <= vscale_ratio;/"; then
+    run mut_M7_live_ratio M7_live_ratio fail +case=rtoggle
+  else fail=1; fi
+  # M8: weight without its rounding term (every non-integer blend lands one LSB low)
+  if mutate M8_weight_floor "s/\* 14'd273 + 14'd32;/* 14'd273;/"; then
+    run mut_M8_weight_floor M8_weight_floor fail +case=field_r +ratio=2 +lines=180
+  else fail=1; fi
+  # M9: ratio 0 given a bottom phase (3/4 must stay bit-identical in this change)
+  if mutate M9_r0_phase "s/(h_ratio == 2'd2) ? 6'd18 : 6'd0;/(h_ratio == 2'd2) ? 6'd18 : 6'd10;/"; then
+    run mut_M9_r0_phase M9_r0_phase fail +case=field_lb
   else fail=1; fi
   score
 fi
