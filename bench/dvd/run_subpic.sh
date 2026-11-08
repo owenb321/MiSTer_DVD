@@ -46,8 +46,44 @@ iverilog -g2012 -D__IVERILOG__ -I rtl/mpeg2 -o bench/dvd/crt_ov_map_sim \
   dvd/crt_ov_map.sv dvd/disp_hstretch.sv dvd/disp_vscale.sv dvd/spu_decode.sv \
   rtl/mpeg2/wrappers.v rtl/mpeg2/fwft.v rtl/mpeg2/xfifo_sc.v rtl/mpeg2/xilinx_fifo_dc.v \
   bench/dvd/crt_ov_map_tb.sv 2>/dev/null
-vvp bench/dvd/crt_ov_map_sim | grep -q "PASS" && echo "  PASS"
+# The bench prints a PASS line per test, so only its final verdict may count.
+vvp bench/dvd/crt_ov_map_sim | grep -q "crt_ov_map_tb: ALL TESTS PASS" && echo "  PASS"
 echo "=== display-order commit (PR #63 regression: the white-rabbit blink + subtitle tails) ==="
 # Kept as its own script because it carries RED arms; run it with --red when touching
 # spu_decode's commit path. See docs/subpicture.md "The COMMIT contract".
 bash "$(dirname "$0")/run_spu_window.sh"
+
+# --red: Standard Convert's overlay inverse (crt_ov_map_tb T10, docs/standard_convert.md).
+# Each mutation must fail T10 and no earlier test, which still pass at 3/4.
+if [ "${1:-}" = "--red" ]; then
+  echo "=== RED: crt_ov_map conversion ratios (each must fail T10 only) ==="
+  RD=$(mktemp -d)
+  ov_mut() {  # name old new
+    local name=$1 old=$2 new=$3
+    if ! python3 - "$RD/crt_ov_map.sv" "$old" "$new" <<'PYEOF'
+import sys
+s = open('dvd/crt_ov_map.sv').read()
+if s.count(sys.argv[2]) != 1:
+    sys.exit("RED anchor moved: " + sys.argv[2])
+open(sys.argv[1], 'w').write(s.replace(sys.argv[2], sys.argv[3]))
+PYEOF
+    then echo "  FAIL $name: mutation did not apply"; RED_FAIL=1; return; fi
+    iverilog -g2012 -D__IVERILOG__ -I rtl/mpeg2 -o "$RD/sim" \
+      "$RD/crt_ov_map.sv" dvd/disp_hstretch.sv dvd/disp_vscale.sv dvd/spu_decode.sv \
+      rtl/mpeg2/wrappers.v rtl/mpeg2/fwft.v rtl/mpeg2/xfifo_sc.v rtl/mpeg2/xilinx_fifo_dc.v \
+      bench/dvd/crt_ov_map_tb.sv 2>/dev/null || true
+    vvp "$RD/sim" > "$RD/log" 2>&1 || true   # a mutant must $fatal; set -e must not end the gate
+    if grep -q '^T10 .*: FAIL' "$RD/log" && ! grep -E '^T[0-9]+[a-z]? .*: FAIL' "$RD/log" | grep -qv '^T10 ' \
+       && ! grep -q 'ALL TESTS PASS' "$RD/log"; then
+      echo "  PASS $name (failed T10 only)"
+    else
+      echo "  FAIL $name: wanted T10 alone to fail"; grep -E ': (PASS|FAIL)' "$RD/log" | sed 's/^/      /'; RED_FAIL=1
+    fi
+  }
+  RED_FAIL=0
+  ov_mut "R1 no bottom-field phase" "lr       <= (v_pos_in == v_bar) ? 6'd0 : l_phase;" "lr       <= 6'd0;"
+  ov_mut "R2 nearest tap one late"  "(lr >= 6'd30) ? vstep" "(lr >= 6'd31) ? vstep"
+  ov_mut "R3 5/6 step off by 1/60"  "(ratio == 2'd1) ? 6'd12 : (ratio == 2'd2) ? 6'd36 : 6'd20;" "(ratio == 2'd1) ? 6'd13 : (ratio == 2'd2) ? 6'd36 : 6'd20;"
+  rm -rf "$RD"
+  [ $RED_FAIL = 0 ] && echo "  RED: ALL OK" || { echo "  RED: SOME ARMS FAILED"; exit 1; }
+fi

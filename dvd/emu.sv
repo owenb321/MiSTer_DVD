@@ -6437,6 +6437,7 @@ crt_ov_map crt_ov_map_inst (
     .rst_n        (reset_n),
     .letterbox_en (analog_letterbox & sp_map_en), // DVD-FORK FIX (subtitle sawtooth): raw in pure-subtitle context
     .crop_en      ((analog_crop & sp_map_en) | sif_hfill_eff), // DVD-FORK FIX (SIF analog fill): SIF drives the same inverse (x0=0)
+    .ratio        (disp_vscale_ratio),     // Standard Convert: disp_vscale's ratio
     .interlaced   (fields_eff),            // interlaced raster: v_pos = absolute frame line, +2/field-line (240p: progressive, +1)
     .v2x_en       (sif_v2x_eff),           // DVD-FORK FIX (SIF analog fill): invert the addrgen 2x line repeat
     .v_src_max    ((vsz_s2 == 14'd0) ? 12'hfff : (vsz_s2[11:0] - 12'd1)), // decoded height - 1 (239/287)
