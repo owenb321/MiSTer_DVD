@@ -287,10 +287,13 @@ def main():
             return None
         return d[0]
 
-    for name, want in (('disp_vscale_en', 'analog_letterbox'), ('disp_hcrop_en', 'analog_crop')):
+    # Standard Convert (docs/standard_convert.md) ORs its analog path into the vertical scale;
+    # the Letterbox term must still be the override-resolved analog_letterbox and nothing else.
+    for name, wants in (('disp_vscale_en', ('analog_letterbox', 'analog_letterbox | std_conv_an')),
+                        ('disp_hcrop_en', ('analog_crop',))):
         d = one(name)
-        if d is not None and d != want:
-            fails.append(f'{name} = `{d}`, want `{want}` -- the decoder would not follow the override')
+        if d is not None and d not in wants:
+            fails.append(f'{name} = `{d}`, want one of {wants} -- the decoder would not follow the override')
     for name in ('VIDEO_ARX', 'VIDEO_ARY'):
         d = one(name)
         if d is not None and not {'analog_letterbox', 'analog_crop'} <= set(re.findall(r'\w+', d)):
@@ -300,10 +303,11 @@ def main():
     if d is not None and 'analog_crop' not in re.findall(r'\w+', d):
         fails.append(f'ov_hcrop_mb does not follow analog_crop -- the highlight would miss '
                      f'the cropped buttons: `{d}`')
-    for port, en in (('letterbox_en', 'analog_letterbox'), ('crop_en', 'analog_crop')):
+    # .letterbox_en may read disp_vscale_en, which is itself held to analog_letterbox above.
+    for port, ens in (('letterbox_en', ('analog_letterbox', 'disp_vscale_en')), ('crop_en', ('analog_crop',))):
         c = re.findall(r'\.' + port + r'\s*\(([^;]*?)\)\s*,', src)
-        if len(c) != 1 or en not in re.findall(r'\w+', c[0]):
-            fails.append(f'crt_ov_map .{port} must read {en}; found {c}')
+        if len(c) != 1 or not set(ens) & set(re.findall(r'\w+', c[0])):
+            fails.append(f'crt_ov_map .{port} must read one of {ens}; found {c}')
 
     if fails:
         for f in fails:

@@ -97,6 +97,8 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/vm_snap.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/pal_detect.sv
 # Standard conversion by speed change: the STC tick and audio NCO trim (docs/standard_convert.md).
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/std_rate.sv
+# Standard Convert: where a 1:1 dialogue subtitle sits under the analog path's vertical scale.
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/sub_anchor.sv
 # Mode-switch reader re-align (issue #42): a live raster-mode change issues a seek to the
 # current VOBU instead of flushing mid-parse, so seek_ack drives the trio and the decoder
 # gets a GOP boundary. See bench/dvd/mode_realign_tb.sv.

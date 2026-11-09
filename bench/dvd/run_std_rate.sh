@@ -106,11 +106,22 @@ if [ "${1:-}" = "--red" ]; then
     wmutant "W5 passthrough unguarded"  "status[6] & ~cdda_mode_w & ~std_conv_active & ~std_conv_wait;" "status[6] & ~cdda_mode_w & ~std_conv_wait;" pass
     wmutant "W11 passthrough in the gap" "status[6] & ~cdda_mode_w & ~std_conv_active & ~std_conv_wait;" "status[6] & ~cdda_mode_w & ~std_conv_active;" pass
     wmutant "W12 wait never asserts"     "assign std_conv_wait = (std_conv_sel != 2'd0) & ~pal_val_s2;" "assign std_conv_wait = 1'b0;" pass_wait
-    wmutant "W6 acts on a stale verdict" "assign std_conv_active = pal_val_s2 & " "assign std_conv_active = " active
+    wmutant "W6 acts on a stale verdict" "wire   std_conv_req  = pal_val_s2 & " "wire   std_conv_req  = " active
     wmutant "W7 both directions swapped" "? 2'd1 : 2'd2),   // PAL disc" "? 2'd2 : 2'd1),   // PAL disc" rate_mode
     wmutant "W8 walk ignores conversion" "|| (conv_s2 != conv_prev)" "" walk_kick
     wmutant "W9 NTSC vsync on 576 lines" "wr_data = conv_prev ? {4'b0, 12'd581, 4'b0, 12'd586}" "wr_data = conv_prev ? {4'b0, 12'd488, 4'b0, 12'd494}" walk_vsync
-    wmutant "W10 overlay on the raster" ".pal_mode     (pal_eff)," ".pal_mode     (pal_out)," overlay
+    wmutant "W10 HUD on the source"     ".pal_mode     (ov_pal)," ".pal_mode     (pal_eff)," overlay
+    wmutant "W13 analog NTSC->PAL"      "assign std_conv_an   = std_conv_req & pal_det_s2 & " "assign std_conv_an   = std_conv_req & " analog
+    wmutant "W14 analog takes film raster" "| std_conv_film;" "| std_conv_active;" filmp
+    wmutant "W15 cross modes on analog" "conv_s1 <= std_conv_film; " "conv_s1 <= std_conv_active; " walk_sync
+    wmutant "W16 ratios swapped"        "analog_letterbox ? 2'd2 : 2'd1;" "analog_letterbox ? 2'd1 : 2'd2;" ratio
+    wmutant "W17 analog never scales"   "= analog_letterbox | std_conv_an; " "= analog_letterbox; " vscale_en
+    wmutant "W18 inverse only for LB"   ".letterbox_en (disp_vscale_en & sp_map_en)," ".letterbox_en (analog_letterbox & sp_map_en)," map_en
+    wmutant "W19 csync on the source"   ".pal    (ov_pal)," ".pal    (pal_eff)," csync
+    wmutant "W20 half_scan PAL value"   "wire [15:0] half_scan_dec = conv_an_dec ? 16'd720" "wire [15:0] half_scan_dec = conv_an_dec ? 16'd900" half_scan
+    wmutant "W21 63 per second"         ".disp_fps       (std_conv_an ? 6'd62 :" ".disp_fps       (std_conv_an ? 6'd63 :" disp_fps
+    wmutant "W22 menus moved too"       ".ratio ((std_conv_an & ~sp_map_en) ? disp_vscale_ratio : 2'd0)," ".ratio (std_conv_an ? disp_vscale_ratio : 2'd0)," sub_ratio
+    wmutant "W23 5/8 bar is PAL's"      "(disp_vscale_ratio == 2'd2) ? 12'd60  : pal_eff ? 12'd72" "(disp_vscale_ratio == 2'd2) ? 12'd72  : pal_eff ? 12'd72" map_bar
 fi
 
 if [ $fail = 0 ]; then echo "PASS run_std_rate"; else echo "FAIL run_std_rate"; exit 1; fi

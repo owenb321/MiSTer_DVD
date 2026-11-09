@@ -106,15 +106,24 @@ left to detect. Nothing can infer it from the stream, which is why the manual **
 **`Standard Convert`** (Video page, default **Off**) plays a disc made for the other TV
 standard by changing its speed slightly, the way film has long been moved between the two.
 
-| Setting | Disc | Speed | Output |
-|---|---|---|---|
-| **To NTSC** | PAL (576 lines) | 4.1 % slower, 25 → 23.976 frames per second | 23.976 Hz, which the scaler turns into 3:2 at 59.94 Hz |
-| **To PAL** | NTSC (480 lines) | 4.3 % faster, 23.976 → 25 frames per second | 25 Hz, which the scaler doubles to 50 Hz |
+| Setting | Disc | Speed |
+|---|---|---|
+| **To NTSC** | PAL (576 lines) | 4.1 % slower, 25 → 23.976 frames per second |
+| **To PAL** | NTSC (480 lines) | 4.3 % faster, 23.976 → 25 frames per second |
 
 A disc already in the chosen standard plays normally, so you can leave this set.
 
-**Set your display chain to match.** The cadence is only clean when the HDMI `video_mode` in
-`MiSTer.ini` is the target rate: 59.94 Hz for To NTSC, 50 Hz for To PAL.
+**How the picture gets to the other standard depends on your output:**
+
+- **HDMI, or analog through the scaler (`vga_scaler=1`):** the core outputs 23.976 Hz (To NTSC)
+  or 25 Hz (To PAL) and the MiSTer scaler does the rest. Set the HDMI `video_mode` in
+  `MiSTer.ini` to the target rate, 59.94 Hz for To NTSC or 50 Hz for To PAL, or the cadence
+  is uneven.
+- **Direct analog (a CRT), To NTSC only:** the core outputs a real NTSC signal, 480i or 480p
+  as `Video Output` says, and scales the PAL picture's 576 lines to 480 itself. `Analog Aspect`
+  works as usual: Letterbox scales a 16:9 picture to 360 lines between bars in one step. **To
+  PAL does nothing on direct analog**: it would need the 480-line picture enlarged to 576,
+  which the core can't do yet, so an NTSC disc plays as NTSC.
 
 **What changes while it is converting:**
 
@@ -127,16 +136,20 @@ A disc already in the chosen standard plays normally, so you can leave this set.
   you have.
 - **Passthrough is off.** Compressed audio cannot change speed, so the core decodes it to stereo
   PCM even with `Audio Out` set to Passthru. Your setting returns when conversion stops.
-- **`Film 24p Out` and `Video Standard` are overridden** for that disc. The film raster stays on
-  from start to finish.
+- **`Video Standard` is overridden** for that disc, and on the scaler path `Film 24p Out` too:
+  the 23.976 or 25 Hz output stays on from start to finish.
+- **Dialogue subtitles on a CRT are drawn at full sharpness** and moved to where the scaled
+  picture puts them, so they look about 20 % larger relative to the picture than on the disc's
+  own standard. A subtitle near the bottom is kept on screen. Menu buttons and highlights are
+  scaled with the picture so they stay on their artwork.
 
 **Limits:**
 
-- It needs the scaler path, so it does nothing with `Video Output` on Interlaced, or on a rig
-  configured for direct analog output.
-- True interlaced video is shown as woven frames, so motion combs. `Deinterlace = Blend` softens
-  that; Bob has no effect on this raster. Logos and video-shot extras are where you are most
-  likely to see it.
+- On the scaler path, true interlaced video is shown as woven frames, so motion combs.
+  `Deinterlace = Blend` softens that; Bob has no effect there. Logos and video-shot extras are
+  where you are most likely to see it.
+- On a CRT at 480i, film currently moves in an uneven 2-2-2-4 field rhythm rather than smooth
+  3:2. At 480p it gets 3:2.
 - With **To PAL**, true 30i video (often animated menus and extras) loses one picture in five, because
   31 pictures a second cannot fit a 25 Hz output. Motion there looks less smooth.
 - Hard-telecined NTSC discs keep their baked-in pulldown, so they do not become clean 25 fps film.

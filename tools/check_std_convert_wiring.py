@@ -17,6 +17,10 @@ cannot see what emu.sv connects. Each seam below fails silently when wrong:
   no std_conv_wait       passthrough starts in the gap after a mount and is torn down just as
                          audio starts: lip sync up to 210 ms off, intermittently.
   vsync arm missing      NTSC's vsync lands inside the 576-line cross mode.
+  analog path (Phase 3): the plain NTSC raster with disp_vscale at 5/6 or 5/8. A wrong ratio,
+                         bar or band misplaces the picture or its overlays; HUD/seek bar/logo/
+                         csync/captions on the SOURCE's standard draw for 576 lines on a 480-line
+                         raster; the cross modes leaking into it give a raster no CRT holds.
 
 strip_comments() runs first: the comments quote these nets, so a grep would pass a reverted file.
 A lookup that returns None is a named FAIL, never a skip.
@@ -83,9 +87,15 @@ def main():
         fails.append('trim_in: dvd_audio_decode must take dec_nco_trim and report dec_nco_fs')
 
     # Who is the source and who is the raster.
-    has('active', "assign std_conv_active = pal_val_s2 & ~sif_det_s2 & ~cdda_mode_w & ~interlaced_eff"
-                  " & ~analog_want & (pal_det_s2 ? (std_conv_sel == 2'd1) : (std_conv_sel == 2'd2));",
+    has('active', "wire std_conv_req = pal_val_s2 & ~sif_det_s2 & ~cdda_mode_w"
+                  " & (pal_det_s2 ? (std_conv_sel == 2'd1) : (std_conv_sel == 2'd2));",
         'every gate on conversion, and each target acting on the other standard only')
+    has('film', "assign std_conv_film = std_conv_req & ~interlaced_eff & ~analog_want;",
+        'the scaler path: only where no analog display carries the raster')
+    has('analog', "assign std_conv_an = std_conv_req & pal_det_s2 & (interlaced_eff | analog_want);",
+        'the analog path: PAL->NTSC only (NTSC->PAL needs an upscale disp_vscale cannot do)')
+    has('either', "assign std_conv_active = std_conv_film | std_conv_an;", 'both flavours change the rate')
+    has('ov_pal', "assign ov_pal = pal_eff & ~std_conv_an;", 'overlays after the scaler follow the raster')
     has('sel', "wire [1:0] std_conv_sel = status[54:53];", 'the option must be O[54:53]')
     has('conf', '"P1O[54:53],Standard Convert,Off,To NTSC,To PAL;"', 'the OSD row')
     has('src_pal', "assign pal_eff = std_conv_active ? pal_det_s2 :",
@@ -95,15 +105,39 @@ def main():
     has('disp_fps', "film24_eff ? 6'd24 : film25_eff ? 6'd25 :",
         'cell_secs must count source pictures per authored second')
     has('film24', "wire film24_eff = filmp_eff & ~pal_eff;", 'film24_eff follows the source')
-    has('filmp', "wire filmp_eff = (film_want & ~interlaced_eff & (film_forced | ~analog_want)) | std_conv_active;",
-        'converting holds the film raster')
+    has('filmp', "wire filmp_eff = (film_want & ~interlaced_eff & (film_forced | ~analog_want)) | std_conv_film;",
+        'the scaler path holds the film raster; the analog path must not')
     for inst in ('transport_hud_inst', 'seek_bar_inst', 'idle_logo_inst'):
-        port('overlay', inst, 'pal_mode', 'pal_eff', 'overlays are authored for the active lines, the source')
+        port('overlay', inst, 'pal_mode', 'ov_pal', 'overlays are drawn on the raster after the scaler')
+    has('act_vres', "wire [11:0] act_vres = p240_eff ? (ov_pal ? 12'd288 : 12'd240) : (ov_pal ? 12'd576 : 12'd480);",
+        'the overlays\' active window is the raster\'s')
+    port('csync', 'csync_smpte_inst', 'pal', 'ov_pal', 'composite sync is the raster\'s standard')
+    has('cc_pal', ".flush (load_flush), .pal (ov_pal),", 'line-21 captions are timed on the raster')
+    has('disp_fps', ".disp_fps (std_conv_an ? 6'd62 :", 'cell_secs: 62.5 refreshes per authored second, rounded down')
+    has('half_scan', "wire [15:0] half_scan_dec = conv_an_dec ? 16'd720",
+        'one 59.94 Hz field is 1440 ticks of the slowed STC')
+    has('half_sync', "conv_an_s1_dec <= std_conv_an;", 'half_scan follows the analog path')
+    has('vscale_en', "wire disp_vscale_en = analog_letterbox | std_conv_an;", 'the analog path always scales')
+    has('ratio', "assign disp_vscale_ratio = ~std_conv_an ? 2'd0 : analog_letterbox ? 2'd2 : 2'd1;",
+        '5/6 for Fit and Crop, one 5/8 pass for Letterbox, 3/4 otherwise')
+    port('map_en', 'crt_ov_map_inst', 'letterbox_en', 'disp_vscale_en & sp_map_en',
+         'menus and highlights must follow any vertical scale, not only Letterbox')
+    port('map_ratio', 'crt_ov_map_inst', 'ratio', 'disp_vscale_ratio', 'the inverse must invert the scale in use')
+    port('map_bar', 'crt_ov_map_inst', 'v_bar',
+         "(disp_vscale_ratio == 2'd1) ? 12'd0 : (disp_vscale_ratio == 2'd2) ? 12'd60 : pal_eff ? 12'd72 : 12'd60",
+         'the bars disp_vscale\'s ratio leaves on the raster')
+    port('map_band', 'crt_ov_map_inst', 'v_band',
+         "(disp_vscale_ratio == 2'd1) ? 12'd480 : (disp_vscale_ratio == 2'd2) ? 12'd360 : pal_eff ? 12'd432 : 12'd360",
+         'the scaled content height')
+    port('sub_ratio', 'sub_anchor_i', 'ratio', "(std_conv_an & ~sp_map_en) ? disp_vscale_ratio : 2'd0",
+         'only raw (dialogue) subtitles are moved; a mapped context already follows the scale')
+    port('sub_sy', 'sub_anchor_i', 'sy', 'sp_area_sy', 'the committed subtitle box')
+    port('sub_off', 'spu_decode_inst', 'q_y_off', 'sp_y_off', 'the offset must reach the bitmap read')
 
     # The modeline walk.
     has('walk_kick', "|| (conv_s2 != conv_prev)", 'a conversion change must re-walk the modeline')
     has('walk_latch', "conv_prev <= conv_s2;", 'the walk must apply one consistent mode')
-    has('walk_sync', "conv_s1 <= std_conv_active;", 'the cross modes follow the verdict')
+    has('walk_sync', "conv_s1 <= std_conv_film;", 'the cross modes are the scaler path\'s only')
     has('walk_ver', "wr_data = conv_prev ? (pal_prev ? {4'b0, 12'd480, 4'b0, 12'd1249} : {4'b0, 12'd576, 4'b0, 12'd1286})",
         'cross modes: the raster totals with the source active lines, checked first')
     has('walk_vsync', "wr_data = conv_prev ? {4'b0, 12'd581, 4'b0, 12'd586}",

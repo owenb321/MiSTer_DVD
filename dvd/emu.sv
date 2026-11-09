@@ -331,9 +331,12 @@ wire        film_want  = (film_mode == 2'b10) | ((film_mode == 2'b00) & film_det
 wire        film_forced = (film_mode == 2'b10);      // O[25:24] = On (not Auto)
 // DVD-FORK (Standard Convert, docs/standard_convert.md): converting holds the film raster
 // for the whole disc, whatever Film 24p Out says. Resolved beside pal_eff, near the decoder.
-wire        std_conv_active;
+wire        std_conv_active;     // either flavour: the STC and NCO run at the converted rate
+wire        std_conv_film;       // scaler path: film cross-mode raster, ascal scales (Phase 2)
+wire        std_conv_an;         // analog path: plain NTSC raster, disp_vscale 5/6 or 5/8 (Phase 3)
+wire        ov_pal;              // the RASTER's standard for overlays drawn after the scaler
 wire  [1:0] disp_vscale_ratio;   // disp_vscale: 0 = 3/4, 1 = 5/6, 2 = 5/8; assigned beside disp_vscale_en
-wire        filmp_eff  = (film_want & ~interlaced_eff & (film_forced | ~analog_want)) | std_conv_active;
+wire        filmp_eff  = (film_want & ~interlaced_eff & (film_forced | ~analog_want)) | std_conv_film;
 wire        film24_eff = filmp_eff & ~pal_eff;       // NTSC 23.976 Hz path
 wire        film25_eff = filmp_eff &  pal_eff;        // PAL  25.000 Hz path
 // il_eff: the decoder/main-raster fields mode — now simply the resolved Video Output
@@ -3834,7 +3837,10 @@ dvd_iso_reader dvd_iso_reader_inst (
     // advances the STC with (one pulse per displayed image); disp_fps resolves
     // the active raster rate incl. the Film 24p/25p modes.
     .disp_tick      (av_refresh_tick),
-    .disp_fps       (film24_eff ? 6'd24 : film25_eff ? 6'd25 :
+    // Standard Convert's analog path: a PAL source on the 59.94 Hz raster is 62.5 refreshes per
+    // authored second at the slowed STC. 62 overcounts, so cell_secs can only under-hold.
+    .disp_fps       (std_conv_an ? 6'd62 :
+                     film24_eff ? 6'd24 : film25_eff ? 6'd25 :
                      pal_eff    ? 6'd50 : 6'd60),
 
     .seek_pulse     (seek_pulse_mux),     // gamepad chapter seek | VM cell links
@@ -5248,7 +5254,11 @@ always @(posedge clk_dec) begin pal_s1_dec <= pal_eff; pal_dec_l <= pal_s1_dec; 
 // progressive frame scan and the interlaced FIELD scan are very nearly the same duration.
 reg  p240_s1_dec, p240_dec_l;
 always @(posedge clk_dec) begin p240_s1_dec <= p240_eff; p240_dec_l <= p240_s1_dec; end
-wire [15:0] half_scan_dec = filmp_dec  ? (pal_dec_l ? 16'd1800 : 16'd1877)
+// Standard Convert's analog path: one 59.94 Hz field or frame is 1440 ticks of the slowed STC.
+reg  conv_an_s1_dec, conv_an_dec;
+always @(posedge clk_dec) begin conv_an_s1_dec <= std_conv_an; conv_an_dec <= conv_an_s1_dec; end
+wire [15:0] half_scan_dec = conv_an_dec ? 16'd720
+                          : filmp_dec  ? (pal_dec_l ? 16'd1800 : 16'd1877)
                           : p240_dec_l ? (pal_dec_l ? 16'd899  : 16'd749)
                                        : (pal_dec_l ? 16'd900  : 16'd750);
 reg  sched_en_s1, sched_en_dec;
@@ -5659,7 +5669,7 @@ always @(posedge clk_dec) begin
         filmp_s2 <= filmp_s1;                    // 2-FF sync
         p240_s1 <= p240_out;
         p240_s2 <= p240_s1;                      // 2-FF sync
-        conv_s1 <= std_conv_active;
+        conv_s1 <= std_conv_film;                // cross modes: the scaler path only
         conv_s2 <= conv_s1;                      // 2-FF sync
         if (seq_run) begin
             if (seq_step == 3'd5) seq_run <= 1'b0;
@@ -5978,8 +5988,17 @@ assign p240_eff = interlaced_eff & sif_det_s2;
 // Every input is debounced or human-speed; none depends on this, so it cannot self-feed.
 wire [1:0] std_conv_sel = status[54:53];
 assign std_conv_wait = (std_conv_sel != 2'd0) & ~pal_val_s2;
-assign std_conv_active = pal_val_s2 & ~sif_det_s2 & ~cdda_mode_w & ~interlaced_eff & ~analog_want
-                       & (pal_det_s2 ? (std_conv_sel == 2'd1) : (std_conv_sel == 2'd2));
+// Two flavours (docs/standard_convert.md). The analog path is PAL->NTSC only: NTSC->PAL on the
+// analog pins needs a 6/5 upscale disp_vscale can't do, so To PAL on such a rig plays native.
+wire   std_conv_req  = pal_val_s2 & ~sif_det_s2 & ~cdda_mode_w
+                     & (pal_det_s2 ? (std_conv_sel == 2'd1) : (std_conv_sel == 2'd2));
+assign std_conv_film = std_conv_req & ~interlaced_eff & ~analog_want;
+assign std_conv_an   = std_conv_req & pal_det_s2 & (interlaced_eff | analog_want);
+assign std_conv_active = std_conv_film | std_conv_an;
+// Overlays drawn on the raster after the scaler (HUD, seek bar, idle logo, the active window,
+// line-21 captions, composite sync) follow the raster. On the scaler path the raster's active
+// lines ARE the source's, so only the analog path differs.
+assign ov_pal = pal_eff & ~std_conv_an;
 assign pal_eff = std_conv_active ? pal_det_s2 :
                  (status[17:16] == 2'b10) ? 1'b1 :        // force PAL
                  (status[17:16] == 2'b01) ? 1'b0 :        // force NTSC
@@ -6049,8 +6068,8 @@ end
 //    there whether or not pixrep doubled the dots. Every pre-existing case reduces to the
 //    old constants -- DVD 480/576, 240p 240/288, idle = the full raster -- so only sub-720
 //    PROGRESSIVE content moves, which is exactly the reported set.
-wire [11:0] act_vres  = p240_eff ? (pal_eff ? 12'd288 : 12'd240)
-                                 : (pal_eff ? 12'd576 : 12'd480);
+wire [11:0] act_vres  = p240_eff ? (ov_pal ? 12'd288 : 12'd240)
+                                 : (ov_pal ? 12'd576 : 12'd480);
 wire [13:0] vsz_eff   = sif_v2x_eff ? {vsz_s2[12:0], 1'b0} : vsz_s2;
 assign      act_h_eff = (vsz_eff == 14'd0 || vsz_eff >= {2'b0, act_vres}) ? act_vres
                                                                          : vsz_eff[11:0];
@@ -6201,9 +6220,10 @@ assign analog_letterbox = aa_live & ~sif_det_s2 &
                           ((analog_want_lb   & ~menu_lb_to_crop) | (analog_want_crop & menu_crop_to_lb));
 assign analog_crop      = aa_live & ~sif_det_s2 &
                           ((analog_want_crop & ~menu_crop_to_lb) | (analog_want_lb   & menu_lb_to_crop));
-wire       disp_vscale_en   = analog_letterbox;                             // downstream 2-tap letterbox
-// Standard Convert (docs/standard_convert.md): 3/4 until the analog conversion path is wired.
-assign disp_vscale_ratio = 2'd0;
+wire       disp_vscale_en   = analog_letterbox | std_conv_an;               // downstream 2-tap scale: Letterbox, or Standard Convert
+// Standard Convert's analog path scales 576 -> 480 (5/6, Fit and Crop) or 576 -> 360 in one
+// pass (5/8, Letterbox). Otherwise the 3/4 Letterbox it always was.
+assign disp_vscale_ratio = ~std_conv_an ? 2'd0 : analog_letterbox ? 2'd2 : 2'd1;
 // DVD-FORK FIX (SIF analog fill): mode 2 = the re-armed addrgen 2x line repeat (v_step
 // 128) for sub-D1 heights on the analog output; bit 0 stays tied (mode 1 letterbox-NN
 // remains dormant and prunes). Quasi-static into clk_dec like the neighbours.
@@ -6435,14 +6455,16 @@ wire [11:0] ov_qx, ov_qy;
 crt_ov_map crt_ov_map_inst (
     .clk          (clk_sys),
     .rst_n        (reset_n),
-    .letterbox_en (analog_letterbox & sp_map_en), // DVD-FORK FIX (subtitle sawtooth): raw in pure-subtitle context
+    .letterbox_en (disp_vscale_en & sp_map_en),   // DVD-FORK FIX (subtitle sawtooth): raw in pure-subtitle context; any vertical scale (Letterbox or Standard Convert)
     .crop_en      ((analog_crop & sp_map_en) | sif_hfill_eff), // DVD-FORK FIX (SIF analog fill): SIF drives the same inverse (x0=0)
     .ratio        (disp_vscale_ratio),     // Standard Convert: disp_vscale's ratio
     .interlaced   (fields_eff),            // interlaced raster: v_pos = absolute frame line, +2/field-line (240p: progressive, +1)
     .v2x_en       (sif_v2x_eff),           // DVD-FORK FIX (SIF analog fill): invert the addrgen 2x line repeat
     .v_src_max    ((vsz_s2 == 14'd0) ? 12'hfff : (vsz_s2[11:0] - 12'd1)), // decoded height - 1 (239/287)
-    .v_bar        (pal_eff ? 12'd72 : 12'd60),   // mixer disp_v_offset (vertical_size/8)
-    .v_band       (pal_eff ? 12'd432 : 12'd360), // letterboxed content height (3/4)
+    // mixer disp_v_offset and the scaled content band: 3/4 = vertical_size/8 and 3/4 of it;
+    // Standard Convert's 5/6 fills the 480-line raster, 5/8 sits between 60-line bars.
+    .v_bar        ((disp_vscale_ratio == 2'd1) ? 12'd0   : (disp_vscale_ratio == 2'd2) ? 12'd60  : pal_eff ? 12'd72  : 12'd60),
+    .v_band       ((disp_vscale_ratio == 2'd1) ? 12'd480 : (disp_vscale_ratio == 2'd2) ? 12'd360 : pal_eff ? 12'd432 : 12'd360),
     .hcrop_x0     (ov_hcrop_x0),
     .hsrc_w       (ov_hsrc_w),
     .hextra       (ov_hextra),
@@ -6456,6 +6478,18 @@ crt_ov_map crt_ov_map_inst (
 // here, ahead of its first use -- emu.sv has no `default_nettype none`.
 wire sp_new_cell;
 wire sp_newcell_load;                     // spu_decode: that new cell's first unit is loading
+// Standard Convert: where a 1:1 dialogue subtitle sits under the analog path's scale. Only in the
+// raw (pure-subtitle) context; a mapped context already follows the scale through crt_ov_map.
+wire [11:0]        sp_area_sy, sp_area_ey;
+wire signed [11:0] sp_y_off;
+sub_anchor sub_anchor_i (
+    .clk   (clk_sys),
+    .rst_n (reset_n),
+    .ratio ((std_conv_an & ~sp_map_en) ? disp_vscale_ratio : 2'd0),
+    .sy    (sp_area_sy),
+    .ey    (sp_area_ey),
+    .off   (sp_y_off)
+);
 spu_decode spu_decode_inst (
     .clk        (clk_sys),
     .new_cell   (sp_new_cell),            // opens the menu re-send guard across a PTS restart
@@ -6487,9 +6521,9 @@ spu_decode spu_decode_inst (
     .stc        (av_stc),                 // video-referenced STC for show/hide timing
     .q_x        (ov_qx),                  // per-pixel query (lead-compensated + CRT-aspect inverse-mapped)
     .q_y        (ov_qy),
-    .q_y_off    (12'sd0),                 // Standard Convert: dvd/sub_anchor.sv once the analog path is wired
-    .area_sy    (),
-    .area_ey    (),
+    .q_y_off    (sp_y_off),               // Standard Convert: 1:1 dialogue subtitles moved under the scale (dvd/sub_anchor.sv)
+    .area_sy    (sp_area_sy),
+    .area_ey    (sp_area_ey),
     .q_idx      (sp_q_idx),               // registered: 1 clk_sys after q_x/q_y
     .q_inside   (sp_q_inside),
     .alpha0     (sp_a0),
@@ -7065,7 +7099,7 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     .rst_n        (reset_n),
     .h_pos        (ov_h_gen),
     .v_pos        (core_v_pos),
-    .pal_mode     (pal_eff),
+    .pal_mode     (ov_pal),
     .act_h_i      (act_h_eff),
     .act_w_i      (act_w_eff),
     .menu_active  (menus_on && menu_active),
@@ -7182,7 +7216,7 @@ seek_bar #(.BAR_QX_ADJ(4)) seek_bar_inst (
     .rst_n      (reset_n),
     .h_pos      (ov_h_gen),
     .v_pos      (core_v_pos),
-    .pal_mode   (pal_eff),
+    .pal_mode   (ov_pal),
     .act_h_i    (act_h_eff),
     .act_w_i    (act_w_eff),
     .bar_active (bar_active_w),
@@ -7291,7 +7325,7 @@ idle_logo #(.LOGO_QX_LEAD(12'd12)) idle_logo_inst (
     .rst_n          (reset_n),
     .h_pos          (ov_h_gen),
     .v_pos          (core_v_pos),
-    .pal_mode       (pal_eff),
+    .pal_mode       (ov_pal),
     .act_h_i        (act_h_eff),
     .act_w_i        (act_w_eff),
     .il_mode        (il_eff),
@@ -7651,7 +7685,7 @@ cc_vbi cc_vbi_inst (
     .enable         (fields_eff & ~status[14]),
     .test           (status[44]),
     .flush          (load_flush),
-    .pal            (pal_eff),
+    .pal            (ov_pal),
     .h_pos          (core_h_pos),
     .v_pos          (core_v_pos),
     .pixel_en       (core_pixel_en),
@@ -7686,7 +7720,7 @@ csync_smpte csync_smpte_inst (
     // index and to stop offsetting the block by half a line.
     .en     (interlaced_eff),
     .prog   (p240_eff),
-    .pal    (pal_eff),
+    .pal    (ov_pal),
     .h_sync (core_h_sync),
     .v_pos  (core_v_pos),
     .cs     (csync_smpte_cs),

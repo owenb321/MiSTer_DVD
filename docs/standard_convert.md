@@ -234,8 +234,15 @@ exact. The horizontal path (`disp_hstretch` Crop, SIF fill) is untouched.
 
 ## Not done yet
 
-- ⏳ **Next step:** Phase 3 step 1, the `disp_vscale` ratios (plan above). Hardware testing waits for
-  the analog path, by the maintainer's choice (2026-11-07).
+- Phase 3 step 1 is wired (2026-11-08): `std_conv_an` (PAL→NTSC with `interlaced_eff | analog_want`)
+  runs the plain NTSC raster with `disp_vscale` at 5/6 or 5/8; `ov_pal` puts the HUD, seek bar,
+  idle logo, active window, line-21 captions and composite sync on the raster. Dialogue subtitles
+  are 1:1 and moved by `dvd/sub_anchor.sv` (maintainer's choice, 2026-11-08), anchored at the
+  scaled position of their box's top but never off the bottom.
+- ⏳ **Next step:** Phase 3 step 2, the synthetic 3:2 field cadence for `progressive_frame=1`
+  pictures on 480i (cycling (tff, rff) through (1,1) (0,0) (0,1) (1,0)), with `disp_sched`'s field
+  period at 1440 ticks under conversion, not the stream's 1800. Hardware testing waits for the
+  analog path to be complete, by the maintainer's choice (2026-11-07).
 - ⏳ `tools/hil_suite.py` with conversion Off against v0.10.0 has not run; Off matched the control on
   rates only.
 - Phase 3's cadence for `pf=0` pictures: decided at Phase 3 (maintainer, 2026-11-02), when real CRT
