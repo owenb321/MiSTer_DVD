@@ -707,7 +707,8 @@ pushing both branches.**
   against v0.10.0. ⏳ Save state, subtitle placement by eye, pitch by ear, `hil_suite` with it Off.
 - [~] PAL→NTSC on direct analog: `disp_vscale` 5/6 and 5/8, the overlays, 1:1 subtitles and 3:2 for
   every picture (all treated as film, by maintainer decision) are built and bench-proven.
-  ⏳ The hardware test on a CRT.
+  Rig 2026-11-09: rates exact, 0 lates, 3:2 measured; a `progressive_sequence=1` gap found and
+  fixed. ⏳ By eye on a CRT (library share needed for the sport/drama discs).
 - [ ] ⏳ Separate bug, in v0.10.0 too: audio dead until a reboot after ~25 core loads in one boot
   (`dts_copied` 0, `eng_frames` 0). Reproduce it by looping core loads and find what survives the
   reload. Details in `docs/standard_convert.md`.

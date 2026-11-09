@@ -64,8 +64,8 @@
  *   C  every field's source-line parity matches the raster field it landed in;
  *   A  consecutive fields carry different source lines;
  *   D  the gaps between pickups alternate 3, 2 (counted from output_frame_rd per field).
- * +stdcad=1 (progressive pictures) and +stdcad=3 (progressive_frame=0: every picture is film)
- * are the arms; +stdcad=2 (cadence off, progressive pictures) is the control whose gaps must
+ * +stdcad=1 (progressive pictures), +stdcad=3 (progressive_frame=0: every picture is film) and
+ * +stdcad=4 (progressive_sequence=1, as the Big Buck Bunny PAL DVD is coded) are the arms; +stdcad=2 (cadence off, progressive pictures) is the control whose gaps must
  * all be 2.
  *
  * ★ SCENARIO [6] IS THE ONE THAT FOUND THE HW DEFECT, and it is the mundane one: it
@@ -611,6 +611,7 @@ module field_phase_tb;
     if ($value$plusargs("stdcad=%d", sc_mode)) begin : stdcad
       integer f, i0, prev_pick, gap, last_gap, n_gaps, bad_c, bad_a, bad_d, linepar;
       progressive_frame = (sc_mode != 3);
+      progressive_sequence = (sc_mode == 4);
       std_cad_r         = (sc_mode != 2);
       top_field_first = 1; repeat_first_field = 0;
       repeat (2) @(negedge v_sync);

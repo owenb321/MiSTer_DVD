@@ -628,12 +628,14 @@ module resample_addrgen (
    * picture on the field raster, progressive_frame or not. Conversion is a manual OSD choice,
    * so every picture is treated as film (by user decision, docs/standard_convert.md "Phase 3");
    * a true 50i picture then repeats its first field, which steps back in time on motion.
-   * cad_rff alternates per pickup. */
+   * progressive_sequence=1 is included (the Big Buck Bunny PAL DVD is coded that way): under
+   * cad_on such a picture skips the always-TOP-first progressive-sequence branch and takes the
+   * progressive_frame one, which ps=1 implies. cad_rff alternates per pickup. */
   reg        cad_rff;
-  wire       cad_on  = std_cad && interlaced && ~progressive_sequence;
+  wire       cad_on  = std_cad && interlaced;
   wire       tff_eff = cad_on ? (last_image != TOP) : top_field_first;   // first field = opposite of the last shown
   wire       rff_eff = cad_on ? cad_rff            : repeat_first_field;
-  wire       nxt_first_top = progressive_sequence ? 1'b1 : tff_eff; // first field the pending pickup would emit (mirrors the image-build branches)
+  wire       nxt_first_top = (progressive_sequence && ~cad_on) ? 1'b1 : tff_eff; // first field the pending pickup would emit (mirrors the image-build branches)
   wire       alt_break = interlaced &&
                          (((last_image == TOP)    &&  nxt_first_top) ||
                           ((last_image == BOTTOM) && ~nxt_first_top));
@@ -1255,7 +1257,7 @@ module resample_addrgen (
         /*
          * Interlacing: display progressive sequence on interlaced display. Display fields.
          */
-        else if (progressive_sequence && interlaced)
+        else if (progressive_sequence && interlaced && ~cad_on)   // Standard Convert: falls to the progressive_frame branch
           begin
             image   <= NO_OUTPUT;
             image_0 <= TOP;

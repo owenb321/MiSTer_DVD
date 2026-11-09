@@ -258,11 +258,25 @@ exact. The horizontal path (`disp_hstretch` Crop, SIF fill) is untouched.
   motion in true video (logos, sport, concerts) judders at 480i. 480p is unaffected. The disc's
   own `repeat_first_field` on an interlaced frame is still ignored when not converting, exactly
   as before. Gate: `field_phase_tb +stdcad` (data-derived parity, distinct lines, pickup gaps
-  alternating 3/2 on arms 1 and 3, all-2 on control 2) with four mutations: C1 no alternation,
-  C2 the stream's `tff`, C3 film-only `cad_on` (the old rule), C4 no third field on an
-  interlaced frame.
-- ⏳ **Next step:** the hardware test on a CRT, control arm first (v0.10.0): a PAL film, a
-  filmised drama, and a sport or concert 50i disc to judge the accepted judder.
+  alternating 3/2 on arms 1, 3 and 4, all-2 on control 2) with seven mutations: C1 no
+  alternation, C2 the stream's `tff`, C3 film-only `cad_on` (the old rule), C4 no third field
+  on an interlaced frame, C5-C7 the `progressive_sequence` terms below.
+- **HW, 2026-11-09** (rig, Video Output = Interlaced, To NTSC, v0.10.0 control first; the share
+  was down, so the SD card's own samples): `VTS_04_2.VOB` (PAL film flagged `pf=0`) and
+  `BBB_PAL.VOB` (`progressive_sequence=1`). Raster 59.944 Hz, 23.965 pictures/s, audio
+  46,033 Hz (= 48,000 × 960/1001), 2.501 fields per picture, 0 lates, 0 drops, longest picture
+  22.5 ms against 41.7 (control 21.7 against 40); Off matched the control. The cadence itself
+  came from 10 ms fast telemetry (`launch --telem-fast-ms 10`): the field count at each pickup,
+  scored as sums of two consecutive gaps because a 10 ms sample moves one field between
+  neighbours. `VTS_04_2`: sums 4/5/6 = 76/367/75, i.e. 3:2. **`BBB_PAL`: 130/138/136 with tails
+  at 3 and 7, i.e. 2-2-2-4.** `cad_on` excluded `progressive_sequence`, and the published Big
+  Buck Bunny PAL DVD is coded `progressive_sequence=1` (out of DVD-Video spec, real all the same).
+  Fixed: `cad_on` drops the term, and under it a ps=1 picture skips the always-TOP-first
+  progressive-sequence branch (and `nxt_first_top`'s matching rule) for the `progressive_frame`
+  one, which ps=1 implies. Bench arm `+stdcad=4`, mutations C5 (term back), C6 (branch not
+  gated), C7 (`nxt_first_top` not gated). ⏳ Rig re-check of `BBB_PAL` on the rebuilt core.
+- ⏳ **Next step:** by eye on a CRT: a PAL film, a filmised drama, and a sport or concert 50i
+  disc to judge the accepted judder (library share needed).
 - ⏳ `tools/hil_suite.py` with conversion Off against v0.10.0 has not run; Off matched the control on
   rates only.
 - A field-accurate "video" cadence (pair re-scan for true 50i) would need a per-picture classifier
