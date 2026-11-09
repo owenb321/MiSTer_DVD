@@ -121,6 +121,7 @@ if [ "${1:-}" = "--red" ]; then
     wmutant "W20 half_scan PAL value"   "wire [15:0] half_scan_dec = conv_an_dec ? 16'd720" "wire [15:0] half_scan_dec = conv_an_dec ? 16'd900" half_scan
     wmutant "W21 63 per second"         ".disp_fps       (std_conv_an ? 6'd62 :" ".disp_fps       (std_conv_an ? 6'd63 :" disp_fps
     wmutant "W22 menus moved too"       ".ratio ((std_conv_an & ~sp_map_en) ? disp_vscale_ratio : 2'd0)," ".ratio (std_conv_an ? disp_vscale_ratio : 2'd0)," sub_ratio
+    wmutant "W24 no synthetic 3:2"      ".std_cad           (conv_an_dec)," ".std_cad           (1'b0)," cadence
     wmutant "W23 5/8 bar is PAL's"      "(disp_vscale_ratio == 2'd2) ? 12'd60  : pal_eff ? 12'd72" "(disp_vscale_ratio == 2'd2) ? 12'd72  : pal_eff ? 12'd72" map_bar
 fi
 

@@ -254,7 +254,7 @@ module resample_chain_tb;
     .hcrop_en(rs_hcrop_en ^ croptog_st),       // DVD-FORK (CRT anamorphic horizontal crop); +croptog flips it
     .sched_due(1'b1),                          // THE STC IS A CLOCK: free-run (every picture due at once) -- pacing is not what this bench measures
     .sched_next_due(1'b1),
-    .still_en(still != 0), .blend_en(blend != 0), .bob_en(bob != 0), .scan_start(), .scan_half()   // +still / +blend / +bob (F2 gate); the stills' own bench is pause_still_tb.sv
+    .still_en(still != 0), .blend_en(blend != 0), .bob_en(bob != 0), .std_cad(1'b0), .scan_start(), .scan_half()   // +still / +blend / +bob (F2 gate); the stills' own bench is pause_still_tb.sv
   );
 
   // ---- disp_vscale: vertical 2-tap letterbox downscale (480->360 / field 240->180). Pure

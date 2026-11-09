@@ -148,8 +148,10 @@ A disc already in the chosen standard plays normally, so you can leave this set.
 - On the scaler path, true interlaced video is shown as woven frames, so motion combs.
   `Deinterlace = Blend` softens that; Bob has no effect there. Logos and video-shot extras are
   where you are most likely to see it.
-- On a CRT at 480i, film currently moves in an uneven 2-2-2-4 field rhythm rather than smooth
-  3:2. At 480p it gets 3:2.
+- On a CRT, every picture plays with 3:2 pulldown like an NTSC film disc, including pictures the
+  disc labels as interlaced (on PAL discs these are usually film too). True interlaced video,
+  such as sport, concerts and some logos, judders at 480i: the extra field 3:2 adds repeats an
+  earlier moment, so motion briefly steps backward. 480p is unaffected.
 - With **To PAL**, true 30i video (often animated menus and extras) loses one picture in five, because
   31 pictures a second cannot fit a 25 Hz output. Motion there looks less smooth.
 - Hard-telecined NTSC discs keep their baked-in pulldown, so they do not become clean 25 fps film.

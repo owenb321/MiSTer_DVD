@@ -89,7 +89,8 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
              film24,                                               // DVD-FORK (Film 24p Out): 1 frame/refresh, ascal does the 3:2
              film_det_ntsc, film_det_pal,                          // DVD-FORK (Film 24p auto-detect): cadence verdicts (up to emu)
              blend_en, blend_act,                                  // DVD-FORK (field blend): enable in, instrument out
-             bob_en, bob_act                                       // DVD-FORK (progressive bob): enable in, instrument out
+             bob_en, bob_act,                                      // DVD-FORK (progressive bob): enable in, instrument out
+             std_cad                                               // DVD-FORK (Standard Convert): synthetic 3:2 on the field raster
 	     );
 
   input            clk;                     // clock. Typically a multiple of 27 Mhz as MPEG2 timestamps have a 27 Mhz resolution.
@@ -312,6 +313,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   input            blend_en;
   output           blend_act;
   input            bob_en;
+  input            std_cad;   // DVD-FORK (Standard Convert): clk_dec level, see dvd/resample_addrgen.v
   output           bob_act;
 
   /* DVD-FORK (Film 24p Out — auto detect, issue #124 Phase 2): sticky cadence
@@ -1727,7 +1729,8 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .scan_half(still_scan_half),
     .blend_en(blend_en),                                     // DVD-FORK (field blend)
     .scan_blend(blend_scan_w),
-    .bob_en(bob_en),                                         // DVD-FORK (progressive bob)
+    .bob_en(bob_en),
+    .std_cad(std_cad),                                       // DVD-FORK (Standard Convert): synthetic 3:2                                         // DVD-FORK (progressive bob)
     .scan_bob(bob_scan_w),
     .scan_bob_bot(bob_bot_w)
     );

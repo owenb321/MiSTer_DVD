@@ -51,7 +51,8 @@ module resample_addrgen (
   hcrop_en,                                        // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
   still_en, scan_start, scan_half,                 // DVD-FORK (pause field still): enable + per-scan sideband to disp_vscale
   blend_en, scan_blend,                            // DVD-FORK (field blend): enable + per-scan sideband to field_blend
-  bob_en, scan_bob, scan_bob_bot                   // DVD-FORK (progressive bob): enable + per-scan kernel select
+  bob_en, scan_bob, scan_bob_bot,                  // DVD-FORK (progressive bob): enable + per-scan kernel select
+  std_cad                                          // DVD-FORK (Standard Convert): synthetic 3:2 on the field raster
   );
 
   input              clk;                      // clock
@@ -302,6 +303,19 @@ module resample_addrgen (
   input              blend_en;
   output             scan_blend;
   input              bob_en;
+  /* DVD-FORK (Standard Convert, docs/standard_convert.md "Phase 3"): a PAL disc slowed to
+   * 23.976 pictures/s on the 59.94 Hz FIELD raster. EVERY picture is given 3:2
+   * the way NTSC soft telecine carries it: its field count alternates 3, 2, 3, 2 per pickup,
+   * and its FIRST field is always the opposite of the last displayed one (last_image), so the
+   * corrector's feed-forward arm never has a break to fix and nothing can drift out of phase
+   * across a pause, a seek or a corrector insertion. disp_sched keeps the TRUE flags: every
+   * picture is due 3600 ticks after the last, and a 3-field sequence (4320) simply ends 720
+   * ticks after the next is due, which picks it up at once; the following 2-field one lands
+   * back on time. progressive_frame=0 pictures get the same cadence (by user decision: the
+   * conversion is a manual choice, so every picture is treated as film, and most moving pf=0 PAL
+   * windows measured film-like); a true 50i picture's third field repeats its first, a
+   * one-field step back in time on motion, accepted. */
+  input              std_cad;
   output             scan_bob;
   output             scan_bob_bot;
 
@@ -610,7 +624,16 @@ module resample_addrgen (
    *    costs a repeated field, and chasing a churning error at field rate is worse
    *    than the error.
    * Design + RED-testbench evidence: docs/field_parity.md. */
-  wire       nxt_first_top = progressive_sequence ? 1'b1 : top_field_first; // first field the pending pickup would emit (mirrors the image-build branches)
+  /* Standard Convert's synthetic 3:2 (see the std_cad port): applies to EVERY pending
+   * picture on the field raster, progressive_frame or not. Conversion is a manual OSD choice,
+   * so every picture is treated as film (by user decision, docs/standard_convert.md "Phase 3");
+   * a true 50i picture then repeats its first field, which steps back in time on motion.
+   * cad_rff alternates per pickup. */
+  reg        cad_rff;
+  wire       cad_on  = std_cad && interlaced && ~progressive_sequence;
+  wire       tff_eff = cad_on ? (last_image != TOP) : top_field_first;   // first field = opposite of the last shown
+  wire       rff_eff = cad_on ? cad_rff            : repeat_first_field;
+  wire       nxt_first_top = progressive_sequence ? 1'b1 : tff_eff; // first field the pending pickup would emit (mirrors the image-build branches)
   wire       alt_break = interlaced &&
                          (((last_image == TOP)    &&  nxt_first_top) ||
                           ((last_image == BOTTOM) && ~nxt_first_top));
@@ -844,11 +867,15 @@ module resample_addrgen (
   /* cur_tff: the DISPLAYED picture's first field, latched at the real pickup for the
    * same reason as cur_ilace. pic_scanned: a scan of the displayed picture has already
    * begun, so this one is a re-scan (STATE_REPEAT) and keeps the SECOND field. */
+  /* cad_rff: 3 fields on the first synthetic pickup, then 2, then 3 ... */
+  always @(posedge clk)
+    if (~rst) cad_rff <= 1'b1;
+    else if (clk_en && (state == STATE_INIT) && pickup_go && cad_on) cad_rff <= ~cad_rff;
   reg        cur_tff, pic_scanned;
   always @(posedge clk)
     if (~rst) begin cur_tff <= 1'b1; pic_scanned <= 1'b0; end
     else if (clk_en && (state == STATE_INIT) && pickup_go) begin
-      cur_tff     <= top_field_first;
+      cur_tff     <= tff_eff;
       pic_scanned <= 1'b0;
     end
     else if (clk_en && scan_begin) pic_scanned <= 1'b1;
@@ -1259,9 +1286,9 @@ module resample_addrgen (
         else if (progressive_frame)
           begin
             image   <= NO_OUTPUT;
-            image_0 <= (top_field_first) ? TOP : BOTTOM;
-            image_1 <= (top_field_first) ? BOTTOM : TOP;
-            image_2 <= (repeat_first_field) ? ((top_field_first) ? TOP : BOTTOM) : NO_OUTPUT;
+            image_0 <= (tff_eff) ? TOP : BOTTOM;                 // Standard Convert: _eff = synthetic 3:2 under std_cad
+            image_1 <= (tff_eff) ? BOTTOM : TOP;
+            image_2 <= (rff_eff) ? ((tff_eff) ? TOP : BOTTOM) : NO_OUTPUT;
             image_3 <= NO_OUTPUT;
             image_4 <= NO_OUTPUT;
             image_5 <= NO_OUTPUT;
@@ -1273,9 +1300,9 @@ module resample_addrgen (
           */
           begin
             image   <= NO_OUTPUT;
-            image_0 <= (top_field_first) ? TOP : BOTTOM;
-            image_1 <= (top_field_first) ? BOTTOM : TOP;
-            image_2 <= NO_OUTPUT;
+            image_0 <= (tff_eff) ? TOP : BOTTOM;                 // Standard Convert: _eff = synthetic 3:2 under std_cad
+            image_1 <= (tff_eff) ? BOTTOM : TOP;
+            image_2 <= (cad_on && rff_eff) ? ((tff_eff) ? TOP : BOTTOM) : NO_OUTPUT;   // a disc's rff is never honoured here
             image_3 <= NO_OUTPUT;
             image_4 <= NO_OUTPUT;
             image_5 <= NO_OUTPUT;

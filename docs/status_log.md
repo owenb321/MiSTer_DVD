@@ -27,8 +27,11 @@ v0.10.0: raster, audio and STC all land on the exact ratios, with A/V stable ove
 **Found on the way:** passthrough rising in the gap after a mount made audio up to 210 ms late (fixed,
 `std_conv_wait`), and a separate fault, also in v0.10.0, where audio stays dead until a reboot after
 about 25 core loads. **Refuted:** that `pal_eff` needed splitting into source and raster at about 20 sites;
-it stays the source and only `pal_out` inverts. **Open decision:** how Phase 3 picks a CRT cadence, since
-most moving `progressive_frame=0` windows on PAL discs look like film. Full account: `standard_convert.md`.
+it stays the source and only `pal_out` inverts. **Phase 3 (CRT, PAL→NTSC):** `disp_vscale` 5/6 and 5/8 with the true bottom-field phase,
+the overlay inverse, 1:1 subtitles moved by `sub_anchor`, and synthetic 3:2 for every picture (the
+maintainer's call, 2026-11-09: conversion is manual, so every picture is film; true 50i judders at
+480i), all bench-proven, not yet on hardware. **Refuted:** that `disp_sched` needed a 1440-tick field period.
+Full account: `standard_convert.md`.
 
 ## Read-ahead: a jump past a full ring's head deadlocked (2026-11-01, found in the v0.10.0 smoke)
 

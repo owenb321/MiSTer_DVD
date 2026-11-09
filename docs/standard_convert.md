@@ -80,8 +80,8 @@ and true 50i may be under-called. The ratio is not exact, but the conclusion doe
   23.976 Hz tick then counts 25 per authored second, and NTSC on 25 Hz counts 24. PAL on a 59.94
   field raster would need 62.5; use 62, which overcounts and so can only under-hold. 63 would add a
   false still on long cells (`dur_hold_w`, `dvd/dvd_iso_reader.sv`).
-- **The interlaced-frame branch of the `resample_addrgen.v` image build has no third-field arm,**
-  so 3:2 on a `pf=0` picture needs more than synthetic `rff`.
+- **The interlaced-frame branch of the `resample_addrgen.v` image build had no third-field arm,**
+  so 3:2 on a `pf=0` picture needed more than synthetic `rff`. Step 3 (below) gave it one.
 
 ## Phases 1 and 2 as built
 
@@ -228,9 +228,9 @@ exact. The horizontal path (`disp_hstretch` Crop, SIF fill) is untouched.
   about 20 % more line reads per second than PAL at 50 Hz, and display re-read contention is
   what caused lates before. Measure `dec_duty`, `pic_max` and lates on The Office and ROGER
   before adding anything else; stop and discuss if lates appear.
-- **Until step 2 lands,** a film picture on the 59.94 field raster gets 2:2:2:4 (pair re-scan),
-  not 3:2. Progressive analog (480p) already gets 3:2 from the due test, since 23.976 pictures
-  meet 59.94 frames at 2.5 refreshes each, so it's the first thing to judge by eye.
+- **Before step 2,** a film picture on the 59.94 field raster got 2:2:2:4 (pair re-scan), not
+  3:2. Progressive analog (480p) always got 3:2 from the due test, since 23.976 pictures meet
+  59.94 frames at 2.5 refreshes each.
 
 ## Not done yet
 
@@ -239,13 +239,33 @@ exact. The horizontal path (`disp_hstretch` Crop, SIF fill) is untouched.
   idle logo, active window, line-21 captions and composite sync on the raster. Dialogue subtitles
   are 1:1 and moved by `dvd/sub_anchor.sv` (maintainer's choice, 2026-11-08), anchored at the
   scaled position of their box's top but never off the bottom.
-- ⏳ **Next step:** Phase 3 step 2, the synthetic 3:2 field cadence for `progressive_frame=1`
-  pictures on 480i (cycling (tff, rff) through (1,1) (0,0) (0,1) (1,0)), with `disp_sched`'s field
-  period at 1440 ticks under conversion, not the stream's 1800. Hardware testing waits for the
-  analog path to be complete, by the maintainer's choice (2026-11-07).
+- Phase 3 step 2 (2026-11-09): `resample_addrgen`'s `std_cad` gives a `progressive_frame=1`
+  picture on the field raster 3, 2, 3, 2 fields per pickup (`cad_rff`), and starts each one on
+  the field opposite the last displayed (`last_image`), so the corrector's feed-forward arm has
+  nothing to fix and no phase can drift across a pause, seek or insertion. **Refuted on the way:**
+  the plan's 1440-tick field period for `disp_sched`. The scheduler keeps the TRUE flags and so
+  every picture's true 3600-tick period; a 3-field sequence (4320) just ends 720 ticks after the
+  next picture is due and the 2-field one lands back on time, so 3:2 falls out of the pickup
+  timing. Overriding the period would have made a `progressive_frame=0` picture's extrapolated
+  duration 2880 against its real 3600.
+- Phase 3 step 3 (2026-11-09): **every picture is film.** Conversion is a manual OSD choice, so
+  the maintainer chose (2026-11-09) to treat every picture as film rather than build a motion
+  detector, which would only be worth it if conversion were automatic. `cad_on` no longer looks
+  at `progressive_frame`, and the interlaced-frame branch of the image build takes the same
+  `tff_eff` and, under `cad_on` only, the third field. Phase 0 is why this is the right default:
+  most moving `pf=0` windows on PAL discs measured film-like. **Accepted cost:** a true 50i
+  picture's third field repeats its FIRST field, which is a one-field step back in time, so
+  motion in true video (logos, sport, concerts) judders at 480i. 480p is unaffected. The disc's
+  own `repeat_first_field` on an interlaced frame is still ignored when not converting, exactly
+  as before. Gate: `field_phase_tb +stdcad` (data-derived parity, distinct lines, pickup gaps
+  alternating 3/2 on arms 1 and 3, all-2 on control 2) with four mutations: C1 no alternation,
+  C2 the stream's `tff`, C3 film-only `cad_on` (the old rule), C4 no third field on an
+  interlaced frame.
+- ⏳ **Next step:** the hardware test on a CRT, control arm first (v0.10.0): a PAL film, a
+  filmised drama, and a sport or concert 50i disc to judge the accepted judder.
 - ⏳ `tools/hil_suite.py` with conversion Off against v0.10.0 has not run; Off matched the control on
   rates only.
-- Phase 3's cadence for `pf=0` pictures: decided at Phase 3 (maintainer, 2026-11-02), when real CRT
-  output can show how bad the wrong one looks.
+- A field-accurate "video" cadence (pair re-scan for true 50i) would need a per-picture classifier
+  or a second OSD choice. Only if the CRT test shows the 50i judder matters.
 - The census scripts are still scratch files. Add them to `tools/` before this note's numbers are
   relied on elsewhere.

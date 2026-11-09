@@ -53,7 +53,44 @@ for p in 0 1; do
   vvp bench/dvd/field_phase_sim +phase=$p | grep -vE '^\s*$'; [ "${PIPESTATUS[0]}" -eq 0 ] || fail=1
 done
 
+# +stdcad: Standard Convert's synthetic 3:2 (docs/standard_convert.md "Phase 3"): arms 1
+# (progressive pictures) and 3 (progressive_frame=0), and control 2 (cadence off: all gaps 2).
+for m in 1 2 3; do for p in 0 1; do
+  vvp bench/dvd/field_phase_sim +stdcad=$m +phase=$p | grep -E '^\[13|FAIL|PASS|BROKEN|VACUOUS'; [ "${PIPESTATUS[0]}" -eq 0 ] || fail=1
+done; done
+
 if [ "${1:-}" = "--red" ]; then
+  echo
+  echo "============ STANDARD CONVERT CADENCE MUTATIONS (each must FAIL its own arm) ============"
+  CT=$(mktemp -d)
+  _cmut() {  # name old new stdcad-mode expect-regex
+    local d="$CT/$1"; mkdir -p "$d"
+    python3 - "$d/resample_addrgen.v" "$2" "$3" <<'PYEOF' || { echo "  $1: anchor not found"; fail=1; return; }
+import sys
+out, old, new = sys.argv[1:4]
+s = open('dvd/resample_addrgen.v').read()
+assert s.count(old) == 1, f"mutation anchor not unique/found: {old!r}"
+open(out, 'w').write(s.replace(old, new))
+PYEOF
+    iverilog -g2012 -D__IVERILOG__ -I rtl/mpeg2 -o "$d/sim" \
+      rtl/mpeg2/resample.v "$d/resample_addrgen.v" rtl/mpeg2/resample_dta.v rtl/mpeg2/resample_bilinear.v \
+      rtl/mpeg2/mem_addr.v rtl/mpeg2/mixer.v $RTL_B >/dev/null 2>&1 \
+      || { echo "  $1: BUILD FAILED"; fail=1; return; }
+    local out; out=$(vvp "$d/sim" +stdcad=$4 +phase=0 2>&1 || true)
+    if echo "$out" | grep -qE "$5" && ! echo "$out" | grep -q '==== PASS'; then
+      echo "  $1: caught ($(echo "$out" | grep -E "$5" | head -1 | cut -c1-80))"
+    else echo "  $1: *** NOT CAUGHT ***"; fail=1; fi
+  }
+  _cmut C1_no_alternation "if (clk_en && (state == STATE_INIT) && pickup_go && cad_on) cad_rff <= ~cad_rff;" \
+        "if (1'b0) cad_rff <= ~cad_rff;" 1 'FAIL \[D\]'
+  _cmut C2_stream_tff "wire       tff_eff = cad_on ? (last_image != TOP) : top_field_first;" \
+        "wire       tff_eff = top_field_first;" 1 'FAIL \[D\]'
+  _cmut C3_film_only "wire       cad_on  = std_cad && interlaced && ~progressive_sequence;" \
+        "wire       cad_on  = std_cad && interlaced && ~progressive_sequence && progressive_frame;" 3 'FAIL \[D\]'
+  _cmut C4_no_ilace_third "image_2 <= (cad_on && rff_eff) ? ((tff_eff) ? TOP : BOTTOM) : NO_OUTPUT;" \
+        "image_2 <= NO_OUTPUT;" 3 'FAIL \[D\]'
+  rm -rf "$CT"
+
   echo
   echo "============ START MUTATIONS (+start_only; each must FAIL its own window) ============"
   TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT

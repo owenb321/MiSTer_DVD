@@ -5816,7 +5816,8 @@ mpeg2video mpeg2video_inst (
     .film_det_pal      (core_film_det_pal),            // DVD-FORK (Film 24p auto-detect): sustained-progressive verdict (clk_dec)
     .blend_en          (blend_en_dec),                 // DVD-FORK (field blend): Deinterlace = Blend (progressive)
     .blend_act         (core_blend_act),               // DVD-FORK (field blend): instrument -> telemetry word 7 flags[5]
-    .bob_en            (bob_en_dec),                   // DVD-FORK (progressive bob): Deinterlace = Bob (progressive)
+    .bob_en            (bob_en_dec),
+    .std_cad           (conv_an_dec),                  // DVD-FORK (Standard Convert): synthetic 3:2 on the analog path                   // DVD-FORK (progressive bob): Deinterlace = Bob (progressive)
     .bob_act           (core_bob_act)                  // DVD-FORK (progressive bob): instrument -> telemetry word 14 [8]
 );
 // DVD-FORK (Film 24p auto-detect): 2-FF sync the governor's clk_dec cadence verdicts

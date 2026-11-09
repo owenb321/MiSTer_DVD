@@ -117,6 +117,8 @@ def main():
     has('half_scan', "wire [15:0] half_scan_dec = conv_an_dec ? 16'd720",
         'one 59.94 Hz field is 1440 ticks of the slowed STC')
     has('half_sync', "conv_an_s1_dec <= std_conv_an;", 'half_scan follows the analog path')
+    port('cadence', 'mpeg2video_inst', 'std_cad', 'conv_an_dec',
+         'the synthetic 3:2 runs on the analog path only (480i film would be 2-2-2-4 without it)')
     has('vscale_en', "wire disp_vscale_en = analog_letterbox | std_conv_an;", 'the analog path always scales')
     has('ratio', "assign disp_vscale_ratio = ~std_conv_an ? 2'd0 : analog_letterbox ? 2'd2 : 2'd1;",
         '5/6 for Fit and Crop, one 5/8 pass for Letterbox, 3/4 otherwise')

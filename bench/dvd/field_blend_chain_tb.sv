@@ -112,7 +112,7 @@ module field_blend_chain_tb;
     .sched_due(1'b1), .sched_next_due(1'b1),
     .still_en(1'b0), .scan_start(scan_start), .scan_half(scan_half),
     .blend_en(blend_en), .scan_blend(scan_blend),
-    .bob_en(bob_en), .scan_bob(scan_bob), .scan_bob_bot(scan_bob_bot)
+    .bob_en(bob_en), .std_cad(1'b0), .scan_bob(scan_bob), .scan_bob_bot(scan_bob_bot)
   );
 
   wire [7:0] fb_y, fb_u, fb_v, fb_osd;

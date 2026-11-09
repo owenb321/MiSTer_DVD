@@ -49,7 +49,7 @@
 #   MB3  addrgen: kept field inverted (first <-> second)                  -> C1 C1B C1T C9
 #   MB4  addrgen: the kept field ALTERNATES on every re-scan -- the hold flicker
 #        a steady second field exists to prevent                         -> C1 C1B C1T C5
-#   MB5  addrgen: top_field_first ignored (always TOP first), under +tff=0 -> C1 C1B C1T C9
+#   MB5  addrgen: top_field_first (tff_eff, = it with std_cad off) ignored (always TOP first), under +tff=0 -> C1 C1B C1T C9
 #   MB6  addrgen: cur_ilace gate removed, bob on film (+pfr=1)             -> C4
 #   (no mutation for p2_valid in the idle term: r_wr follows it one cycle later and
 #    the idle counter holds 7 cycles, so its removal cannot release the path early --
@@ -204,7 +204,7 @@ if [ $RED = 1 ]; then
   mutc MC7 dvd/field_blend.sv "s/  reg         r_wr;/  reg         r_wr;\n  reg         tgl;/; s/      blend_act <= 1.b0;/      blend_act <= 1${Q}b0; tgl <= 1${Q}b0;/; s/      if (ft_arr) begin blend_act/      if (ft_arr) begin tgl <= ~tgl; blend_act/; s/r_y   <= p2_blend ? f_y       : p2_d\[31:24\];/r_y   <= p2_blend ? (f_y ^ {7${Q}d0, tgl}) : p2_d[31:24];/" "C1 C1B C1T C5"
   mutc MB3 dvd/resample_addrgen.v "s/wire       bob_bot_now = pic_scanned ? cur_tff : ~cur_tff;/wire       bob_bot_now = pic_scanned ? ~cur_tff : cur_tff;/" "C1 C1B C1T C9" +bob=1
   mutc MB4 dvd/resample_addrgen.v "s/else if (clk_en \&\& scan_begin) pic_scanned <= 1.b1;/else if (clk_en \&\& scan_begin) pic_scanned <= ~pic_scanned;/" "C1 C1B C1T C5" +bob=1
-  mutc MB5 dvd/resample_addrgen.v "s/      cur_tff     <= top_field_first;/      cur_tff     <= 1${Q}b1;/" "C1 C1B C1T C9" +bob=1 +tff=0
+  mutc MB5 dvd/resample_addrgen.v "s/      cur_tff     <= tff_eff;/      cur_tff     <= 1${Q}b1;/" "C1 C1B C1T C9" +bob=1 +tff=0
   mutc MB6 dvd/resample_addrgen.v "s/wire       filt_ok    = deinterlace \&\& ~interlaced \&\& cur_ilace \&\&/wire       filt_ok    = deinterlace \&\& ~interlaced \&\&/" "C4" +bob=1 +pfr=1
   score
 

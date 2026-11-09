@@ -705,8 +705,9 @@ pushing both branches.**
 
 - [~] Clock, audio and the scaler path, both directions (`feature/std-convert`): measured on the rig
   against v0.10.0. ⏳ Save state, subtitle placement by eye, pitch by ear, `hil_suite` with it Off.
-- [ ] PAL→NTSC on direct analog: 5/6 and 5/8 `disp_vscale`, 3:2 field path. ⏳ First decide how to
-  pick a cadence for `progressive_frame=0` pictures, which the flag alone can't answer.
+- [~] PAL→NTSC on direct analog: `disp_vscale` 5/6 and 5/8, the overlays, 1:1 subtitles and 3:2 for
+  every picture (all treated as film, by maintainer decision) are built and bench-proven.
+  ⏳ The hardware test on a CRT.
 - [ ] ⏳ Separate bug, in v0.10.0 too: audio dead until a reboot after ~25 core loads in one boot
   (`dts_copied` 0, `eng_frames` 0). Reproduce it by looping core loads and find what survives the
   reload. Details in `docs/standard_convert.md`.
