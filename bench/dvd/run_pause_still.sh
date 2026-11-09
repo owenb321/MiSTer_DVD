@@ -80,9 +80,9 @@ if [ "${1:-}" = "--red" ]; then
   # M5: the busy term dropped from routing (a scan can overtake a draining one)
   mut_run M5_no_busy_route  dvd/disp_vscale.sv 's/wire        ft_route = vscale_en | sb_half | path_busy;/wire        ft_route = vscale_en | sb_half;/' 0
   # M7: Letterbox's interpolated slot loses its half-line phase
-  mut_run M7_lbh_no_phase   dvd/disp_vscale.sv 's/(h_mode == M_LBH) ? 3.d3 : 3.d0/3'"'"'d0/' 0 +lb=1
-  # M8: the sixths weight table off by one step (plain Letterbox must catch it too)
-  mut_run M8_f_sixths       dvd/disp_vscale.sv 's/(next_r == 3.d1) ? 8.d43 /(next_r == 3'"'"'d1) ? 8'"'"'d85 /' 1 +lb=1
+  mut_run M7_lbh_no_phase   dvd/disp_vscale.sv 's/(h_mode == M_LBH) ? 6.d30/(h_mode == M_LBH) ? 6'"'"'d0/' 0 +lb=1
+  # M8: the weight off by one sixth, +10/60 (plain Letterbox must catch it too)
+  mut_run M8_f_sixths       dvd/disp_vscale.sv 's/\* 14.d273 + 14.d32;/* 14'"'"'d273 + 14'"'"'d2762;/' 1 +lb=1
   # M6: the pin taken from last_image (one scan stale -- the first cut's bug)
   mut_run M6_pin_stale      dvd/resample_addrgen.v 's/wire \[1:0\] just_shown  = .*/wire [1:0] just_shown  = last_image;/' 0
 fi

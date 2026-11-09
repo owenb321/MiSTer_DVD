@@ -137,7 +137,7 @@ PYEOF
   wire_case "dither fed before the yc_out mux"     top 's/\.din(vga_o),/.din(vga_o_t),/' ".din(vga_o_t), want .din(vga_o)"
   wire_case "emu instance port unconnected"        top 's/\.VGA_DITHER(vga_dither_en),/.VGA_DITHER(),/' "emu .VGA_DITHER"
   wire_case "enable from the wrong status bit"     emu 's/assign VGA_DITHER   = status\[8\];/assign VGA_DITHER   = status[9];/' "want status[8]"
-  wire_case "status[8] shared with another row"    emu 's/"O\[10:9\],Video Output,/"O[10:8],Video Output,/' "claimed by 2 CONF_STR rows"
+  wire_case "status[8] shared with another row"    emu 's/O\[10:9\],Video Output,/O[10:8],Video Output,/' "claimed by 2 CONF_STR rows"
   wire_case "module missing from the qsf"          qsf '/dvd\/dac_dither\.sv/d' "does not name dvd/dac_dither.sv"
   rm -rf "$tmp"
 
