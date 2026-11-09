@@ -48,7 +48,7 @@ module subpic_chain_tb;
         .clk(clk), .rst_n(rst_n), .enable(1'b1), .forced_only(1'b0), .interlaced(1'b0),
         .sp_byte(sp_byte), .sp_valid(sp_valid), .sp_frame_start(sp_frame_start),
         .sp_pts(sp_pts), .sp_pts_valid(sp_pts_valid),
-        .stc(stc), .q_x(q_x), .q_y(q_y), .q_idx(q_idx), .q_inside(q_inside),
+        .stc(stc), .q_x(q_x), .q_y_off(12'sd0), .area_sy(), .area_ey(), .q_y(q_y), .q_idx(q_idx), .q_inside(q_inside),
         .alpha0(a0), .alpha1(a1), .alpha2(a2), .alpha3(a3), .sp_active(sp_active)
     );
 

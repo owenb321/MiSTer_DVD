@@ -273,6 +273,7 @@ module crt_ov_map_tb;
     localparam SP_STRIDE = 720;
     reg         sp_interlaced = 0;
     reg  [11:0] sp_q_x = 0, sp_q_y = 12'hFFF;
+    reg  signed [11:0] sp_off = 12'sd0;   // T11: Standard Convert's subtitle row offset
     wire [1:0]  sp_q_idx;
 
     spu_decode #(.BMP_N(414720), .STRIDE(SP_STRIDE)) spu (
@@ -281,7 +282,7 @@ module crt_ov_map_tb;
         .interlaced(sp_interlaced),
         .sp_byte(8'd0), .sp_valid(1'b0), .sp_frame_start(1'b0),
         .sp_pts(33'd0), .sp_pts_valid(1'b0), .stc(33'd0),
-        .q_x(sp_q_x), .q_y(sp_q_y),
+        .q_x(sp_q_x), .q_y_off(sp_off), .area_sy(), .area_ey(), .q_y(sp_q_y),
         .q_idx(sp_q_idx), .q_inside(),
         .alpha0(), .alpha1(), .alpha2(), .alpha3(),
         .col0(), .col1(), .col2(), .col3(),
@@ -310,6 +311,26 @@ module crt_ov_map_tb;
                     if (errors < 80)
                         $display("%s FAIL: q(%0d,%0d) idx %0d expected %0d",
                                  lbl, x, y, sp_q_idx, gold_px(y * SP_STRIDE + x));
+                end
+            end
+        end
+    endtask
+
+    // T11: the same check with spu_decode's row offset: raster row y reads bitmap row y + off
+    task automatic sp_line_off(input [11:0] y, input integer off);
+        integer x;
+        begin
+            @(negedge clk) sp_q_y = y;
+            repeat (3) @(negedge clk);
+            for (x = 200; x < 206; x = x + 1) begin
+                @(negedge clk) sp_q_x = x[11:0];
+                @(negedge clk);
+                @(negedge clk);
+                if (sp_q_idx !== gold_px((y + off) * SP_STRIDE + x)) begin
+                    errors = errors + 1;
+                    if (errors < 80)
+                        $display("T11 FAIL: raster (%0d,%0d) off %0d read idx %0d, bitmap row %0d holds %0d",
+                                 x, y, off, sp_q_idx, y + off, gold_px((y + off) * SP_STRIDE + x));
                 end
             end
         end
@@ -873,6 +894,46 @@ module crt_ov_map_tb;
         sp_q_y = 12'hFFF; repeat (4) @(negedge clk);
         for (v = 0; v < 30; v = v + 2) sp_line("T8b", v[11:0]);
         $display("T8 context-toggle semantics: %s", (errors != err0) ? "FAIL" : "PASS");
+
+        // ==============================================================
+        // T11 — Standard Convert: 1:1 subtitle row offset (dvd/sub_anchor.sv). The raster walk
+        //       is untouched (the walker sees q_y); the bitmap row read is q_y + off, for a
+        //       positive, a negative and a zero offset, on both fields. The area test uses the
+        //       offset row, and crt_ov_map's 0xFFF sentinel never lands inside a box.
+        // ==============================================================
+        err0 = errors;
+        sp_interlaced = 1;
+        begin : t11
+            integer oi, o, vv;
+            integer offs [0:2];
+            offs[0] = 96; offs[1] = -60; offs[2] = 0;
+            for (oi = 0; oi < 3; oi = oi + 1) begin
+                o = offs[oi];
+                sp_off = o; sp_q_y = 12'hFFF; repeat (6) @(negedge clk);
+                for (vv = 100; vv < 130; vv = vv + 2) begin    // top field: walker re-arms at 0
+                    if (vv == 100) begin sp_q_y = 12'd0; repeat (3) @(negedge clk);
+                        begin : walk_t integer w; for (w = 2; w < 100; w = w + 2) begin @(negedge clk) sp_q_y = w; repeat (2) @(negedge clk); end end
+                    end
+                    sp_line_off(vv[11:0], o);
+                end
+                sp_q_y = 12'hFFF; repeat (6) @(negedge clk);
+                sp_q_y = 12'd1; repeat (3) @(negedge clk);       // bottom field re-arms at 1
+                for (vv = 3; vv < 101; vv = vv + 2) begin @(negedge clk) sp_q_y = vv; repeat (2) @(negedge clk); end
+                for (vv = 101; vv < 121; vv = vv + 2) sp_line_off(vv[11:0], o);
+            end
+            // area test on the offset row, and the sentinel: box rows 150..170
+            spu.c_sy = 12'd150; spu.c_ey = 12'd170;
+            sp_off = 12'sd96;
+            @(negedge clk) sp_q_y = 12'd60; #1;
+            if (spu.in_y !== 1'b1) begin errors = errors + 1; $display("T11 FAIL: row 60 + 96 = 156 is in box 150..170 but in_y=%b", spu.in_y); end
+            @(negedge clk) sp_q_y = 12'd156; #1;
+            if (spu.in_y !== 1'b0) begin errors = errors + 1; $display("T11 FAIL: raw row 156 is offset to 252, outside the box, but in_y=%b", spu.in_y); end
+            sp_off = 12'sd160;                                  // 0xFFF + 160 wraps to 159: in the box
+            @(negedge clk) sp_q_y = 12'hFFF; #1;
+            if (spu.in_y !== 1'b0) begin errors = errors + 1; $display("T11 FAIL: the 0xFFF sentinel was offset into a box (in_y=%b)", spu.in_y); end
+            sp_off = 12'sd0; sp_q_y = 12'hFFF; repeat (4) @(negedge clk);
+        end
+        $display("T11 subtitle row offset: %s", (errors != err0) ? "FAIL" : "PASS");
 
         // ==============================================================
         // T10 — Standard Convert: forward disp_vscale vs inverse crt_ov_map, 5/6 and 5/8

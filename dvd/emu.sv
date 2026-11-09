@@ -6487,6 +6487,9 @@ spu_decode spu_decode_inst (
     .stc        (av_stc),                 // video-referenced STC for show/hide timing
     .q_x        (ov_qx),                  // per-pixel query (lead-compensated + CRT-aspect inverse-mapped)
     .q_y        (ov_qy),
+    .q_y_off    (12'sd0),                 // Standard Convert: dvd/sub_anchor.sv once the analog path is wired
+    .area_sy    (),
+    .area_ey    (),
     .q_idx      (sp_q_idx),               // registered: 1 clk_sys after q_x/q_y
     .q_inside   (sp_q_inside),
     .alpha0     (sp_a0),
