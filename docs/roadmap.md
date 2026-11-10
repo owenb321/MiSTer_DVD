@@ -714,8 +714,9 @@ pushing both branches.**
   reload. Details in `docs/standard_convert.md`.
 - [~] NTSC→PAL on direct analog (Phase 4, agreed 2026-11-09): `disp_vscale` 6/5 up and 9/10 (second
   line buffer), the 576 window, the overlay inverses, 2:2 for every picture, catch-up drops at twice
-  the rate while converting (30i needs 6.25/s). Built and bench-proven. ⏳ Rig: RetroTINK capture
-  (576i, colour, OSD), cadence, lates on 30i; then by eye on a CRT.
+  the rate while converting (30i needs 6.25/s). Rig 2026-11-09: 576i, colour, OSD, 2:2, 0 lates on
+  film; 30i menus ride 30–50 ms behind (the drop threshold). ⏳ By eye on a CRT; decide whether
+  to lower the drop threshold while converting.
 - Deferred: inverse telecine for hard-telecined NTSC.
 
 ### ⏳ 2026-10-01 spec-audit: DVD Demystified 3rd-edition follow-ups (items 1–8 and 10b ✅; the rest re-ranked 2026-10-06, PR #165)

@@ -35,8 +35,10 @@ maintainer's call, 2026-11-09: conversion is manual, so every picture is film; t
 Bunny PAL) was still 2-2-2-4, fixed and re-measured 3:2 on the rig. **First look on a CRT (same day): broken** (no colour on Y/C, no OSD, HDMI `290x519i`): `sync_gen` never closed a 480i field's window for a 576-line stream, so DE ran through vsync; fixed in `syncgen.v`, `crt_syncgen_tb` PHASE 8; the maintainer then saw PAL film and
 video "look and sound good" converted. **Phase 4, To PAL on a CRT (agreed 2026-11-09):** `disp_vscale`
 6/5 up (a second line buffer replays a pair's second line) and 9/10, the 576 window, the inverses,
-2:2 for every picture, catch-up drops at twice the rate while converting; bench-proven, not yet on
-the rig. **Refuted:** that `disp_sched` needed a 1440-tick field period.
+2:2 for every picture, catch-up drops at twice the rate while converting. **HW 2026-11-09:** 576i,
+colour and the OSD on composite through the RetroTINK, 25.0 pictures on 50.0 fields, 2:2 measured,
+0 lates on film; 30i at 6.23 drops/s, 30–50 ms behind (the drop threshold, not the ceiling).
+**Refuted:** that raising the drop ceiling fixes the 30i lag. **Refuted:** that `disp_sched` needed a 1440-tick field period.
 Full account: `standard_convert.md`.
 
 ## Read-ahead: a jump past a full ring's head deadlocked (2026-11-01, found in the v0.10.0 smoke)

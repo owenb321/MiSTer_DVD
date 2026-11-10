@@ -311,6 +311,25 @@ modelines, composite sync, and Main's Y/C setup (it picks a PAL burst from the m
 - Gates: `run_vscale_frame.sh` (arms `*_r3`, `*_r4`; mutations U1-U7), `crt_ov_map_tb` T10 (R8,
   R9), `run_sub_anchor.sh` (R6-R8), `field_phase_tb +stdcad=5` (C8, C9), the wiring checker (W25-W31).
 
+**Timing:** the first fit read clk_dec 74.9 MHz (the 6/5 line bound was a multiply in front of a
+compare in front of `next_k`); with the walk's decisions registered a cycle ahead it reads
+88.0 / 86.38 MHz (SEED 7, gate 86). Cold-corner margin is 0.4 MHz, down from 3: watch it.
+
+**HW, 2026-11-09** (`.236`, Video Output = Interlaced, To PAL, RetroTINK on composite through the
+capture card): `big-buck-bunny-NTSC.iso` menu and feature, `BBB_NTSC.VOB`, `MEN_IN_BLACK.iso`.
+- ascal captures 720×576 with the 16:9 menu in the 9/10 band between 72-line bars; colour on
+  composite (PAL burst, picked by Main from the 50 Hz rate); the MiSTer OSD shows on the analog output.
+- Film: 50.0 fields/s, 25.0 pickups/s, 0 lates, 0 drops over the menu, 20 s of feature and 30 s of
+  the VOB. Fast telemetry (10 ms): gaps 2/1/3 = 427/140/140 (the 1s and 3s are one sampling slip,
+  symmetric), pair sums 4/3/5 = 291/208/207 and no 6: 2:2, no third field.
+- MiB's 30i menu: exactly 6.23 drops/s and 12.5 lates/s on 25.0 pickups/s; the picture rides 60 to
+  85 ms behind the sound against −31 ms on the native control. **`drop_fast` did not change that,
+  and could not:** the steady state needs exactly 6.25 drops/s whatever the ceiling, and a drop is
+  only requested past `LATE_DROP` (~50 ms), so the lag saw-tooths just above the threshold either
+  way. The faster ceiling only shortens a catch-up after a jump. Lowering the threshold while
+  converting is the lever if the 30–50 ms extra on 30i menus matters (not done; a film stream's
+  lateness under To PAL is at most ~8 ms, so a lower threshold should not drop film).
+
 **Risks:**
 
 - **Decode pacing:** 31.25 decodes a second, 4 % above native NTSC. Display reads are 240 source
