@@ -33,16 +33,11 @@ maintainer's call, 2026-11-09: conversion is manual, so every picture is film; t
 480i), bench-proven. **HW 2026-11-09:** rates exact (59.944 Hz, 23.965 pictures/s, audio 46,033 Hz),
 0 lates, 3:2 measured on an interlaced-flagged PAL film; a `progressive_sequence=1` disc (Big Buck
 Bunny PAL) was still 2-2-2-4, fixed and re-measured 3:2 on the rig. **First look on a CRT (same day): broken** (no colour on Y/C, no OSD, HDMI `290x519i`): `sync_gen` never closed a 480i field's window for a 576-line stream, so DE ran through vsync; fixed in `syncgen.v`, `crt_syncgen_tb` PHASE 8; the maintainer then saw PAL film and
-video "look and sound good" converted. **Phase 4, To PAL on a CRT (agreed 2026-11-09):** `disp_vscale`
-6/5 up (a second line buffer replays a pair's second line) and 9/10, the 576 window, the inverses,
-2:2 for every picture, catch-up drops at twice the rate while converting. **HW 2026-11-09:** 576i,
-colour and the OSD on composite through the RetroTINK, 25.0 pictures on 50.0 fields, 2:2 measured,
-0 lates on film; 30i at 6.23 drops/s, 30–50 ms behind (the drop threshold, not the ceiling).
-**Phase 4b, field-accurate 30i on To PAL (2026-11-10):** every raster field shows the newest source
-field (one in five skipped), chosen per picture from its lateness (`fa_cls`). Rig: MiB's 30i menu
-30.77 pictures/s, 0.49 drops/s and 1.1 lates/s (was 6.23 and 12.5), lag −2 to −21 ms; the residual
-drops are decoder starvation after a one-field picture (20 ms to decode the next), not the walk.
-Film unchanged (0 lates). SEED 8. **Refuted:** that raising the drop ceiling fixes the 30i lag. **Refuted:** that `disp_sched` needed a 1440-tick field period.
+video "look and sound good" converted. **Phase 4/4b, To PAL on a CRT (2026-11-09/10): built and REMOVED.** 6/5 upscale, 2:2, then
+field-accurate 30i (MiB's 30i menu 0.49 drops/s, was 6.23); 576i, colour, OSD and 0 lates on film
+on the rig. Removed by the maintainer on 2026-11-10 for its cost (~296 ALM, 3 M10K, 3 DSP; the fit
+left SEED 7): most PAL CRTs accept 60 Hz anyway, and HDMI keeps To PAL. Branch now +188 ALM / +0 M10K
+/ +3 DSP vs v0.10.0 at SEED 7. **Refuted:** that raising the drop ceiling fixes the 30i lag. **Refuted:** that `disp_sched` needed a 1440-tick field period.
 Full account: `standard_convert.md`.
 
 ## Read-ahead: a jump past a full ring's head deadlocked (2026-11-01, found in the v0.10.0 smoke)

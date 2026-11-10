@@ -1,9 +1,14 @@
 # Standard conversion by speed change
 
-**Status:** 🔧 Phases 1 and 2 built and measured on the rig, on `feature/std-convert`
-(`DVD_stdconvert_20261102_2317.rbf`). ⏳ Save state, subtitles by eye and a by-ear check are still open.
+**Status:** 🔧 on `feature/std-convert`, not merged. Built: clock and audio, the scaler path (HDMI,
+`vga_scaler`) in both directions, and PAL→NTSC on direct analog (Phase 3), all measured on the rig.
+**NTSC→PAL on direct analog (Phases 4 and 4b) was built, measured and then REMOVED on 2026-11-10**
+(maintainer's call, see "Why Phase 4 was removed" below); its sections stay as the record. ⏳ By eye
+on a CRT, save state, a by-ear check, `hil_suite` with conversion Off.
 **Files:** `dvd/std_rate.sv`, `dvd/emu.sv`, `dvd/pal_detect.sv` (`valid`), `dvd/dvd_audio_decode.sv`
-(`nco_fs_out`). **Gates:** `bench/dvd/run_std_rate.sh --red`, `tools/check_std_convert_wiring.py`.
+(`nco_fs_out`), `dvd/disp_vscale.sv`, `dvd/crt_ov_map.sv`, `dvd/sub_anchor.sv`, `dvd/resample_addrgen.v`.
+**Gates:** `bench/dvd/run_std_rate.sh --red`, `run_vscale_frame.sh --red`, `run_sub_anchor.sh --red`,
+`run_field_phase.sh --red`, `run_p240.sh --red`, `tools/check_std_convert_wiring.py`.
 
 PAL film slowed by 960/1001 plays at 23.976 frames/s and maps onto 3:2 at 59.94 Hz. NTSC film
 sped up by 1001/960 plays at 25 frames/s and maps onto 2:2 at 50 Hz. Both ratios are exact from
@@ -234,7 +239,29 @@ exact. The horizontal path (`disp_hstretch` Crop, SIF fill) is untouched.
   3:2. Progressive analog (480p) always got 3:2 from the due test, since 23.976 pictures meet
   59.94 frames at 2.5 refreshes each.
 
-## Phase 4 plan: NTSC→PAL on direct analog (agreed 2026-11-09)
+## Why Phase 4 was removed (maintainer, 2026-11-10)
+
+Phases 4 and 4b (below) worked on the rig, but cost about **296 ALMs, 3 M10K and 3 DSP** on top of
+the rest of the feature, and pushed the fit off SEED 7 (a five-seed sweep before SEED 8 passed). The
+whole branch was +484 ALM / +3 M10K / +6 DSP against v0.10.0 (seed-confounded, SEED 8 vs 7); with
+Phase 4 removed it is +188 ALM / +0 M10K / +3 DSP at the same SEED 7 as v0.10.0
+(`DVD_stdconvert2_20261109_2354.rbf`, the identical netlist bar the slug).
+
+The judgement: To PAL on a CRT serves the fewest people. Most PAL-region CRTs of the DVD era already
+accept a 60 Hz (NTSC or PAL60) signal, so an NTSC disc mostly plays on them unconverted, and over HDMI
+To PAL keeps working on the scaler path. To NTSC on a CRT is the case that matters: many NTSC-region
+consumer sets cannot show 576i50 at all. Nobody had judged Phase 4 on a real PAL CRT, and the 30i
+path still dropped 0.49 pictures/s. ALMs are the binding resource, so ~300 of them were not worth it.
+
+**How it was removed:** the RTL and bench parts of `d4ae845`, `36e544c`, `4d8e9da`, `cadd90a`,
+`8ceb575` and `eb65956` reverse-applied; the code then matches `9461aeb` exactly (slug aside:
+`dev-stdconvert5`). To bring it back, cherry-pick those commits in that order; the timing retimes
+(`4d8e9da`, `8ceb575`) were needed for it to fit at 86 MHz, and expect a seed sweep.
+
+**Not lost:** the field-accurate idea (Phase 4b's per-field choice from lateness, `fa_cls`) and the
+diagnosis that its residual drops were decoder starvation after a one-field picture.
+
+## Phase 4 plan: NTSC→PAL on direct analog (agreed 2026-11-09; REMOVED 2026-11-10)
 
 The mirror of Phase 3: an NTSC disc with `Standard Convert = To PAL` on an analog output plays
 4.3 % fast on the plain PAL raster, 576i or 576p as `Video Output` says, with `disp_vscale`
@@ -336,7 +363,7 @@ capture card): `big-buck-bunny-NTSC.iso` menu and feature, `BBB_NTSC.VOB`, `MEN_
   lines a field, below native PAL's 288, so the display side should be lighter than a PAL disc.
 - **Flow control in `disp_vscale`** is the one piece with no precedent in the tree.
 
-## Phase 4b: field-accurate NTSC video on To PAL (agreed 2026-11-09)
+## Phase 4b: field-accurate NTSC video on To PAL (agreed 2026-11-09; REMOVED 2026-11-10)
 
 **The choice.** True NTSC video sped up is 62.5 fields/s on a 50-field raster. Phase 4 dropped one
 picture in five (a 32 ms jump 6.25 times a second). The smoothest result without motion estimation
@@ -399,7 +426,7 @@ composite through the capture card).
 - Film unchanged: BBB_NTSC.VOB 50.0 fields/s, 25.0 pictures/s, 0 lates, 0 drops.
 - 576i at 50 Hz, colour, and the MiSTer OSD over the picture on composite (RetroTINK capture).
 - ⏳ By eye on a CRT: the field-skip motion and the even softness.
-- **Unreproduced field report (maintainer, 2026-11-10):** To PAL, after ~10 min of MiB's film, a
+- **Unreproduced field report (maintainer, 2026-11-10; moot since the path was removed):** To PAL, after ~10 min of MiB's film, a
   mount of `WAKE_UP_WITH_ELMO.iso` (NTSC, still menu) gave no picture and no sound while the raster,
   signal and MiSTer OSD stayed up; a core Reset cleared it. The same MiB → Elmo mount had worked
   earlier in the same boot. Not reproduced in 8 scripted mounts (`mount` on the custom Main's

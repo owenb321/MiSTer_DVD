@@ -55,9 +55,8 @@ done
 
 # +stdcad: Standard Convert's synthetic 3:2 (docs/standard_convert.md "Phase 3"): arms 1
 # (progressive pictures), 3 (progressive_frame=0) and 4 (progressive_sequence=1), and control 2
-# (cadence off: all gaps 2). Arm 5 (To PAL, Phase 4): 2:2 on a soft-telecine stream, all gaps 2.
-# Arm 6 (To PAL field-accurate video, Phase 4b): the newest field each time, T B T B B T B T.
-for m in 1 2 3 4 5 6; do for p in 0 1; do
+# (cadence off: all gaps 2).
+for m in 1 2 3 4; do for p in 0 1; do
   vvp bench/dvd/field_phase_sim +stdcad=$m +phase=$p | grep -E '^\[13|FAIL|PASS|BROKEN|VACUOUS'; [ "${PIPESTATUS[0]}" -eq 0 ] || fail=1
 done; done
 
@@ -87,30 +86,16 @@ PYEOF
         "if (1'b0) cad_rff <= ~cad_rff;" 1 'FAIL \[D\]'
   _cmut C2_stream_tff "wire       tff_eff = cad_on ? (last_image != TOP) : top_field_first;" \
         "wire       tff_eff = top_field_first;" 1 'FAIL \[D\]'
-  _cmut C3_film_only "wire       cad_on  = std_cad[0] && interlaced;" \
-        "wire       cad_on  = std_cad[0] && interlaced && progressive_frame;" 3 'FAIL \[D\]'
+  _cmut C3_film_only "wire       cad_on  = std_cad && interlaced;" \
+        "wire       cad_on  = std_cad && interlaced && progressive_frame;" 3 'FAIL \[D\]'
   _cmut C4_no_ilace_third "image_2 <= (cad_on && rff_eff) ? ((tff_eff) ? TOP : BOTTOM) : NO_OUTPUT;" \
         "image_2 <= NO_OUTPUT;" 3 'FAIL \[D\]'
-  _cmut C5_no_prog_seq "wire       cad_on  = std_cad[0] && interlaced;" \
-        "wire       cad_on  = std_cad[0] && interlaced && ~progressive_sequence;" 4 'FAIL \[D\]'
+  _cmut C5_no_prog_seq "wire       cad_on  = std_cad && interlaced;" \
+        "wire       cad_on  = std_cad && interlaced && ~progressive_sequence;" 4 'FAIL \[D\]'
   _cmut C6_prog_seq_branch "else if (progressive_sequence && interlaced && ~cad_on)" \
         "else if (progressive_sequence && interlaced)" 4 'FAIL \[D\]'
   _cmut C7_prog_seq_top "wire       nxt_first_top = (progressive_sequence && ~cad_on) ? 1'b1 : tff_eff;" \
         "wire       nxt_first_top = progressive_sequence ? 1'b1 : tff_eff;" 4 'FAIL \[[CAD]\]'
-  # To PAL: 2:2 must ignore both the synthetic alternation and the disc's own rff
-  _cmut C8_22_alternates "wire       rff_eff = cad_on ? (cad_rff & ~std_cad[1]) : repeat_first_field;" \
-        "wire       rff_eff = cad_on ? cad_rff : repeat_first_field;" 5 'FAIL \[D\]'
-  _cmut C9_22_stream_rff "wire       rff_eff = cad_on ? (cad_rff & ~std_cad[1]) : repeat_first_field;" \
-        "wire       rff_eff = cad_on ? (std_cad[1] ? repeat_first_field : cad_rff) : repeat_first_field;" 5 'FAIL \[D\]'
-  # To PAL field-accurate video
-  _cmut F1_fa_ignored "  wire       fa_both    = (fa_cls == 2'd0);" \
-        "  wire       fa_both    = 1'b1;" 6 'FAIL \[[EF]\]'
-  _cmut F2_fa_slot_reads "      xp_0 <= fa_on & fa_xp0;" \
-        "      xp_0 <= 1'b0;" 6 'FAIL \[[EX]\]'
-  _cmut F3_fa_wrong_field "  wire       fa_rd0_bot = (fa_cls == 2'd2) ? top_field_first : ~top_field_first;" \
-        "  wire       fa_rd0_bot = ~top_field_first;" 6 'FAIL \[[EX]\]'
-  _cmut F4_fa_on_film "  assign     fa_on   = cad_on && std_cad[1] && ~progressive_frame && ~progressive_sequence;" \
-        "  assign     fa_on   = cad_on && std_cad[1] && ~progressive_sequence;" 5 'FAIL \[[CA]\]'
   rm -rf "$CT"
 
   echo

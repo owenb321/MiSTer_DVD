@@ -712,13 +712,9 @@ pushing both branches.**
 - [ ] ⏳ Separate bug, in v0.10.0 too: audio dead until a reboot after ~25 core loads in one boot
   (`dts_copied` 0, `eng_frames` 0). Reproduce it by looping core loads and find what survives the
   reload. Details in `docs/standard_convert.md`.
-- [~] NTSC→PAL on direct analog (Phase 4, agreed 2026-11-09): `disp_vscale` 6/5 up and 9/10 (second
-  line buffer), the 576 window, the overlay inverses, 2:2 for every picture, catch-up drops at twice
-  the rate while converting (30i needs 6.25/s). Rig 2026-11-09: 576i, colour, OSD, 2:2, 0 lates on
-  film. Phase 4b (2026-11-10): field-accurate 30i, one source field in five skipped; rig: MiB's
-  30i menu 0.49 drops/s (was 6.23), lag −2 to −21 ms (was −60 to −85); the residual drops are
-  decoder starvation after a one-field picture. ⏳ By eye on a CRT. Optional: let the decoder run a
-  picture further ahead to remove the last drops.
+- ❌ NTSC→PAL on direct analog (Phases 4/4b): built and rig-measured, then removed on 2026-11-10 for
+  ~296 ALM / 3 M10K / 3 DSP (maintainer's call: most PAL CRTs accept 60 Hz; HDMI keeps To PAL).
+  The commits to cherry-pick back are in `docs/standard_convert.md` "Why Phase 4 was removed".
 - Deferred: inverse telecine for hard-telecined NTSC.
 
 ### ⏳ 2026-10-01 spec-audit: DVD Demystified 3rd-edition follow-ups (items 1–8 and 10b ✅; the rest re-ranked 2026-10-06, PR #165)

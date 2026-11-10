@@ -112,17 +112,6 @@ module disp_sched #(
     input  wire        skip_rff,
 
     input  wire [15:0] half_scan,             // ticks, per raster mode
-    // Standard Convert (docs/standard_convert.md "Phase 4"): one catch-up drop per TWO pickups
-    // instead of four. NTSC 30i sped up to To PAL is 31.25 pictures/s on 25 pickups/s, which needs
-    // 6.25 drops/s: exactly DROP_COOL's ceiling, so the picture rode 60 to 105 ms behind the sound.
-    input  wire        drop_fast,
-    // Standard Convert To PAL, field-accurate video (docs/standard_convert.md "Phase 4b"): which
-    // of the waiting picture's two fields are still current, from its lateness L (ticks of the
-    // sped-up STC). A source field lasts 1501.5 ticks (59.94 fields/s content), an output field
-    // 1876.875 (50 fields/s real). 0: L < 1126, both fit before the next picture is due;
-    // 1: 1126 <= L < 1502, only the first (the second's slot is the next picture's); 2: L >= 1502,
-    // only the second (the first's moment has passed). Free-run or unanchored: 0.
-    output reg   [1:0] fa_cls,
 
     output wire        pic_due,               // the waiting picture may be picked up now
     output wire        next_due,              // the timeline has reached the next picture (starvation = late)
@@ -290,9 +279,6 @@ module disp_sched #(
         d_stc_next  <= $signed({1'b0, stc}) - $signed({1'b0, next_pts});
         d_stc_want  <= $signed({1'b0, stc}) - $signed({1'b0, want_pts});
     end
-    always_ff @(posedge clk)
-        fa_cls <= (!sched_en || !anchored || (d_stc_want < 34'sd1126)) ? 2'd0 :
-                  (d_stc_want < 34'sd1502)                             ? 2'd1 : 2'd2;
     wire signed [33:0] half_s     = $signed({18'd0, half_scan});
     wire signed [33:0] fwd_max_s  = FWD_MAX_TICKS;          // pre-sized parameters (no runtime casts)
     wire signed [33:0] late_max_s = LATE_MAX_TICKS;
@@ -429,7 +415,7 @@ module disp_sched #(
         end else if (pickup) begin
             if (sched_en && anchored && next_valid && !anchor_now
                 && (d_stc_want > LATE_DROP_S)) begin
-                if (cool == 4'd0) begin catchup_late <= 1'b1; cool <= drop_fast ? 4'd1 : DROP_COOL; end
+                if (cool == 4'd0) begin catchup_late <= 1'b1; cool <= DROP_COOL; end
                 else                    cool <= cool - 4'd1;
             end else cool <= 4'd0;
         end

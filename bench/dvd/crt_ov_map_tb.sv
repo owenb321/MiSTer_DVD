@@ -110,7 +110,7 @@ module crt_ov_map_tb;
 
     crt_ov_map dut (
         .clk(clk), .rst_n(rst_n),
-        .letterbox_en(letterbox_en), .crop_en(crop_en), .interlaced(interlaced), .ratio(3'd0),
+        .letterbox_en(letterbox_en), .crop_en(crop_en), .interlaced(interlaced), .ratio(2'd0),
         .v2x_en(v2x_en), .v_src_max(v_src_max),
         .v_bar(P_VBAR), .v_band(P_VBAND),
         .hcrop_x0(P_HX0), .hsrc_w(P_HSRC), .hextra(P_HEXTRA),
@@ -163,7 +163,7 @@ module crt_ov_map_tb;
 
     disp_vscale vscale (
         .clk(clk), .clk_en(1'b1), .rst(rst_n),
-        .vscale_en(1'b1), .vscale_ratio(3'd0), .src_lines(12'd480), .scan_start(1'b0), .scan_half(1'b0), .scan_xpar(1'b0),
+        .vscale_en(1'b1), .vscale_ratio(2'd0), .scan_start(1'b0), .scan_half(1'b0),
         .in_y(vs_in_y), .in_u(8'd0), .in_v(8'd0), .in_osd(8'd0),
         .in_pos(vs_in_pos), .in_wr(vs_in_wr), .in_almost_full(vs_in_af),
         .out_y(vs_out_y), .out_u(), .out_v(), .out_osd(),
@@ -185,8 +185,7 @@ module crt_ov_map_tb;
     // output (a blend of two lines one apart) IS the nearest source tap: j + (weight >= 128).
     // The inverse must name that same line at the matching raster position. No closed form.
     // ------------------------------------------------------------------
-    reg  [2:0]  r10 = 3'd1;
-    reg  [11:0] s10 = 12'd576, vmax10 = 12'd575;   // stream frame height / last frame line (To PAL bounds)
+    reg  [1:0]  r10 = 2'd1;
     reg         i10 = 1'b1;
     reg  [11:0] bar10 = 12'd0, band10 = 12'd480;
     reg         v10_wr = 0;
@@ -198,7 +197,7 @@ module crt_ov_map_tb;
     wire [11:0] q10_y;
     disp_vscale vscale10 (
         .clk(clk), .clk_en(1'b1), .rst(rst_n),
-        .vscale_en(1'b1), .vscale_ratio(r10), .src_lines(s10), .scan_start(1'b0), .scan_half(1'b0), .scan_xpar(1'b0),
+        .vscale_en(1'b1), .vscale_ratio(r10), .scan_start(1'b0), .scan_half(1'b0),
         .in_y(v10_y), .in_u(8'd0), .in_v(8'd0), .in_osd(8'd0),
         .in_pos(v10_pos), .in_wr(v10_wr), .in_almost_full(v10_af),
         .out_y(v10_out_y), .out_u(), .out_v(), .out_osd(),
@@ -207,7 +206,7 @@ module crt_ov_map_tb;
     crt_ov_map dut10 (
         .clk(clk), .rst_n(rst_n),
         .letterbox_en(1'b1), .crop_en(1'b0), .interlaced(i10), .ratio(r10),
-        .v2x_en(1'b0), .v_src_max(vmax10),
+        .v2x_en(1'b0), .v_src_max(12'd575),
         .v_bar(bar10), .v_band(band10),
         .hcrop_x0(P_HX0), .hsrc_w(P_HSRC), .hextra(P_HEXTRA),
         .h_pos_in(h_pos_in), .v_pos_in(v_pos_in),
@@ -940,31 +939,19 @@ module crt_ov_map_tb;
         // T10 — Standard Convert: forward disp_vscale vs inverse crt_ov_map, 5/6 and 5/8
         // ==============================================================
         err0 = errors;
-        r10 = 3'd1; bar10 = 12'd0;  band10 = 12'd480; i10 = 1'b1;
+        r10 = 2'd1; bar10 = 12'd0;  band10 = 12'd480; i10 = 1'b1;
         t10_scan(ROW_0_COL_0, 120, 0); t10_check("5/6 top",    0, 0, 100);
         t10_scan(ROW_1_COL_0, 120, 0); t10_check("5/6 bottom", 1, 0, 100);
         i10 = 1'b0;
         t10_scan(ROW_0_COL_0, 240, 1); t10_check("5/6 frame",  0, 1, 200);
-        r10 = 3'd2; bar10 = 12'd60; band10 = 12'd360; i10 = 1'b1;
+        r10 = 2'd2; bar10 = 12'd60; band10 = 12'd360; i10 = 1'b1;
         t10_scan(ROW_0_COL_0, 160, 0); t10_check("5/8 top",    0, 0, 100);
         t10_scan(ROW_1_COL_0, 160, 0); t10_check("5/8 bottom", 1, 0, 100);
         i10 = 1'b0;
         t10_scan(ROW_0_COL_0, 240, 1); t10_check("5/8 frame",  0, 1, 150);
-        r10 = 3'd0; bar10 = 12'd60; band10 = 12'd360; i10 = 1'b1;
+        r10 = 2'd0; bar10 = 12'd60; band10 = 12'd360; i10 = 1'b1;
         t10_scan(ROW_0_COL_0, 120, 0); t10_check("3/4 top",    0, 0, 90);
         t10_scan(ROW_1_COL_0, 120, 0); t10_check("3/4 bottom", 1, 0, 90);
-        // To PAL (2026-11-09): 6/5 UP on whole scans (the replay lines, the bottom field's clamp to
-        // line 0 and the tail on the last line all have to agree with the inverse), then 9/10.
-        r10 = 3'd3; bar10 = 12'd0; band10 = 12'd576; i10 = 1'b1; s10 = 12'd240; vmax10 = 12'd239;
-        t10_scan(ROW_0_COL_0, 120, 0); t10_check("6/5 top",    0, 0, 144);
-        t10_scan(ROW_1_COL_0, 120, 0); t10_check("6/5 bottom", 1, 0, 144);
-        i10 = 1'b0; s10 = 12'd200; vmax10 = 12'd199;
-        t10_scan(ROW_0_COL_0, 200, 1); t10_check("6/5 frame",  0, 1, 240);
-        r10 = 3'd4; bar10 = 12'd72; band10 = 12'd432; i10 = 1'b1; s10 = 12'd576; vmax10 = 12'd575;
-        t10_scan(ROW_0_COL_0, 120, 0); t10_check("9/10 top",    0, 0, 108);
-        t10_scan(ROW_1_COL_0, 120, 0); t10_check("9/10 bottom", 1, 0, 108);
-        i10 = 1'b0;
-        t10_scan(ROW_0_COL_0, 240, 1); t10_check("9/10 frame",  0, 1, 216);
         $display("T10 conversion ratios forward/inverse co-sim: %s", (errors != err0) ? "FAIL" : "PASS");
 
         if (errors) begin $display("crt_ov_map_tb: FAIL (%0d errors)", errors); $fatal(1); end
@@ -973,8 +960,8 @@ module crt_ov_map_tb;
     end
 
     initial begin
-        #16_000_000;
-        $display("crt_ov_map_tb: TIMEOUT"); $fatal(1);
+        #8_000_000;
+        $display("crt_ov_map_tb: TIMEOUT"); $finish;
     end
 
 endmodule

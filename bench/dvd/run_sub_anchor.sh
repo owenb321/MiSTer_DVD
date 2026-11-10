@@ -46,10 +46,6 @@ if [ "${1:-}" = "--red" ]; then
     mutant "R2 floor, not ceil, even" "(raw + 14'sd1) & ~14'sd1;" "raw & ~14'sd1;" screen place
     mutant "R3 odd offsets allowed"  "else                                     off <= evn[11:0];" "else                                     off <= raw[11:0];" even
     mutant "R4 5/8 bar forgotten"    "wire [11:0] top8    = 12'd60 + p8[14:3];" "wire [11:0] top8    = p8[14:3];" place
-    mutant "R5 offset left on at 0"  "else if (ratio == 3'd0 || ratio > 3'd4)  off <= 12'sd0;" "else if (1'b0) off <= 12'sd0;" none
-    # To PAL (2026-11-09): the 9/10 bar, the 576-line bottom bound, and 6/5 read as 5/6
-    mutant "R6 9/10 bar forgotten"   "wire [11:0] top910  = 12'd72 + p910[27:16];" "wire [11:0] top910  = p910[27:16];" place
-    mutant "R7 To PAL bound at 479"  "(ratio[2] | (ratio == 3'd3) ? 14'sd575 : 14'sd479)" "14'sd479" place
-    mutant "R8 6/5 placed as 5/6"    "(ratio == 3'd3) ? top65 :" "(ratio == 3'd3) ? top6 :" place
+    mutant "R5 offset left on at 0"  "else if (ratio != 2'd1 && ratio != 2'd2) off <= 12'sd0;" "else if (1'b0) off <= 12'sd0;" none
 fi
 if [ $fail = 0 ]; then echo "PASS run_sub_anchor"; else echo "FAIL run_sub_anchor"; exit 1; fi

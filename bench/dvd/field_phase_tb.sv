@@ -67,17 +67,6 @@
  * +stdcad=1 (progressive pictures), +stdcad=3 (progressive_frame=0: every picture is film) and
  * +stdcad=4 (progressive_sequence=1, as the Big Buck Bunny PAL DVD is coded) are the arms; +stdcad=2 (cadence off, progressive pictures) is the control whose gaps must
  * all be 2.
- * +stdcad=5 (2026-11-09, To PAL): std_cad = 2'b11, 2:2 on an NTSC soft-telecine stream (rff and
- * tff both toggling per picture, as the disc flags them). Every gap must be 2: the disc's
- * repeat_first_field must never build a third field.
- * +stdcad=6 (2026-11-09, To PAL field-accurate video): std_cad = 2'b11 on a TRUE-INTERLACED
- * stream (progressive_frame = 0, tff = 1). fa_cls is driven by a model of disp_sched's lateness
- * walk (L += fields*1877 - 3003 per pickup, classes at 1126 / 1502), which steps both, both,
- * second only, both, first only. Judged from the DATA again:
- *   E  the source-line parity of consecutive fields follows T B T B B T B T (at some phase):
- *      the newest field each time, so a parity repeats where a field is skipped;
- *   F  ~1.6 fields a pickup (37.5 pickups in 60 fields);
- *   X  as many scans flagged scan_xpar as fields whose source parity differs from their slot.
  *
  * ★ SCENARIO [6] IS THE ONE THAT FOUND THE HW DEFECT, and it is the mundane one: it
  * STARVES the pixel queue. Every scenario written from the field reports (seeks, cold
@@ -151,22 +140,9 @@ module field_phase_tb;
   reg        top_field_first = 1;
   reg        repeat_first_field = 0;
   reg        film_mode = 0;                  // [5]: tff toggles per consumed picture
-  reg  [1:0] std_cad_r = 0;                  // +stdcad: Standard Convert's synthetic 3:2 ([1]: 2:2, To PAL)
-  reg        rff_toggle = 0;                 // +stdcad=5: soft telecine's rff, flipping per picture
-  reg  [1:0] fa_cls_r = 2'd0;                // +stdcad=6: the lateness class, from the model below
-  wire       fa_xpar;
-  integer    fa_L = 0, fa_model = 0, fa_xp_n = 0, fa_xp_count = 0;
-  always @(posedge clk) if (rst && fa_model && output_frame_rd) begin
-    fa_L = fa_L + ((fa_cls_r == 2'd0) ? 2 : 1) * 1877 - 3003;
-    fa_cls_r <= (fa_L < 1126) ? 2'd0 : (fa_L < 1502) ? 2'd1 : 2'd2;
-  end
-  always @(posedge clk) if (rst && fa_xp_count && resample.scan_start) begin
-    if (fa_xpar) fa_xp_n = fa_xp_n + 1;
-  end
+  reg        std_cad_r = 0;                  // +stdcad: Standard Convert's synthetic 3:2
   always @(posedge clk)
     if (rst && film_mode && output_frame_rd) top_field_first <= ~top_field_first;
-  always @(posedge clk)
-    if (rst && rff_toggle && output_frame_rd) repeat_first_field <= ~repeat_first_field;
 
   // ---- resample <-> framestore_reader ----
   wire        disp_wr_addr_full, disp_wr_addr_almost_full;
@@ -231,7 +207,7 @@ module field_phase_tb;
 `ifndef NO_PARITY_FIX
     .raster_par_err(par_err_sync),
 `endif
-    .vscale_mode(2'd0), .hcrop_en(1'b0), .still_en(1'b0), .blend_en(1'b0), .bob_en(1'b0), .std_cad(std_cad_r), .fa_cls(fa_cls_r), .scan_xpar(fa_xpar), .sched_due(1'b1), .sched_next_due(1'b1)
+    .vscale_mode(2'd0), .hcrop_en(1'b0), .still_en(1'b0), .blend_en(1'b0), .bob_en(1'b0), .std_cad(std_cad_r), .sched_due(1'b1), .sched_next_due(1'b1)
   );
 
   // framestore_reader + full-rate behavioural memory, LINE-STAMPED.
@@ -636,48 +612,14 @@ module field_phase_tb;
       integer f, i0, prev_pick, gap, last_gap, n_gaps, bad_c, bad_a, bad_d, linepar;
       progressive_frame = (sc_mode != 3);
       progressive_sequence = (sc_mode == 4);
-      std_cad_r         = (sc_mode == 2) ? 2'b00 : (sc_mode >= 5) ? 2'b11 : 2'b01;
-      if (sc_mode == 6) begin progressive_frame = 0; fa_model = 1; end
-      if (sc_mode == 5) fa_cls_r = 2'd2;               // film must ignore the field-accurate class
-      top_field_first = 1; repeat_first_field = (sc_mode == 5);
-      film_mode = (sc_mode == 5); rff_toggle = (sc_mode == 5);
+      std_cad_r         = (sc_mode != 2);
+      top_field_first = 1; repeat_first_field = 0;
       repeat (2) @(negedge v_sync);
       repeat (phase) @(negedge v_sync);
       output_frame_valid = 1;
       wait_flds(30);                                 // settle; both stamps are seen here
       i0 = fld_n;
-      fa_xp_n = 0; fa_xp_count = 1;
       wait_flds(60);
-      fa_xp_count = 0;
-      if (sc_mode == 6) begin : fa_check
-        integer o, ok_o, npick, nmis, bad_e;
-        reg [7:0] pat;                               // T B T B B T B T, bit = bottom
-        pat = 8'b0_1_0_1_1_0_1_0;                    // index 0 = LSB
-        ok_o = -1;
-        for (o = 0; o < 8; o = o + 1) begin
-          bad_e = 0;
-          for (f = i0; f < i0 + 60; f = f + 1)
-            if (((rec_code[f] - base_code) & 1) != pat[(f - i0 + o) % 8]) bad_e = bad_e + 1;
-          if (bad_e == 0) ok_o = o;
-        end
-        npick = 0; nmis = 0;
-        for (f = i0; f < i0 + 60; f = f + 1) begin
-          npick = npick + rec_pick[f];
-          if ((((rec_code[f] - base_code) & 1) != 0) != rec_vpar[f]) nmis = nmis + 1;
-          if (dbg) $display("    f%0d line-par %0d raster-par %0d picks %0d", f, (rec_code[f] - base_code) & 1, rec_vpar[f], rec_pick[f]);
-        end
-        $display("[13-stdcad=6 +phase=%0d] read phase %0d, %0d pickups in 60 fields, %0d off-slot fields, %0d xpar scans",
-                 phase, ok_o, npick, nmis, fa_xp_n);
-        if (peak_code != base_code + 8'd1) $fatal(1, "==== BENCH BROKEN (+stdcad=6): stamps %0d/%0d ====", base_code, peak_code);
-        if (nmis == 0) $fatal(1, "[13-stdcad=6] SCENARIO VACUOUS: no field left its slot's parity");
-        if (ok_o < 0) $display("FAIL [E] the reads do not follow T B T B B T B T");
-        if (npick < 36 || npick > 39) $display("FAIL [F] %0d pickups in 60 fields (want ~37.5)", npick);
-        if (fa_xp_n < nmis - 1 || fa_xp_n > nmis + 1) $display("FAIL [X] %0d xpar scans for %0d off-slot fields", fa_xp_n, nmis);
-        if (ok_o < 0 || npick < 36 || npick > 39 || fa_xp_n < nmis - 1 || fa_xp_n > nmis + 1)
-          $fatal(1, "==== FAIL [13-stdcad=6] ====");
-        $display("==== PASS [13-stdcad=6 +phase=%0d] ====", phase);
-        $finish;
-      end
       bad_c = 0; bad_a = 0; bad_d = 0; prev_pick = -1; last_gap = 0; n_gaps = 0;
       for (f = i0; f < i0 + 60; f = f + 1) begin
         linepar = (rec_code[f] - base_code) & 1;
@@ -687,7 +629,7 @@ module field_phase_tb;
         if (rec_pick[f] != 0) begin
           if (prev_pick >= 0) begin
             gap = f - prev_pick; n_gaps = n_gaps + 1;
-            if (sc_mode != 2 && sc_mode != 5) begin
+            if (sc_mode != 2) begin
               if (gap != 2 && gap != 3) bad_d = bad_d + 1;
               else if (last_gap != 0 && gap == last_gap) bad_d = bad_d + 1;   // must alternate
             end else if (gap != 2) bad_d = bad_d + 1;

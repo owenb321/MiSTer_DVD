@@ -38,7 +38,6 @@ module resample(
   output_pts, output_pts_valid, output_pts_2nd,     // DVD-FORK (PTS association): the picture's PTS tag (through to addrgen)
   pickup_tick,                                      // DVD-FORK (PTS scheduling): one pulse per pickup, to disp_sched
   sched_due, sched_next_due,                        // DVD-FORK (PTS scheduling): from disp_sched
-  fa_cls, scan_xpar,                                // DVD-FORK (Standard Convert To PAL): field-accurate video, see dvd/resample_addrgen.v
   disp_wr_addr_full, disp_wr_addr_almost_full, disp_wr_addr_en, disp_wr_addr_ack, disp_wr_addr, disp_rd_dta_empty, disp_rd_dta_en, disp_rd_dta_valid, disp_rd_dta,
   pixel_wr_almost_full, interlaced, deinterlace, persistence, repeat_frame,
   y, u, v, osd_out, position_out, pixel_wr_en,
@@ -73,8 +72,6 @@ module resample(
   input             output_pts_valid;
   input             output_pts_2nd;
   input             sched_due;        // DVD-FORK (PTS scheduling): the waiting picture is due
-  input        [1:0]fa_cls;           // DVD-FORK (Standard Convert To PAL): disp_sched's field choice
-  output            scan_xpar;        // DVD-FORK (Standard Convert To PAL): the scan reads the other field
   input             sched_next_due;   // DVD-FORK (PTS scheduling): the timeline has passed the next picture
   input             top_field_first;
   input             repeat_first_field;
@@ -129,7 +126,7 @@ module resample(
   input              blend_en;                    // DVD-FORK (field blend): the feature is on
   output             scan_blend;                  // DVD-FORK (field blend): that scan is a filtered scan (H+1 lines), blend OR bob
   input              bob_en;                      // DVD-FORK (progressive bob): the feature is on
-  input         [1:0]std_cad;                     // DVD-FORK (Standard Convert): [0] synthetic cadence on the field raster, [1] 2:2 (To PAL) not 3:2
+  input              std_cad;                     // DVD-FORK (Standard Convert): synthetic 3:2 on the field raster
   output             scan_bob;                    // DVD-FORK (progressive bob): that scan uses the bob kernel
   output             scan_bob_bot;                // DVD-FORK (progressive bob): ... and keeps the BOTTOM field
 
@@ -214,7 +211,6 @@ module resample(
     .still_en(still_en),                          // DVD-FORK (pause field still)
     .scan_start(scan_start),
     .scan_half(scan_half),
-    .fa_cls(fa_cls), .scan_xpar(scan_xpar),
     .blend_en(blend_en),                          // DVD-FORK (field blend)
     .scan_blend(scan_blend),
     .bob_en(bob_en),                              // DVD-FORK (progressive bob)

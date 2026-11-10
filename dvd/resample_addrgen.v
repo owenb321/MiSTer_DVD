@@ -52,8 +52,7 @@ module resample_addrgen (
   still_en, scan_start, scan_half,                 // DVD-FORK (pause field still): enable + per-scan sideband to disp_vscale
   blend_en, scan_blend,                            // DVD-FORK (field blend): enable + per-scan sideband to field_blend
   bob_en, scan_bob, scan_bob_bot,                  // DVD-FORK (progressive bob): enable + per-scan kernel select
-  std_cad,                                         // DVD-FORK (Standard Convert): synthetic 3:2 on the field raster
-  fa_cls, scan_xpar                                // DVD-FORK (Standard Convert To PAL): field-accurate video
+  std_cad                                          // DVD-FORK (Standard Convert): synthetic 3:2 on the field raster
   );
 
   input              clk;                      // clock
@@ -273,22 +272,6 @@ module resample_addrgen (
   output             scan_start;
   output             scan_half;
 
-  /* DVD-FORK (Standard Convert To PAL, FIELD-ACCURATE VIDEO -- docs/standard_convert.md "Phase 4b",
-   * the maintainer's choice 2026-11-09). True NTSC video sped up is 62.5 fields/s on a 50-field
-   * raster. Instead of dropping one PICTURE in five (two fields, a 32 ms jump), each raster field
-   * shows the NEWEST source field: one field in five is skipped (a 16 ms jump). Per picture that
-   * is both fields, the first only, or the second only, chosen from the picture's lateness at
-   * pickup (fa_cls, from disp_sched -- see its port). A field skip leaves the next source field
-   * on the other raster parity, so a scan may READ one parity into the other's SLOT: xp_* marks
-   * it, the read start and the field's last-line test follow the read parity, and scan_xpar tells
-   * disp_vscale to resample that field at its true half-line position (its 6/5 or 9/10 blend
-   * already softens every field equally, so shifted fields are no softer than native ones).
-   * Applies only under std_cad[1] (To PAL) to true-interlaced pictures (progressive_frame = 0;
-   * NTSC soft telecine can only flag rff on progressive frames, so film is never taken here).
-   * The slot TAG is untouched: disp_y_sat, the mixer and the parity corrector see slots. */
-  input         [1:0]fa_cls;
-  output             scan_xpar;
-
   /* DVD-FORK (FIELD BLEND -- docs/field_blend.md). On the progressive raster a
    * true-interlaced picture is woven, and its two fields are two instants, so motion
    * combs. dvd/field_blend.sv filters every line of such a picture with a fixed
@@ -331,14 +314,8 @@ module resample_addrgen (
    * back on time. progressive_frame=0 pictures get the same cadence (by user decision: the
    * conversion is a manual choice, so every picture is treated as film, and most moving pf=0 PAL
    * windows measured film-like); a true 50i picture's third field repeats its first, a
-   * one-field step back in time on motion, accepted.
-   * [1] (2026-11-09, To PAL, docs/standard_convert.md "Phase 4"): 2:2 instead of 3:2. NTSC
-   * film sped up to 25 pictures/s gets exactly two fields a picture on the 50 Hz raster, so the
-   * disc's repeat_first_field is ignored and no third field is ever built. True 30i (31.25
-   * pictures/s) loses one in five through disp_sched's drops, not here. */
-  input        [1:0] std_cad;
-  /* field-accurate picture (see fa_cls): To PAL, a true-interlaced frame of an interlaced sequence */
-  wire               fa_on;
+   * one-field step back in time on motion, accepted. */
+  input              std_cad;
   output             scan_bob;
   output             scan_bob_bot;
 
@@ -390,8 +367,6 @@ module resample_addrgen (
   reg          [1:0]image_0;
   reg          [1:0]image_1;
   reg          [1:0]image_2;
-  reg               xp_0, xp_1;          // DVD-FORK (Standard Convert To PAL): image_0/1 read the OTHER parity
-  reg               cur_xp;              // ... the scan in progress does
   reg          [1:0]image_3;
   reg          [1:0]image_4;
   reg          [1:0]image_5;
@@ -487,7 +462,7 @@ module resample_addrgen (
   /* per-scan geometry, computed from the INCOMING image (image_0 at STATE_NEXT_IMG) */
   wire              vs_field0   = (image_0 != FRAME);                       // TOP/BOTTOM => field path
   wire       [11:0] vs_H0       = vs_field0 ? vertical_size[11:1] : vertical_size[11:0]; // source lines this scan
-  wire       [11:0] vs_par0     = ((image_0 == BOTTOM) ^ xp_0) ? 12'd1 : 12'd0;   // field parity read (bottom field = odd lines)
+  wire       [11:0] vs_par0     = (image_0 == BOTTOM) ? 12'd1 : 12'd0;      // field parity (bottom field = odd lines)
   wire       [11:0] v_base_comb = vs_field0 ? vs_par0 : 12'd0;             // first source line (parity on the field path)
   wire       [11:0] vs_outlines_comb = sif2x ? {vs_H0[10:0], 1'b0}         // SIF 2x: H*2 (240->480 / field 120->240)
                                              : (((vs_H0 << 1) + vs_H0) >> 2); // letterbox: H*3/4 (480->360 / 240->180)
@@ -505,7 +480,7 @@ module resample_addrgen (
   wire       [11:0] v_src_max    = (vertical_size == 14'd0) ? 12'hfff : (vertical_size[11:0] - 12'd1);
   wire       [11:0] disp_y_scaled_next = (v_src_raw > v_src_max) ? v_src_max : v_src_raw;
 
-  wire              last_y_native = ((disp_y[11:4] == mb_height_minus_one) && (disp_y[3:0] == (((image == TOP) ^ cur_xp) ? 4'd14 : 4'd15)))
+  wire              last_y_native = ((disp_y[11:4] == mb_height_minus_one) && (disp_y[3:0] == ((image == TOP) ? 4'd14 : 4'd15)))
                                  || ((vertical_size != 14'd0) && (disp_y >= (vertical_size[11:0] - 12'd1)));
   /* DVD-FORK (pause field still): the interpolated slot emits H+1 lines (H = field lines),
    * one of them a duplicate, so disp_vscale's HALF blend (which emits on every line but the
@@ -657,15 +632,10 @@ module resample_addrgen (
    * cad_on such a picture skips the always-TOP-first progressive-sequence branch and takes the
    * progressive_frame one, which ps=1 implies. cad_rff alternates per pickup. */
   reg        cad_rff;
-  wire       cad_on  = std_cad[0] && interlaced;
+  wire       cad_on  = std_cad && interlaced;
   wire       tff_eff = cad_on ? (last_image != TOP) : top_field_first;   // first field = opposite of the last shown
-  wire       rff_eff = cad_on ? (cad_rff & ~std_cad[1]) : repeat_first_field;   // [1]: 2:2, never a third field
+  wire       rff_eff = cad_on ? cad_rff            : repeat_first_field;
   wire       nxt_first_top = (progressive_sequence && ~cad_on) ? 1'b1 : tff_eff; // first field the pending pickup would emit (mirrors the image-build branches)
-  assign     fa_on   = cad_on && std_cad[1] && ~progressive_frame && ~progressive_sequence;
-  /* the fields to read: the picture's first field is its tff field; fa_cls 2 skips it */
-  wire       fa_rd0_bot = (fa_cls == 2'd2) ? top_field_first : ~top_field_first;
-  wire       fa_both    = (fa_cls == 2'd0);
-  wire       fa_xp0     = fa_rd0_bot != ~tff_eff;          // slot 0 is BOTTOM when ~tff_eff
   wire       alt_break = interlaced &&
                          (((last_image == TOP)    &&  nxt_first_top) ||
                           ((last_image == BOTTOM) && ~nxt_first_top));
@@ -885,7 +855,6 @@ module resample_addrgen (
 
   assign scan_start = clk_en && scan_begin;
   assign scan_half  = half_now;
-  assign scan_xpar  = xp_0 & ~half_now;
 
   /* ================= DVD-FORK (FIELD BLEND) -- see the port comment =================
    * blend_want: the weave arm (progressive raster), a true-interlaced DISPLAYED picture
@@ -1193,7 +1162,7 @@ module resample_addrgen (
      * (T_k+T_k+1)/2 and raster line 2k gets (B_k-1+B_k)/2 — each at its true half-line
      * position. oline is the index of the line just finished. */
     else if (clk_en && (state == STATE_NEXT_IMG)) disp_y <= half_now ? (pin_bot_now ? 12'd1 : 12'd0)
-                                                           : vscale_en ? v_base_comb : (((image_0 == BOTTOM) ^ xp_0) ? 12'd1 : 12'd0);
+                                                           : vscale_en ? v_base_comb : ((image_0 == BOTTOM) ? 12'd1 : 12'd0);
     else if (clk_en && (state == STATE_NEXT_MB) && last_mb && half_scan)
       disp_y <= (half_rf ? (oline == 12'd0) : (oline >= (fld_H - 12'd1))) ? disp_y : disp_y + 12'd2;
     /* DVD-FORK (field blend): after the last frame line a BLEND scan steps BACK one line,
@@ -1334,7 +1303,7 @@ module resample_addrgen (
           begin
             image   <= NO_OUTPUT;
             image_0 <= (tff_eff) ? TOP : BOTTOM;                 // Standard Convert: _eff = synthetic 3:2 under std_cad
-            image_1 <= (fa_on && ~fa_both) ? NO_OUTPUT : ((tff_eff) ? BOTTOM : TOP);   // To PAL video: one field when fa_cls says so
+            image_1 <= (tff_eff) ? BOTTOM : TOP;
             image_2 <= (cad_on && rff_eff) ? ((tff_eff) ? TOP : BOTTOM) : NO_OUTPUT;   // a disc's rff is never honoured here
             image_3 <= NO_OUTPUT;
             image_4 <= NO_OUTPUT;
@@ -1398,7 +1367,7 @@ module resample_addrgen (
       end
     else if (clk_en && (state == STATE_NEXT_IMG))
       begin
-        image   <= image_0;   // xp_0/xp_1 shift with it (their own block, below)
+        image   <= image_0;
         image_0 <= image_1;
         image_1 <= image_2;
         image_2 <= image_3;
@@ -1418,19 +1387,6 @@ module resample_addrgen (
         image_5 <= image_5;
         progressive_upscaling <= progressive_upscaling;
       end
-
-  /* xp_0/xp_1 ride the image list (DVD-FORK Standard Convert To PAL). Only an FA pickup sets
-   * them; every other build (parity slip, repeat, a non-FA pickup) is native. The two fields of
-   * a FA picture read opposite parities into opposite slots, so they share one xp. */
-  always @(posedge clk)
-    if (~rst) begin xp_0 <= 1'b0; xp_1 <= 1'b0; cur_xp <= 1'b0; end
-    else if (clk_en && par_slip) begin xp_0 <= 1'b0; xp_1 <= 1'b0; end
-    else if (clk_en && (state == STATE_INIT) && pickup_go) begin
-      xp_0 <= fa_on & fa_xp0;
-      xp_1 <= fa_on & fa_xp0;
-    end
-    else if (clk_en && (state == STATE_REPEAT) && (next == STATE_NEXT_IMG)) begin xp_0 <= 1'b0; xp_1 <= 1'b0; end
-    else if (clk_en && (state == STATE_NEXT_IMG)) begin cur_xp <= xp_0; xp_0 <= xp_1; xp_1 <= 1'b0; end
 
   always @(posedge clk)
     if (~rst) last_image <= NO_OUTPUT;

@@ -111,25 +111,18 @@ if [ "${1:-}" = "--red" ]; then
     wmutant "W8 walk ignores conversion" "|| (conv_s2 != conv_prev)" "" walk_kick
     wmutant "W9 NTSC vsync on 576 lines" "wr_data = conv_prev ? {4'b0, 12'd581, 4'b0, 12'd586}" "wr_data = conv_prev ? {4'b0, 12'd488, 4'b0, 12'd494}" walk_vsync
     wmutant "W10 HUD on the source"     ".pal_mode     (ov_pal)," ".pal_mode     (pal_eff)," overlay
-    wmutant "W13 analog To NTSC only"   "assign std_conv_an   = std_conv_req & (interlaced_eff" "assign std_conv_an   = std_conv_req & pal_det_s2 & (interlaced_eff" analog
+    wmutant "W13 analog NTSC->PAL"      "assign std_conv_an   = std_conv_req & pal_det_s2 & " "assign std_conv_an   = std_conv_req & " analog
     wmutant "W14 analog takes film raster" "| std_conv_film;" "| std_conv_active;" filmp
     wmutant "W15 cross modes on analog" "conv_s1 <= std_conv_film; " "conv_s1 <= std_conv_active; " walk_sync
-    wmutant "W16 ratios swapped"        "(analog_letterbox ? 3'd2 : 3'd1)" "(analog_letterbox ? 3'd1 : 3'd2)" ratio
-    wmutant "W25 To PAL ratios swapped" "(analog_letterbox ? 3'd4 : 3'd3);" "(analog_letterbox ? 3'd3 : 3'd4);" ratio
+    wmutant "W16 ratios swapped"        "analog_letterbox ? 2'd2 : 2'd1;" "analog_letterbox ? 2'd1 : 2'd2;" ratio
     wmutant "W17 analog never scales"   "= analog_letterbox | std_conv_an; " "= analog_letterbox; " vscale_en
     wmutant "W18 inverse only for LB"   ".letterbox_en (disp_vscale_en & sp_map_en)," ".letterbox_en (analog_letterbox & sp_map_en)," map_en
     wmutant "W19 csync on the source"   ".pal    (ov_pal)," ".pal    (pal_eff)," csync
-    wmutant "W20 half_scan PAL value"   "conv_an_dec ? (pal_dec_l ? 16'd720 : 16'd938)" "conv_an_dec ? (pal_dec_l ? 16'd900 : 16'd938)" half_scan
-    wmutant "W26 To PAL half_scan 900"  "conv_an_dec ? (pal_dec_l ? 16'd720 : 16'd938)" "conv_an_dec ? (pal_dec_l ? 16'd720 : 16'd900)" half_scan
-    wmutant "W21 63 per second"         "(std_conv_an ? (pal_eff ? 6'd62 : 6'd47) :" "(std_conv_an ? (pal_eff ? 6'd63 : 6'd47) :" disp_fps
-    wmutant "W27 48 per second"         "(std_conv_an ? (pal_eff ? 6'd62 : 6'd47) :" "(std_conv_an ? (pal_eff ? 6'd62 : 6'd48) :" disp_fps
-    wmutant "W22 menus moved too"       ".ratio ((std_conv_an & ~sp_map_en) ? disp_vscale_ratio : 3'd0)," ".ratio (std_conv_an ? disp_vscale_ratio : 3'd0)," sub_ratio
-    wmutant "W24 no synthetic 3:2"      ".std_cad           ({conv_an_dec & ~pal_dec_l, conv_an_dec})," ".std_cad           ({conv_an_dec & ~pal_dec_l, 1'b0})," cadence
-    wmutant "W28 To PAL gets 3:2"       ".std_cad           ({conv_an_dec & ~pal_dec_l, conv_an_dec})," ".std_cad           ({1'b0, conv_an_dec})," cadence
-    wmutant "W29 drops never faster"    ".sched_drop_fast   (conv_dec)," ".sched_drop_fast   (1'b0)," drop_fast
-    wmutant "W30 overlays never PAL"    "assign ov_pal = pal_eff ^ std_conv_an;" "assign ov_pal = pal_eff & ~std_conv_an;" ov_pal
-    wmutant "W23 5/8 bar is PAL's"      "(disp_vscale_ratio == 3'd2) ? 12'd60  :" "(disp_vscale_ratio == 3'd2) ? 12'd72  :" map_bar
-    wmutant "W31 9/10 band is NTSC's"   "(disp_vscale_ratio == 3'd4) ? 12'd432 :" "(disp_vscale_ratio == 3'd4) ? 12'd360 :" map_band
+    wmutant "W20 half_scan PAL value"   "wire [15:0] half_scan_dec = conv_an_dec ? 16'd720" "wire [15:0] half_scan_dec = conv_an_dec ? 16'd900" half_scan
+    wmutant "W21 63 per second"         ".disp_fps       (std_conv_an ? 6'd62 :" ".disp_fps       (std_conv_an ? 6'd63 :" disp_fps
+    wmutant "W22 menus moved too"       ".ratio ((std_conv_an & ~sp_map_en) ? disp_vscale_ratio : 2'd0)," ".ratio (std_conv_an ? disp_vscale_ratio : 2'd0)," sub_ratio
+    wmutant "W24 no synthetic 3:2"      ".std_cad           (conv_an_dec)," ".std_cad           (1'b0)," cadence
+    wmutant "W23 5/8 bar is PAL's"      "(disp_vscale_ratio == 2'd2) ? 12'd60  : pal_eff ? 12'd72" "(disp_vscale_ratio == 2'd2) ? 12'd72  : pal_eff ? 12'd72" map_bar
 fi
 
 if [ $fail = 0 ]; then echo "PASS run_std_rate"; else echo "FAIL run_std_rate"; exit 1; fi
