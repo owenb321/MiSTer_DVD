@@ -259,6 +259,11 @@ lost its `fast`/`mode3` arms; `run_std_rate.sh` R1/R3/R6/R7 retargeted at slow/u
 `.slow (std_conv_active)`, W13 now drops the analog path's `analog_want`, W25 new (an NTSC disc
 must not convert).
 
+Build `DVD_stdconvert6_20261110_2212.rbf` (cc35676, SEED 7): 38,233 ALM / 520 M10K / 87 DSP, so
++216 / +0 / +3 against v0.10.0's 38,017 / 520 / 84; timing PASS, clk_dec 93.27/91.14 MHz, clk_mem
+101.76/103.72 MHz. Taking the fast mode out saved nothing measurable: it is +51 ALM against
+`dev-stdconvert5` (38,182), which is placement noise, since the slug change re-rolls the fit.
+
 ### The CRT half (Phases 4 and 4b)
 
 

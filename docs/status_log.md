@@ -38,7 +38,7 @@ field-accurate 30i (MiB's 30i menu 0.49 drops/s, was 6.23); 576i, colour, OSD an
 on the rig. Removed by the maintainer on 2026-11-10 for its cost (~296 ALM, 3 M10K, 3 DSP; the fit
 left SEED 7): most PAL CRTs accept 60 Hz anyway, and HDMI keeps To PAL. Branch now +188 ALM / +0 M10K
 / +3 DSP vs v0.10.0 at SEED 7. **To PAL on HDMI removed too (same day):** HDMI follows a disc's own
-rate, so it had no user; the option is now `Off / To NTSC` (`O[53]`), `std_rate` unity/slow only. **Refuted:** that raising the drop ceiling fixes the 30i lag. **Refuted:** that `disp_sched` needed a 1440-tick field period.
+rate, so it had no user; the option is now `Off / To NTSC` (`O[53]`), `std_rate` unity/slow only. `dev-stdconvert6` (cc35676): +216 ALM / +0 M10K / +3 DSP vs v0.10.0 at SEED 7, timing PASS (clk_dec 93.27/91.14, clk_mem 101.76/103.72); the removal saves nothing measurable, the +51 vs `dev-stdconvert5` is placement noise from the slug. **Refuted:** that raising the drop ceiling fixes the 30i lag. **Refuted:** that `disp_sched` needed a 1440-tick field period.
 Full account: `standard_convert.md`.
 
 ## Read-ahead: a jump past a full ring's head deadlocked (2026-11-01, found in the v0.10.0 smoke)
