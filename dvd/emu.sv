@@ -717,7 +717,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-stdconvert5"
+`define CORE_VERSION "dev-stdconvert6"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -840,7 +840,7 @@ parameter CONF_STR = {
     // The governor's SHOW_N=2 gives 25 fps from a 50 Hz display. See
     // docs/frame_rate_governor.md / docs/av_sync.md / docs/interlaced_auto.md.
     "P1O[17:16],Video Standard,Auto,NTSC,PAL;",
-    "P1O[54:53],Standard Convert,Off,To NTSC,To PAL;",
+    "P1O[53],Standard Convert,Off,To NTSC;",
     // Flap probe: release a passthrough frame up to N ms EARLY so a marginally
     // not-yet-due frame doesn't cost a whole silence burst on the wire (the STC
     // advances in ~16.7 ms refresh quanta, so an on-the-margin equilibrium
@@ -5225,7 +5225,7 @@ wire       stc_rate_tick;
 std_rate std_rate_i (
     .clk      (clk_sys),
     .rst_n    (reset_n),
-    .mode     (~std_conv_active ? 2'd0 : pal_eff ? 2'd1 : 2'd2),   // PAL disc slows, NTSC disc speeds up
+    .slow     (std_conv_active),       // conversion is PAL->NTSC only: a PAL disc slows by 960/1001
     .nco_fs   (dec_nco_fs),
     .tick     (stc_rate_tick),
     .nco_trim (dec_nco_trim)
@@ -5561,11 +5561,10 @@ always @(*) begin
                     // progressive raster must be told 240/288 directly; vertical_length
                     // is UNCHANGED from the interlaced branch (261/311 = 262/312 lines),
                     // which is exactly what makes this 60.055 / 50.06 Hz.
-                    // Standard Convert: the raster's TOTALS with the SOURCE's active lines,
-                    // which are the other standard's. Both rates stay exact (1250 x 864 = 25 Hz,
-                    // 1287 x 875 = 24000/1001 Hz) and ascal scales the active window.
-                    wr_data = conv_prev ? (pal_prev ? {4'b0, 12'd480, 4'b0, 12'd1249}
-                                                    : {4'b0, 12'd576, 4'b0, 12'd1286})
+                    // Standard Convert: the NTSC film raster's TOTALS with the PAL source's 576
+                    // active lines. The rate stays exact (1287 x 875 = 24000/1001 Hz) and ascal
+                    // scales the active window. (To PAL's 480-on-1250 arm was removed 2026-11-10.)
+                    wr_data = conv_prev ? {4'b0, 12'd576, 4'b0, 12'd1286}
                             : (pal_prev && filmp_prev) ? {4'b0, 12'd576, 4'b0, 12'd1249}  // PAL 25p: vtotal 1250 => 25.000 Hz
                             : (pal_prev && p240_prev)   ? {4'b0, 12'd288, 4'b0, 12'd311}   // PAL 288p: 312 lines => ~50.06 Hz
                             : (pal_prev && il_prev)     ? {4'b0, 12'd576, 4'b0, 12'd311}   // PAL 576i: 312 lines/field => ~50.06 Hz
@@ -5979,22 +5978,23 @@ assign p240_eff = interlaced_eff & sif_det_s2;
 // ★ pal_eff IS THE SOURCE'S STANDARD WHILE CONVERTING, which is what every consumer but the
 // modeline wants: active lines, overlay geometry, half_scan, disp_fps (so cell_secs stays in
 // authored seconds) and the film verdict all follow the picture. Only pal_out inverts it.
-// Standard Convert (O[54:53]: 0 Off, 1 To NTSC, 2 To PAL) therefore reads the detection
+// Standard Convert (O[53]: 0 Off, 1 To NTSC; PAL->NTSC only since 2026-11-10, when To PAL was
+// removed: HDMI follows a disc's own rate, and the CRT path cost ~296 ALM) reads the detection
 // directly, past the force row. It acts only when:
 //   pal_val_s2       this file has a verdict: not the idle screen, not the last disc's
+//   pal_det_s2       the disc is PAL (an NTSC disc is already the target)
 //   ~sif_det_s2      full-height video; SIF has its own raster and stays at true speed
 //   ~cdda_mode_w     CD-DA/WAV has no picture, and its audio must keep its true rate
-//   ~interlaced_eff, ~analog_want   the film raster is on the scaler path only, as Film 24p's
-//                    Auto (no analog display holds it). Direct analog is a later phase.
+// interlaced_eff / analog_want then pick the flavour: the film raster only where no analog
+// display holds it (as Film 24p's Auto), else the analog path.
 // Every input is debounced or human-speed; none depends on this, so it cannot self-feed.
-wire [1:0] std_conv_sel = status[54:53];
-assign std_conv_wait = (std_conv_sel != 2'd0) & ~pal_val_s2;
-// Two flavours (docs/standard_convert.md). The analog path is PAL->NTSC only: NTSC->PAL on the
-// analog pins needs a 6/5 upscale disp_vscale can't do, so To PAL on such a rig plays native.
-wire   std_conv_req  = pal_val_s2 & ~sif_det_s2 & ~cdda_mode_w
-                     & (pal_det_s2 ? (std_conv_sel == 2'd1) : (std_conv_sel == 2'd2));
+wire       std_conv_on = status[53];
+assign std_conv_wait = std_conv_on & ~pal_val_s2;
+// Two flavours (docs/standard_convert.md): the scaler path (film raster, ascal scales) and the
+// analog path (plain NTSC raster, disp_vscale 5/6 or 5/8). Both act on a PAL disc only.
+wire   std_conv_req  = pal_val_s2 & pal_det_s2 & ~sif_det_s2 & ~cdda_mode_w & std_conv_on;
 assign std_conv_film = std_conv_req & ~interlaced_eff & ~analog_want;
-assign std_conv_an   = std_conv_req & pal_det_s2 & (interlaced_eff | analog_want);
+assign std_conv_an   = std_conv_req & (interlaced_eff | analog_want);
 assign std_conv_active = std_conv_film | std_conv_an;
 // Overlays drawn on the raster after the scaler (HUD, seek bar, idle logo, the active window,
 // line-21 captions, composite sync) follow the raster. On the scaler path the raster's active

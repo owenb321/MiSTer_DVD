@@ -1,11 +1,12 @@
 # Standard conversion by speed change
 
-**Status:** 🔧 on `feature/std-convert`, not merged. Built: clock and audio, the scaler path (HDMI,
-`vga_scaler`) in both directions, and PAL→NTSC on direct analog (Phase 3), all measured on the rig.
-**NTSC→PAL on direct analog (Phases 4 and 4b) was built, measured and then REMOVED on 2026-11-10**
-(maintainer's call, see "Why Phase 4 was removed" below); its sections stay as the record. ⏳ By eye
-on a CRT, save state, a by-ear check, `hil_suite` with conversion Off.
-**Files:** `dvd/std_rate.sv`, `dvd/emu.sv`, `dvd/pal_detect.sv` (`valid`), `dvd/dvd_audio_decode.sv`
+**Status:** 🔧 on `feature/std-convert`, not merged. **PAL→NTSC only** (`Standard Convert = Off /
+To NTSC`, `O[53]`): clock and audio, the scaler path (HDMI, `vga_scaler`) and direct analog (Phase 3),
+all measured on the rig. **NTSC→PAL was removed entirely on 2026-11-10** (maintainer's call): first
+its CRT path (Phases 4 and 4b), then the HDMI one too. See "Why To PAL was removed" below; the To PAL
+sections stay as the record. ⏳ By eye on a CRT, save state, a by-ear check, `hil_suite` with
+conversion Off.
+**Files:** `dvd/std_rate.sv` (unity and slow only), `dvd/emu.sv`, `dvd/pal_detect.sv` (`valid`), `dvd/dvd_audio_decode.sv`
 (`nco_fs_out`), `dvd/disp_vscale.sv`, `dvd/crt_ov_map.sv`, `dvd/sub_anchor.sv`, `dvd/resample_addrgen.v`.
 **Gates:** `bench/dvd/run_std_rate.sh --red`, `run_vscale_frame.sh --red`, `run_sub_anchor.sh --red`,
 `run_field_phase.sh --red`, `run_p240.sh --red`, `tools/check_std_convert_wiring.py`.
@@ -239,7 +240,28 @@ exact. The horizontal path (`disp_hstretch` Crop, SIF fill) is untouched.
   3:2. Progressive analog (480p) always got 3:2 from the due test, since 23.976 pictures meet
   59.94 frames at 2.5 refreshes each.
 
-## Why Phase 4 was removed (maintainer, 2026-11-10)
+## Why To PAL was removed (maintainer, 2026-11-10)
+
+**The HDMI half, the same day, after the CRT half below.** On HDMI, To PAL had no user: with
+`vsync_adjust` MiSTer's output follows the disc's own 59.94 Hz, and essentially every HDMI display
+accepts it, so a speed change (4 % faster, pitch up, passthrough off) buys nothing; a 50 Hz-only
+display is the only case and is not a real one. The same argument covers most of To NTSC on HDMI,
+but there it is the CRT path's machinery on the other output and costs nothing extra, so it stays.
+The only conversion with a real audience is **PAL→NTSC for a display that can't show 50 Hz**,
+most often an NTSC-region CRT.
+
+What went: `std_rate`'s fast mode (1001/960) and its four NCO trims (`mode` is now one bit, `slow`);
+the To PAL decision term (`std_conv_req` now requires `pal_det_s2`); the 480-active-on-1250 cross
+modeline; the OSD's third value. The option shrank from `O[54:53]` to `O[53]`, freeing `O[54]`; no
+config-version bump, since the two-bit layout never shipped (a tester's saved To PAL, `0b10`, reads
+as Off). The 25 Hz PAL film raster is untouched: PAL `Film 24p Out` uses it. Gates: `std_rate_tb`
+lost its `fast`/`mode3` arms; `run_std_rate.sh` R1/R3/R6/R7 retargeted at slow/unity, W7 now pins
+`.slow (std_conv_active)`, W13 now drops the analog path's `analog_want`, W25 new (an NTSC disc
+must not convert).
+
+### The CRT half (Phases 4 and 4b)
+
+
 
 Phases 4 and 4b (below) worked on the rig, but cost about **296 ALMs, 3 M10K and 3 DSP** on top of
 the rest of the feature, and pushed the fit off SEED 7 (a five-seed sweep before SEED 8 passed). The

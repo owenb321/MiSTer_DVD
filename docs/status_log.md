@@ -22,7 +22,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Standard Convert: PAL ↔ NTSC by speed change (2026-11-02, branch `feature/std-convert`)
 
-**State:** clock, audio and the scaler path in both directions, not merged. Measured on the rig against
+**State:** PAL→NTSC only (To PAL removed 2026-11-10), not merged. Measured on the rig against
 v0.10.0: raster, audio and STC all land on the exact ratios, with A/V stable over 120 s and 0 lates.
 **Found on the way:** passthrough rising in the gap after a mount made audio up to 210 ms late (fixed,
 `std_conv_wait`), and a separate fault, also in v0.10.0, where audio stays dead until a reboot after
@@ -37,7 +37,8 @@ video "look and sound good" converted. **Phase 4/4b, To PAL on a CRT (2026-11-09
 field-accurate 30i (MiB's 30i menu 0.49 drops/s, was 6.23); 576i, colour, OSD and 0 lates on film
 on the rig. Removed by the maintainer on 2026-11-10 for its cost (~296 ALM, 3 M10K, 3 DSP; the fit
 left SEED 7): most PAL CRTs accept 60 Hz anyway, and HDMI keeps To PAL. Branch now +188 ALM / +0 M10K
-/ +3 DSP vs v0.10.0 at SEED 7. **Refuted:** that raising the drop ceiling fixes the 30i lag. **Refuted:** that `disp_sched` needed a 1440-tick field period.
+/ +3 DSP vs v0.10.0 at SEED 7. **To PAL on HDMI removed too (same day):** HDMI follows a disc's own
+rate, so it had no user; the option is now `Off / To NTSC` (`O[53]`), `std_rate` unity/slow only. **Refuted:** that raising the drop ceiling fixes the 30i lag. **Refuted:** that `disp_sched` needed a 1440-tick field period.
 Full account: `standard_convert.md`.
 
 ## Read-ahead: a jump past a full ring's head deadlocked (2026-11-01, found in the v0.10.0 smoke)

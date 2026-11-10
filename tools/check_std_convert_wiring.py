@@ -68,8 +68,8 @@ def main():
             fails.append(f'{name}: {why}\n      {inst}.{pname} is {got!r}, want {tight(want)!r}')
 
     # The tick: scaled for the STC, true for nav_trace.
-    port('rate_mode', 'std_rate_i', 'mode', "~std_conv_active ? 2'd0 : pal_eff ? 2'd1 : 2'd2",
-         'a PAL source must slow and an NTSC source must speed up, and only while converting')
+    port('rate_mode', 'std_rate_i', 'slow', 'std_conv_active',
+         'the PAL source must slow by 960/1001, and only while converting')
     port('rate_tick', 'std_rate_i', 'tick', 'stc_rate_tick', 'the rate tick must leave the module')
     has('stc_tog', "if (stc_rate_tick) stc_tog <= ~stc_tog;", 'the STC must run from the rate tick')
     has('stc_cdc', "stc_t1 <= stc_tog;", 'the STC toggle must still cross into clk_dec')
@@ -87,17 +87,16 @@ def main():
         fails.append('trim_in: dvd_audio_decode must take dec_nco_trim and report dec_nco_fs')
 
     # Who is the source and who is the raster.
-    has('active', "wire std_conv_req = pal_val_s2 & ~sif_det_s2 & ~cdda_mode_w"
-                  " & (pal_det_s2 ? (std_conv_sel == 2'd1) : (std_conv_sel == 2'd2));",
-        'every gate on conversion, and each target acting on the other standard only')
+    has('active', "wire std_conv_req = pal_val_s2 & pal_det_s2 & ~sif_det_s2 & ~cdda_mode_w & std_conv_on;",
+        'every gate on conversion; To NTSC acts on a PAL disc only')
     has('film', "assign std_conv_film = std_conv_req & ~interlaced_eff & ~analog_want;",
         'the scaler path: only where no analog display carries the raster')
-    has('analog', "assign std_conv_an = std_conv_req & pal_det_s2 & (interlaced_eff | analog_want);",
-        'the analog path: PAL->NTSC only (NTSC->PAL needs an upscale disp_vscale cannot do)')
+    has('analog', "assign std_conv_an = std_conv_req & (interlaced_eff | analog_want);",
+        'the analog path: wherever the scaler path is not')
     has('either', "assign std_conv_active = std_conv_film | std_conv_an;", 'both flavours change the rate')
     has('ov_pal', "assign ov_pal = pal_eff & ~std_conv_an;", 'overlays after the scaler follow the raster')
-    has('sel', "wire [1:0] std_conv_sel = status[54:53];", 'the option must be O[54:53]')
-    has('conf', '"P1O[54:53],Standard Convert,Off,To NTSC,To PAL;"', 'the OSD row')
+    has('sel', "wire std_conv_on = status[53];", 'the option must be O[53]')
+    has('conf', '"P1O[53],Standard Convert,Off,To NTSC;"', 'the OSD row')
     has('src_pal', "assign pal_eff = std_conv_active ? pal_det_s2 :",
         'while converting pal_eff is the source, past the force row')
     has('raster', "wire pal_out = pal_eff ^ std_conv_active;", 'only the modeline takes the target standard')
@@ -140,8 +139,8 @@ def main():
     has('walk_kick', "|| (conv_s2 != conv_prev)", 'a conversion change must re-walk the modeline')
     has('walk_latch', "conv_prev <= conv_s2;", 'the walk must apply one consistent mode')
     has('walk_sync', "conv_s1 <= std_conv_film;", 'the cross modes are the scaler path\'s only')
-    has('walk_ver', "wr_data = conv_prev ? (pal_prev ? {4'b0, 12'd480, 4'b0, 12'd1249} : {4'b0, 12'd576, 4'b0, 12'd1286})",
-        'cross modes: the raster totals with the source active lines, checked first')
+    has('walk_ver', "wr_data = conv_prev ? {4'b0, 12'd576, 4'b0, 12'd1286}",
+        'cross mode: the NTSC film raster totals with the PAL source active lines, checked first')
     has('walk_vsync', "wr_data = conv_prev ? {4'b0, 12'd581, 4'b0, 12'd586}",
         'vsync must sit below 576 active lines on the cross modes')
     has('dec_valid', ".valid (pal_valid_dec)", "pal_detect's per-file verdict")
@@ -150,7 +149,7 @@ def main():
     # Audio.
     has('pass', "wire pass_mode = status[6] & ~cdda_mode_w & ~std_conv_active & ~std_conv_wait;",
         'a speed change cannot be passed through, nor may a session start before the verdict')
-    has('pass_wait', "assign std_conv_wait = (std_conv_sel != 2'd0) & ~pal_val_s2;",
+    has('pass_wait', "assign std_conv_wait = std_conv_on & ~pal_val_s2;",
         'passthrough rising in the post-mount gap delays audio by up to 210 ms')
 
     if fails:

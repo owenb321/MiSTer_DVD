@@ -6,12 +6,13 @@
 `timescale 1ns/1ps
 module std_rate_tb;
     reg        clk = 0, rst_n = 0;
-    reg  [1:0] mode = 0, nco_fs = 1;
+    reg        slow = 0;
+    reg  [1:0] nco_fs = 1;
     wire       tick;
     wire signed [21:0] nco_trim;
     integer    fails = 0;
 
-    std_rate dut (.clk(clk), .rst_n(rst_n), .mode(mode), .nco_fs(nco_fs),
+    std_rate dut (.clk(clk), .rst_n(rst_n), .slow(slow), .nco_fs(nco_fs),
                   .tick(tick), .nco_trim(nco_trim));
 
     always #5 clk = ~clk;
@@ -42,16 +43,16 @@ module std_rate_tb;
         end
     endtask
 
-    task setmode(input [1:0] m);
-        begin @(negedge clk); mode = m; @(negedge clk); end
+    task setmode(input m);
+        begin @(negedge clk); slow = m; @(negedge clk); end
     endtask
 
     // The increment the NCO actually adds, against the exact rate for this fs and ratio.
     real exact, eff, ppm, worst;
     integer base;
-    task trimcheck(input [1:0] m, input [1:0] fs, input integer hz, input real ratio);
+    task trimcheck(input m, input [1:0] fs, input integer hz, input real ratio);
         begin
-            mode = m; nco_fs = fs; #1;
+            slow = m; nco_fs = fs; #1;
             if (^nco_trim === 1'bx) fail("trim", "X on nco_trim");
             exact = (hz * 4294967296.0) / 27000000.0;
             base  = $rtoi(exact);                       // dvd_audio_decode's floored nominal
@@ -87,7 +88,7 @@ module std_rate_tb;
         $display("  [unity] 3000000 cycles against the /300 reference");
 
         // [slow] exactly 960 per 300300 clocks, over several whole periods.
-        setmode(2'd1);
+        setmode(1'b1);
         count(300300 * 7);
         if (sawx) fail("slow", "X on tick");
         if (got !== 960 * 7) begin $display("  got %0d", got); fail("slow", "wrong tick count"); end
@@ -96,21 +97,11 @@ module std_rate_tb;
         end
         $display("  [slow] %0d ticks, gaps %0d..%0d", got, gmin, gmax);
 
-        // [fast] exactly 1001 per 288000 clocks.
-        setmode(2'd2);
-        count(288000 * 7);
-        if (sawx) fail("fast", "X on tick");
-        if (got !== 1001 * 7) begin $display("  got %0d", got); fail("fast", "wrong tick count"); end
-        if (gmin < 287 || gmax > 288) begin
-            $display("  gaps %0d..%0d", gmin, gmax); fail("fast", "ticks not evenly spaced");
-        end
-        $display("  [fast] %0d ticks, gaps %0d..%0d", got, gmin, gmax);
-
         // [switch] from a late slow-mode accumulator straight to unity: no burst, and the first
         // tick is a full period away. Without the restart this is ~1000 ticks in ~1000 clocks.
-        setmode(2'd1);
+        setmode(1'b1);
         count(300300 + 311);
-        mode = 2'd0;
+        slow = 1'b0;
         count(299);
         if (got !== 0) begin $display("  got %0d", got); fail("switch", "tick burst after a mode change"); end
         count(3000);
@@ -118,26 +109,15 @@ module std_rate_tb;
         if (gmin !== 300 || gmax !== 300) fail("switch", "unity gaps not 300 after a mode change");
         $display("  [switch] no burst slow->unity");
 
-        // [mode3] the unused encoding is unity, not a stopped clock.
-        setmode(2'd3);
-        count(30000);   // long enough that fast (104) cannot round to unity (100)
-        if (got !== 100) begin $display("  got %0d", got); fail("mode3", "mode 3 is not unity"); end
-        setmode(2'd0);
-
-        // [trim] every rate in both directions; unity and mode 3 are exactly zero.
+        // [trim] every rate; unity is exactly zero.
         worst = 0;
-        trimcheck(2'd1, 2'd0, 44100, 960.0/1001.0);
-        trimcheck(2'd1, 2'd1, 48000, 960.0/1001.0);
-        trimcheck(2'd1, 2'd2, 32000, 960.0/1001.0);
-        trimcheck(2'd1, 2'd3, 96000, 960.0/1001.0);
-        trimcheck(2'd2, 2'd0, 44100, 1001.0/960.0);
-        trimcheck(2'd2, 2'd1, 48000, 1001.0/960.0);
-        trimcheck(2'd2, 2'd2, 32000, 1001.0/960.0);
-        trimcheck(2'd2, 2'd3, 96000, 1001.0/960.0);
+        trimcheck(1'b1, 2'd0, 44100, 960.0/1001.0);
+        trimcheck(1'b1, 2'd1, 48000, 960.0/1001.0);
+        trimcheck(1'b1, 2'd2, 32000, 960.0/1001.0);
+        trimcheck(1'b1, 2'd3, 96000, 960.0/1001.0);
         for (i = 0; i < 4; i = i + 1) begin
             nco_fs = i[1:0];
-            mode = 2'd0; #1; if (nco_trim !== 22'sd0) fail("trim", "unity trim not zero");
-            mode = 2'd3; #1; if (nco_trim !== 22'sd0) fail("trim", "mode 3 trim not zero");
+            slow = 1'b0; #1; if (nco_trim !== 22'sd0) fail("trim", "unity trim not zero");
         end
         $display("  [trim] worst %f ppm", worst);
 

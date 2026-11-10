@@ -2,8 +2,8 @@
 # run_std_rate.sh -- the STC tick and audio NCO trim for standard conversion
 # (dvd/std_rate.sv, docs/standard_convert.md).
 #
-#   GREEN  bench/dvd/std_rate_tb.sv: unity is cycle-identical to clk/300; slow and fast are
-#          exact over whole periods and evenly spaced; a mode change never bursts; every NCO
+#   GREEN  bench/dvd/std_rate_tb.sv: unity is cycle-identical to clk/300; slow is exact over
+#          whole periods and evenly spaced; a mode change never bursts; every NCO
 #          trim achieves its ratio.
 #   RED    (--red) one mutation per claim, each failing exactly its own arm.
 set -u
@@ -62,13 +62,13 @@ run "std_rate_tb" dvd/std_rate.sv pass
 
 if [ "${1:-}" = "--red" ]; then
     echo "== RED"
-    mutant "R1 unity period 301"          "fast ? 19'd288000 : 19'd300;" "fast ? 19'd288000 : 19'd301;" unity switch mode3
+    mutant "R1 unity period 301"          "slow ? 19'd300300 : 19'd300;" "slow ? 19'd300300 : 19'd301;" unity switch
     mutant "R2 slow numerator 961"        "slow ? 19'd960 " "slow ? 19'd961 " slow
-    mutant "R3 fast denominator off by 1" "fast ? 19'd288000" "fast ? 19'd288001" fast
+    mutant "R3 slow denominator off by 1" "slow ? 19'd300300" "slow ? 19'd300301" slow
     mutant "R4 no restart on a mode edge" "acc    <= mode_edge ? 19'd0 : tick" "acc    <= tick" switch
     mutant "R5 slow trim sign flipped"    "nco_trim = -22'sd312742;" "nco_trim =  22'sd312742;" trim
-    mutant "R6 fast 96k digit wrong"      "22'sd652200" "22'sd652300" trim
-    mutant "R7 mode 3 stops the clock"    "wire        fast = (mode == 2'd2);" "wire        fast = (mode >= 2'd2);" mode3 trim
+    mutant "R6 slow 96k digit wrong"      "22'sd625484" "22'sd625584" trim
+    mutant "R7 trim while unity"          "default: nco_trim =  22'sd0;" "default: nco_trim = -22'sd312742;" trim
 fi
 
 # dvd/emu.sv has no bench: tools/check_std_convert_wiring.py reads the seams out of the file.
@@ -105,13 +105,14 @@ if [ "${1:-}" = "--red" ]; then
     wmutant "W4 raster not inverted"    "wire pal_out = pal_eff ^ std_conv_active;" "wire pal_out = pal_eff;" raster
     wmutant "W5 passthrough unguarded"  "status[6] & ~cdda_mode_w & ~std_conv_active & ~std_conv_wait;" "status[6] & ~cdda_mode_w & ~std_conv_wait;" pass
     wmutant "W11 passthrough in the gap" "status[6] & ~cdda_mode_w & ~std_conv_active & ~std_conv_wait;" "status[6] & ~cdda_mode_w & ~std_conv_active;" pass
-    wmutant "W12 wait never asserts"     "assign std_conv_wait = (std_conv_sel != 2'd0) & ~pal_val_s2;" "assign std_conv_wait = 1'b0;" pass_wait
+    wmutant "W12 wait never asserts"     "assign std_conv_wait = std_conv_on & ~pal_val_s2;" "assign std_conv_wait = 1'b0;" pass_wait
     wmutant "W6 acts on a stale verdict" "wire   std_conv_req  = pal_val_s2 & " "wire   std_conv_req  = " active
-    wmutant "W7 both directions swapped" "? 2'd1 : 2'd2),   // PAL disc" "? 2'd2 : 2'd1),   // PAL disc" rate_mode
+    wmutant "W7 rate never slows"        ".slow     (std_conv_active)," ".slow     (1'b0)," rate_mode
+    wmutant "W25 converts an NTSC disc"  "pal_val_s2 & pal_det_s2 & ~sif_det_s2" "pal_val_s2 & ~sif_det_s2" active
     wmutant "W8 walk ignores conversion" "|| (conv_s2 != conv_prev)" "" walk_kick
     wmutant "W9 NTSC vsync on 576 lines" "wr_data = conv_prev ? {4'b0, 12'd581, 4'b0, 12'd586}" "wr_data = conv_prev ? {4'b0, 12'd488, 4'b0, 12'd494}" walk_vsync
     wmutant "W10 HUD on the source"     ".pal_mode     (ov_pal)," ".pal_mode     (pal_eff)," overlay
-    wmutant "W13 analog NTSC->PAL"      "assign std_conv_an   = std_conv_req & pal_det_s2 & " "assign std_conv_an   = std_conv_req & " analog
+    wmutant "W13 analog on 480i only"   "assign std_conv_an   = std_conv_req & (interlaced_eff | analog_want);" "assign std_conv_an   = std_conv_req & interlaced_eff;" analog
     wmutant "W14 analog takes film raster" "| std_conv_film;" "| std_conv_active;" filmp
     wmutant "W15 cross modes on analog" "conv_s1 <= std_conv_film; " "conv_s1 <= std_conv_active; " walk_sync
     wmutant "W16 ratios swapped"        "analog_letterbox ? 2'd2 : 2'd1;" "analog_letterbox ? 2'd1 : 2'd2;" ratio
