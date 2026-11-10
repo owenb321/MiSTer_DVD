@@ -141,7 +141,7 @@ if [ "${1:-}" = "--red" ]; then
     run mut_U1_no_replay U1_no_replay_r4 pass +case=field_r +ratio=4 +lines=216   # downscales never replay
   else fail=1; fi
   # U2: the replay blends the stale incoming pixel instead of buf2's line
-  if mutate U2_replay_b "s/s3_rep ? b_q\[31:24\] : s3_by/s3_by/"; then
+  if mutate U2_replay_b "s/s3_by <= s2_rep ? rd2_data\[31:24\] : s2_by;/s3_by <= s2_by;/"; then
     run mut_U2_replay_b U2_replay_b fail +case=field_r +ratio=3 +lines=288
   else fail=1; fi
   # U3: no bottom-field clamp: the bottom field starts at 0 like the top (a bob on fine detail)

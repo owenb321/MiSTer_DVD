@@ -418,7 +418,7 @@ module disp_vscale (
                                        : {e_rd_bank, e_col[9:0]};
   /* buf2: a copy of the line being received (one bank: a replay only ever wants the newest line) */
   reg  [31:0] buf2 [0:1023];
-  reg  [31:0] rd2_data, b_q;
+  reg  [31:0] rd2_data;
 
   /* ---- 2-tap blend: out = a + f*(b-a)/256, a = buffered prev line, b = incoming ---- */
   /* DVD-FORK FIX (fringe/Fmax, 2026-07-09): a_q re-registers the BRAM read in fabric before
@@ -472,8 +472,6 @@ module disp_vscale (
     if (clk_en) rd_data <= linebuf[bram_rd_addr];
   always @(posedge clk)
     if (clk_en) rd2_data <= buf2[rp_col[9:0]];
-  always @(posedge clk)
-    if (clk_en) b_q <= rd2_data;
 
   /* buffer write: store the incoming pixel into wr_bank at its column, on consume. */
   always @(posedge clk)
@@ -577,14 +575,18 @@ module disp_vscale (
 
       /* -------- stage 2 -> 3: carry the consumed pixel alongside the a_q read register ---- */
       s3_valid <= s2_valid; s3_emit <= s2_emit; s3_plain <= s2_plain; s3_rep <= s2_rep;
-      s3_by <= s2_by; s3_bu <= s2_bu; s3_bv <= s2_bv; s3_bo <= s2_bo;
+      /* a replay's b is buf2's line: rd2_data is valid alongside stage 2 (it is rd_data's twin),
+       * so the choice is made HERE and the blend below sees one register (clk_dec timing,
+       * 2026-11-10: the mux in front of the multiply was the worst path, 85.8 MHz). */
+      s3_by <= s2_rep ? rd2_data[31:24] : s2_by; s3_bu <= s2_rep ? rd2_data[23:16] : s2_bu;
+      s3_bv <= s2_rep ? rd2_data[15:8]  : s2_bv; s3_bo <= s2_rep ? rd2_data[7:0]   : s2_bo;
       s3_f  <= s2_f;  s3_pos <= s2_pos;
 
       /* -------- stage 3: blend src[k] (a_q) with src[k+1] (latched) and emit -------------- */
-      r_y   <= s3_plain ? s3_by : blend8(a_y, s3_rep ? b_q[31:24] : s3_by, s3_f);
-      r_u   <= s3_plain ? s3_bu : blend8(a_u, s3_rep ? b_q[23:16] : s3_bu, s3_f);
-      r_v   <= s3_plain ? s3_bv : blend8(a_v, s3_rep ? b_q[15:8]  : s3_bv, s3_f);
-      r_osd <= s3_plain ? s3_bo : blend8(a_o, s3_rep ? b_q[7:0]   : s3_bo, s3_f);
+      r_y   <= s3_plain ? s3_by : blend8(a_y, s3_by, s3_f);
+      r_u   <= s3_plain ? s3_bu : blend8(a_u, s3_bu, s3_f);
+      r_v   <= s3_plain ? s3_bv : blend8(a_v, s3_bv, s3_f);
+      r_osd <= s3_plain ? s3_bo : blend8(a_o, s3_bo, s3_f);
       r_pos <= s3_pos;
       r_wr  <= s3_valid & s3_emit;
     end
