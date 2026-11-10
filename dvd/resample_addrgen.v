@@ -314,8 +314,12 @@ module resample_addrgen (
    * back on time. progressive_frame=0 pictures get the same cadence (by user decision: the
    * conversion is a manual choice, so every picture is treated as film, and most moving pf=0 PAL
    * windows measured film-like); a true 50i picture's third field repeats its first, a
-   * one-field step back in time on motion, accepted. */
-  input              std_cad;
+   * one-field step back in time on motion, accepted.
+   * [1] (2026-11-09, To PAL, docs/standard_convert.md "Phase 4"): 2:2 instead of 3:2. NTSC
+   * film sped up to 25 pictures/s gets exactly two fields a picture on the 50 Hz raster, so the
+   * disc's repeat_first_field is ignored and no third field is ever built. True 30i (31.25
+   * pictures/s) loses one in five through disp_sched's drops, not here. */
+  input        [1:0] std_cad;
   output             scan_bob;
   output             scan_bob_bot;
 
@@ -632,9 +636,9 @@ module resample_addrgen (
    * cad_on such a picture skips the always-TOP-first progressive-sequence branch and takes the
    * progressive_frame one, which ps=1 implies. cad_rff alternates per pickup. */
   reg        cad_rff;
-  wire       cad_on  = std_cad && interlaced;
+  wire       cad_on  = std_cad[0] && interlaced;
   wire       tff_eff = cad_on ? (last_image != TOP) : top_field_first;   // first field = opposite of the last shown
-  wire       rff_eff = cad_on ? cad_rff            : repeat_first_field;
+  wire       rff_eff = cad_on ? (cad_rff & ~std_cad[1]) : repeat_first_field;   // [1]: 2:2, never a third field
   wire       nxt_first_top = (progressive_sequence && ~cad_on) ? 1'b1 : tff_eff; // first field the pending pickup would emit (mirrors the image-build branches)
   wire       alt_break = interlaced &&
                          (((last_image == TOP)    &&  nxt_first_top) ||

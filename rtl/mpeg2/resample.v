@@ -126,7 +126,7 @@ module resample(
   input              blend_en;                    // DVD-FORK (field blend): the feature is on
   output             scan_blend;                  // DVD-FORK (field blend): that scan is a filtered scan (H+1 lines), blend OR bob
   input              bob_en;                      // DVD-FORK (progressive bob): the feature is on
-  input              std_cad;                     // DVD-FORK (Standard Convert): synthetic 3:2 on the field raster
+  input         [1:0]std_cad;                     // DVD-FORK (Standard Convert): [0] synthetic cadence on the field raster, [1] 2:2 (To PAL) not 3:2
   output             scan_bob;                    // DVD-FORK (progressive bob): that scan uses the bob kernel
   output             scan_bob_bot;                // DVD-FORK (progressive bob): ... and keeps the BOTTOM field
 

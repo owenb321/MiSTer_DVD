@@ -712,8 +712,11 @@ pushing both branches.**
 - [ ] ⏳ Separate bug, in v0.10.0 too: audio dead until a reboot after ~25 core loads in one boot
   (`dts_copied` 0, `eng_frames` 0). Reproduce it by looping core loads and find what survives the
   reload. Details in `docs/standard_convert.md`.
-- Deferred: NTSC→PAL on direct analog (6/5 upscale; 60i needs 1-in-5 drops against B-only drops
-  limited to about 6/s), and inverse telecine for hard-telecined NTSC.
+- [~] NTSC→PAL on direct analog (Phase 4, agreed 2026-11-09): `disp_vscale` 6/5 up and 9/10 (second
+  line buffer), the 576 window, the overlay inverses, 2:2 for every picture, catch-up drops at twice
+  the rate while converting (30i needs 6.25/s). Built and bench-proven. ⏳ Rig: RetroTINK capture
+  (576i, colour, OSD), cadence, lates on 30i; then by eye on a CRT.
+- Deferred: inverse telecine for hard-telecined NTSC.
 
 ### ⏳ 2026-10-01 spec-audit: DVD Demystified 3rd-edition follow-ups (items 1–8 and 10b ✅; the rest re-ranked 2026-10-06, PR #165)
 

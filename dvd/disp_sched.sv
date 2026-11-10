@@ -112,6 +112,10 @@ module disp_sched #(
     input  wire        skip_rff,
 
     input  wire [15:0] half_scan,             // ticks, per raster mode
+    // Standard Convert (docs/standard_convert.md "Phase 4"): one catch-up drop per TWO pickups
+    // instead of four. NTSC 30i sped up to To PAL is 31.25 pictures/s on 25 pickups/s, which needs
+    // 6.25 drops/s: exactly DROP_COOL's ceiling, so the picture rode 60 to 105 ms behind the sound.
+    input  wire        drop_fast,
 
     output wire        pic_due,               // the waiting picture may be picked up now
     output wire        next_due,              // the timeline has reached the next picture (starvation = late)
@@ -415,7 +419,7 @@ module disp_sched #(
         end else if (pickup) begin
             if (sched_en && anchored && next_valid && !anchor_now
                 && (d_stc_want > LATE_DROP_S)) begin
-                if (cool == 4'd0) begin catchup_late <= 1'b1; cool <= DROP_COOL; end
+                if (cool == 4'd0) begin catchup_late <= 1'b1; cool <= drop_fast ? 4'd1 : DROP_COOL; end
                 else                    cool <= cool - 4'd1;
             end else cool <= 4'd0;
         end

@@ -32,7 +32,11 @@ the overlay inverse, 1:1 subtitles moved by `sub_anchor`, and synthetic 3:2 for 
 maintainer's call, 2026-11-09: conversion is manual, so every picture is film; true 50i judders at
 480i), bench-proven. **HW 2026-11-09:** rates exact (59.944 Hz, 23.965 pictures/s, audio 46,033 Hz),
 0 lates, 3:2 measured on an interlaced-flagged PAL film; a `progressive_sequence=1` disc (Big Buck
-Bunny PAL) was still 2-2-2-4, fixed and re-measured 3:2 on the rig. **First look on a CRT (same day): broken** (no colour on Y/C, no OSD, HDMI `290x519i`): `sync_gen` never closed a 480i field's window for a 576-line stream, so DE ran through vsync; fixed in `syncgen.v`, `crt_syncgen_tb` PHASE 8. **Refuted:** that `disp_sched` needed a 1440-tick field period.
+Bunny PAL) was still 2-2-2-4, fixed and re-measured 3:2 on the rig. **First look on a CRT (same day): broken** (no colour on Y/C, no OSD, HDMI `290x519i`): `sync_gen` never closed a 480i field's window for a 576-line stream, so DE ran through vsync; fixed in `syncgen.v`, `crt_syncgen_tb` PHASE 8; the maintainer then saw PAL film and
+video "look and sound good" converted. **Phase 4, To PAL on a CRT (agreed 2026-11-09):** `disp_vscale`
+6/5 up (a second line buffer replays a pair's second line) and 9/10, the 576 window, the inverses,
+2:2 for every picture, catch-up drops at twice the rate while converting; bench-proven, not yet on
+the rig. **Refuted:** that `disp_sched` needed a 1440-tick field period.
 Full account: `standard_convert.md`.
 
 ## Read-ahead: a jump past a full ring's head deadlocked (2026-11-01, found in the v0.10.0 smoke)

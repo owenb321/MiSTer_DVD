@@ -67,6 +67,9 @@
  * +stdcad=1 (progressive pictures), +stdcad=3 (progressive_frame=0: every picture is film) and
  * +stdcad=4 (progressive_sequence=1, as the Big Buck Bunny PAL DVD is coded) are the arms; +stdcad=2 (cadence off, progressive pictures) is the control whose gaps must
  * all be 2.
+ * +stdcad=5 (2026-11-09, To PAL): std_cad = 2'b11, 2:2 on an NTSC soft-telecine stream (rff and
+ * tff both toggling per picture, as the disc flags them). Every gap must be 2: the disc's
+ * repeat_first_field must never build a third field.
  *
  * ★ SCENARIO [6] IS THE ONE THAT FOUND THE HW DEFECT, and it is the mundane one: it
  * STARVES the pixel queue. Every scenario written from the field reports (seeks, cold
@@ -140,9 +143,12 @@ module field_phase_tb;
   reg        top_field_first = 1;
   reg        repeat_first_field = 0;
   reg        film_mode = 0;                  // [5]: tff toggles per consumed picture
-  reg        std_cad_r = 0;                  // +stdcad: Standard Convert's synthetic 3:2
+  reg  [1:0] std_cad_r = 0;                  // +stdcad: Standard Convert's synthetic 3:2 ([1]: 2:2, To PAL)
+  reg        rff_toggle = 0;                 // +stdcad=5: soft telecine's rff, flipping per picture
   always @(posedge clk)
     if (rst && film_mode && output_frame_rd) top_field_first <= ~top_field_first;
+  always @(posedge clk)
+    if (rst && rff_toggle && output_frame_rd) repeat_first_field <= ~repeat_first_field;
 
   // ---- resample <-> framestore_reader ----
   wire        disp_wr_addr_full, disp_wr_addr_almost_full;
@@ -612,8 +618,9 @@ module field_phase_tb;
       integer f, i0, prev_pick, gap, last_gap, n_gaps, bad_c, bad_a, bad_d, linepar;
       progressive_frame = (sc_mode != 3);
       progressive_sequence = (sc_mode == 4);
-      std_cad_r         = (sc_mode != 2);
-      top_field_first = 1; repeat_first_field = 0;
+      std_cad_r         = (sc_mode == 2) ? 2'b00 : (sc_mode == 5) ? 2'b11 : 2'b01;
+      top_field_first = 1; repeat_first_field = (sc_mode == 5);
+      film_mode = (sc_mode == 5); rff_toggle = (sc_mode == 5);
       repeat (2) @(negedge v_sync);
       repeat (phase) @(negedge v_sync);
       output_frame_valid = 1;
@@ -629,7 +636,7 @@ module field_phase_tb;
         if (rec_pick[f] != 0) begin
           if (prev_pick >= 0) begin
             gap = f - prev_pick; n_gaps = n_gaps + 1;
-            if (sc_mode != 2) begin
+            if (sc_mode != 2 && sc_mode != 5) begin
               if (gap != 2 && gap != 3) bad_d = bad_d + 1;
               else if (last_gap != 0 && gap == last_gap) bad_d = bad_d + 1;   // must alternate
             end else if (gap != 2) bad_d = bad_d + 1;

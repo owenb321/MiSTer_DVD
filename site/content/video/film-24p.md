@@ -119,11 +119,12 @@ A disc already in the chosen standard plays normally, so you can leave this set.
   or 25 Hz (To PAL) and the MiSTer scaler does the rest. Set the HDMI `video_mode` in
   `MiSTer.ini` to the target rate, 59.94 Hz for To NTSC or 50 Hz for To PAL, or the cadence
   is uneven.
-- **Direct analog (a CRT), To NTSC only:** the core outputs a real NTSC signal, 480i or 480p
-  as `Video Output` says, and scales the PAL picture's 576 lines to 480 itself. `Analog Aspect`
-  works as usual: Letterbox scales a 16:9 picture to 360 lines between bars in one step. **To
-  PAL does nothing on direct analog**: it would need the 480-line picture enlarged to 576,
-  which the core can't do yet, so an NTSC disc plays as NTSC.
+- **Direct analog (a CRT):** the core outputs a real signal of the other standard, interlaced or
+  progressive as `Video Output` says, and scales the picture itself: To NTSC takes a PAL picture's
+  576 lines to 480, To PAL takes an NTSC picture's 480 lines up to 576. `Analog Aspect` works as
+  usual, and Letterbox scales a 16:9 picture between bars in one step (360 lines on NTSC, 432 on
+  PAL). Your TV must accept the other standard: a 50 Hz PAL signal for To PAL, 60 Hz NTSC for
+  To NTSC.
 
 **What changes while it is converting:**
 
@@ -139,8 +140,8 @@ A disc already in the chosen standard plays normally, so you can leave this set.
 - **`Video Standard` is overridden** for that disc, and on the scaler path `Film 24p Out` too:
   the 23.976 or 25 Hz output stays on from start to finish.
 - **Dialogue subtitles on a CRT are drawn at full sharpness** and moved to where the scaled
-  picture puts them, so they look about 20 % larger relative to the picture than on the disc's
-  own standard. A subtitle near the bottom is kept on screen. Menu buttons and highlights are
+  picture puts them, so relative to the picture they look about 20 % larger with To NTSC and
+  about 17 % smaller with To PAL. A subtitle near the bottom is kept on screen. Menu buttons and highlights are
   scaled with the picture so they stay on their artwork.
 
 **Limits:**
@@ -152,7 +153,9 @@ A disc already in the chosen standard plays normally, so you can leave this set.
   disc labels as interlaced (on PAL discs these are usually film too). True interlaced video,
   such as sport, concerts and some logos, judders at 480i: the extra field 3:2 adds repeats an
   earlier moment, so motion briefly steps backward. 480p is unaffected.
+- On a CRT with **To PAL**, every picture gets exactly two fields, the way PAL film plays. NTSC film
+  becomes clean 25 fps film.
 - With **To PAL**, true 30i video (often animated menus and extras) loses one picture in five, because
-  31 pictures a second cannot fit a 25 Hz output. Motion there looks less smooth.
+  31 pictures a second cannot fit a 25-picture output. Motion there looks less smooth.
 - Hard-telecined NTSC discs keep their baked-in pulldown, so they do not become clean 25 fps film.
 - VCD and other SIF-height discs, audio CDs and WAV files always play at their true speed.

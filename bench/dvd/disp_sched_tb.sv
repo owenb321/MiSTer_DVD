@@ -47,6 +47,7 @@ module disp_sched_tb;
   integer     step_lag_max = 0;          // [11b] worst |true PTS - stc| across the session
   reg         skip_ack = 0, skip_field = 0, skip_ps = 0, skip_pf = 1, skip_tff = 1, skip_rff = 0;
   reg  [15:0] half_scan = 750;
+  reg         drop_fast = 1'b0;          // Standard Convert: catch-up drops at twice the rate
   wire        pic_due, next_due, anchored, disp_anchored, anchor_req, anchor_disc, disp_lag_valid, catchup_late;
   wire [32:0] stc;
   wire signed [33:0] anchor_delta, disp_lag;
@@ -61,6 +62,7 @@ module disp_sched_tb;
     .skip_ack(skip_ack), .skip_field(skip_field), .skip_ps(skip_ps), .skip_pf(skip_pf),
     .skip_tff(skip_tff), .skip_rff(skip_rff),
     .half_scan(half_scan),
+    .drop_fast(drop_fast),
     .pic_due(pic_due), .next_due(next_due), .stc(stc), .anchored(anchored), .disp_anchored(disp_anchored),
     .anchor_req(anchor_req), .anchor_disc(anchor_disc), .anchor_delta(anchor_delta),
     .disp_lag_valid(disp_lag_valid), .disp_lag(disp_lag),

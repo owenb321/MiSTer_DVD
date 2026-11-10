@@ -92,10 +92,11 @@ def main():
         'every gate on conversion, and each target acting on the other standard only')
     has('film', "assign std_conv_film = std_conv_req & ~interlaced_eff & ~analog_want;",
         'the scaler path: only where no analog display carries the raster')
-    has('analog', "assign std_conv_an = std_conv_req & pal_det_s2 & (interlaced_eff | analog_want);",
-        'the analog path: PAL->NTSC only (NTSC->PAL needs an upscale disp_vscale cannot do)')
+    has('analog', "assign std_conv_an = std_conv_req & (interlaced_eff | analog_want);",
+        'the analog path, both directions since Phase 4 (To PAL scales 480 up to 576)')
     has('either', "assign std_conv_active = std_conv_film | std_conv_an;", 'both flavours change the rate')
-    has('ov_pal', "assign ov_pal = pal_eff & ~std_conv_an;", 'overlays after the scaler follow the raster')
+    has('ov_pal', "assign ov_pal = pal_eff ^ std_conv_an;",
+        'overlays after the scaler follow the raster, which the analog path makes the OTHER standard')
     has('sel', "wire [1:0] std_conv_sel = status[54:53];", 'the option must be O[54:53]')
     has('conf', '"P1O[54:53],Standard Convert,Off,To NTSC,To PAL;"', 'the OSD row')
     has('src_pal', "assign pal_eff = std_conv_active ? pal_det_s2 :",
@@ -113,25 +114,33 @@ def main():
         'the overlays\' active window is the raster\'s')
     port('csync', 'csync_smpte_inst', 'pal', 'ov_pal', 'composite sync is the raster\'s standard')
     has('cc_pal', ".flush (load_flush), .pal (ov_pal),", 'line-21 captions are timed on the raster')
-    has('disp_fps', ".disp_fps (std_conv_an ? 6'd62 :", 'cell_secs: 62.5 refreshes per authored second, rounded down')
-    has('half_scan', "wire [15:0] half_scan_dec = conv_an_dec ? 16'd720",
-        'one 59.94 Hz field is 1440 ticks of the slowed STC')
+    has('disp_fps', ".disp_fps (std_conv_an ? (pal_eff ? 6'd62 : 6'd47) :",
+        'cell_secs: 62.5 (To NTSC) or 47.95 (To PAL) refreshes per authored second, rounded down')
+    has('half_scan', "wire [15:0] half_scan_dec = conv_an_dec ? (pal_dec_l ? 16'd720 : 16'd938)",
+        'one 59.94 Hz field is 1440 ticks of the slowed STC, one 50 Hz field 1877 of the sped-up one')
     has('half_sync', "conv_an_s1_dec <= std_conv_an;", 'half_scan follows the analog path')
-    port('cadence', 'mpeg2video_inst', 'std_cad', 'conv_an_dec',
-         'the synthetic 3:2 runs on the analog path only (480i film would be 2-2-2-4 without it)')
+    port('cadence', 'mpeg2video_inst', 'std_cad', '{conv_an_dec & ~pal_dec_l, conv_an_dec}',
+         'the synthetic cadence runs on the analog path only (480i film would be 2-2-2-4 without it),'
+         ' and an NTSC source (To PAL) gets 2:2, never a third field')
+    port('drop_fast', 'mpeg2video_inst', 'sched_drop_fast', 'conv_dec',
+         'To PAL 30i needs 6.25 drops/s, the normal drop ceiling: converting must lift it')
+    has('drop_sync', "conv_s1_dec <= std_conv_active;", 'the drop rate follows either flavour')
     has('vscale_en', "wire disp_vscale_en = analog_letterbox | std_conv_an;", 'the analog path always scales')
-    has('ratio', "assign disp_vscale_ratio = ~std_conv_an ? 2'd0 : analog_letterbox ? 2'd2 : 2'd1;",
-        '5/6 for Fit and Crop, one 5/8 pass for Letterbox, 3/4 otherwise')
+    has('ratio', "assign disp_vscale_ratio = ~std_conv_an ? 3'd0"
+                 " : pal_eff ? (analog_letterbox ? 3'd2 : 3'd1) : (analog_letterbox ? 3'd4 : 3'd3);",
+        'To NTSC 5/6 (Fit, Crop) or 5/8 (Letterbox), To PAL 6/5 or 9/10, 3/4 otherwise')
     port('map_en', 'crt_ov_map_inst', 'letterbox_en', 'disp_vscale_en & sp_map_en',
          'menus and highlights must follow any vertical scale, not only Letterbox')
     port('map_ratio', 'crt_ov_map_inst', 'ratio', 'disp_vscale_ratio', 'the inverse must invert the scale in use')
     port('map_bar', 'crt_ov_map_inst', 'v_bar',
-         "(disp_vscale_ratio == 2'd1) ? 12'd0 : (disp_vscale_ratio == 2'd2) ? 12'd60 : pal_eff ? 12'd72 : 12'd60",
+         "(disp_vscale_ratio == 3'd1) ? 12'd0 : (disp_vscale_ratio == 3'd2) ? 12'd60 :"
+         " (disp_vscale_ratio == 3'd3) ? 12'd0 : (disp_vscale_ratio == 3'd4) ? 12'd72 : pal_eff ? 12'd72 : 12'd60",
          'the bars disp_vscale\'s ratio leaves on the raster')
     port('map_band', 'crt_ov_map_inst', 'v_band',
-         "(disp_vscale_ratio == 2'd1) ? 12'd480 : (disp_vscale_ratio == 2'd2) ? 12'd360 : pal_eff ? 12'd432 : 12'd360",
+         "(disp_vscale_ratio == 3'd1) ? 12'd480 : (disp_vscale_ratio == 3'd2) ? 12'd360 :"
+         " (disp_vscale_ratio == 3'd3) ? 12'd576 : (disp_vscale_ratio == 3'd4) ? 12'd432 : pal_eff ? 12'd432 : 12'd360",
          'the scaled content height')
-    port('sub_ratio', 'sub_anchor_i', 'ratio', "(std_conv_an & ~sp_map_en) ? disp_vscale_ratio : 2'd0",
+    port('sub_ratio', 'sub_anchor_i', 'ratio', "(std_conv_an & ~sp_map_en) ? disp_vscale_ratio : 3'd0",
          'only raw (dialogue) subtitles are moved; a mapped context already follows the scale')
     port('sub_sy', 'sub_anchor_i', 'sy', 'sp_area_sy', 'the committed subtitle box')
     port('sub_off', 'spu_decode_inst', 'q_y_off', 'sp_y_off', 'the offset must reach the bitmap read')

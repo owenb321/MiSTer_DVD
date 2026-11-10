@@ -297,6 +297,20 @@ modelines, composite sync, and Main's Y/C setup (it picks a PAL burst from the m
   ULTIMATE_T2 (DTS), ROGER (30i) once the library share is back.
 - The maintainer's look on a CRT.
 
+**As built (2026-11-09):**
+
+- `dvd/disp_vscale.sv` ratios 3 and 4 as planned; the clamp and the tail are replay lines too. Its
+  remainder weight `(r·91 + 32) >> 6` is exact at every reachable remainder of all five ratios
+  (checked offline) and equal to the old formula at `r = 3·r60`.
+- `crt_ov_map` needs no tail clamp: the last 6/5 position is N − 5/6 (top) or N − 11/12 (bottom),
+  whose nearest tap is already the last line. A clamp written for it never fired, and its mutation
+  survived, so it was removed.
+- `resample_addrgen`'s `std_cad` is two bits: [0] on, [1] 2:2 (`rff_eff` forced 0). `disp_sched`'s
+  `drop_fast` gives one catch-up drop per two pickups while either flavour converts, the scaler
+  path included.
+- Gates: `run_vscale_frame.sh` (arms `*_r3`, `*_r4`; mutations U1-U7), `crt_ov_map_tb` T10 (R8,
+  R9), `run_sub_anchor.sh` (R6-R8), `field_phase_tb +stdcad=5` (C8, C9), the wiring checker (W25-W31).
+
 **Risks:**
 
 - **Decode pacing:** 31.25 decodes a second, 4 % above native NTSC. Display reads are 240 source
