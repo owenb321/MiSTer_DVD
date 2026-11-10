@@ -31,6 +31,9 @@
 //              must emit EXACTLY H*6/5 lines: some source pairs give two (a replay from the second
 //              line buffer), a bottom field's first output is clamped to line 0, and the last ones
 //              are the last line alone.
+//   field_x    (2026-11-09, To PAL field-accurate video) +ratio=3 or 4 field scans in all four
+//              (slot, xpar) combinations: a field of the OTHER parity drawn at its true position,
+//              S/2 into a bottom slot, -1/2 (clamped) into a top slot. Exact line counts.
 //   rtoggle    the ratio switched between a frame's line 0 and line 1: the scan keeps its own.
 //   ★ The golden is a CLOSED FORM, not a copy of the DUT's walk: output line i reads source
 //   position i*step + phase (180ths since 2026-11-09), so k = pos/180 and f = round(256*(pos%180)/180). +lines
@@ -57,6 +60,7 @@ module disp_vscale_frame_tb;
   reg        vscale_en = 1'b0;
   reg  [2:0] vscale_ratio = 3'd0;
   reg [11:0] src_lines = 12'd480;
+  reg        sxp = 1'b0;                   // +case=field_x: the scan reads the other parity (To PAL video)
   reg        scan_start = 1'b0;
   reg  [7:0] in_y = 8'd0, in_u = 8'd0, in_v = 8'd0, in_osd = 8'd0;
   reg  [2:0] in_pos = ROW_X_COL_X;
@@ -69,7 +73,7 @@ module disp_vscale_frame_tb;
 
   disp_vscale dut (
     .clk(clk), .clk_en(1'b1), .rst(rst),
-    .vscale_en(vscale_en), .vscale_ratio(vscale_ratio), .src_lines(src_lines), .scan_start(scan_start), .scan_half(1'b0),
+    .vscale_en(vscale_en), .vscale_ratio(vscale_ratio), .src_lines(src_lines), .scan_start(scan_start), .scan_half(1'b0), .scan_xpar(sxp),
     .in_y(in_y), .in_u(in_u), .in_v(in_v), .in_osd(in_osd), .in_pos(in_pos),
     .in_wr(in_wr), .in_almost_full(in_almost_full),
     .out_y(out_y), .out_u(out_u), .out_v(out_v), .out_osd(out_osd), .out_pos(out_pos),
@@ -147,14 +151,23 @@ module disp_vscale_frame_tb;
   integer last_lines;
   task automatic expect_cf(input integer sid, input integer H, input [2:0] ft, input integer frame,
                            input integer ratio);
+    expect_cfx(sid, H, ft, frame, ratio, 0);
+  endtask
+  // xp: the scan is a field of the other parity (+case=field_x). Source frame position of output
+  // line i in a slot of parity op is (2i + op)*S; a field of parity sp has line j at 2j + sp.
+  task automatic expect_cfx(input integer sid, input integer H, input [2:0] ft, input integer frame,
+                            input integer ratio, input integer xp);
     integer i, c, pos, k, k1, f, step, ph, n_up;
     begin
       step = (ratio == 1) ? 216 : (ratio == 2) ? 288 : (ratio == 3) ? 150 : (ratio == 4) ? 200 : 240;
-      ph   = (ft != ROW_1_COL_0) ? 0 : (ratio == 1) ? 18 : (ratio == 2) ? 54 : (ratio == 3) ? -15 :
+      if (xp != 0)
+        ph = (ft == ROW_1_COL_0) ? ((ratio == 3) ? 75 : 100) : -90;
+      else
+        ph = (ft != ROW_1_COL_0) ? 0 : (ratio == 1) ? 18 : (ratio == 2) ? 54 : (ratio == 3) ? -15 :
              (ratio == 4) ? 10 : 0;
-      n_up = H + H / 5;
+      n_up = (ratio == 3) ? H + H / 5 : H - H / 10;
       i = 0;
-      while ((ratio == 3) ? (i < n_up) : (((i * step + ph) / 180) + 1 <= H - 1)) begin
+      while ((ratio >= 3) ? (i < n_up) : (((i * step + ph) / 180) + 1 <= H - 1)) begin
         pos = i * step + ph;
         if (pos < 0) begin k = 0; k1 = 0; f = 0; end
         else begin
@@ -182,10 +195,14 @@ module disp_vscale_frame_tb;
   integer tog_line = -1, tog_val = 0;       // toggle vscale_en before line `tog_line` of the scan
   integer rtog_line = -1, rtog_val = 0;     // ... and the ratio, the same way
   task automatic drive_scan(input integer sid, input integer H, input [2:0] ft, input integer frame);
+    drive_scanx(sid, H, ft, frame, 0);
+  endtask
+  task automatic drive_scanx(input integer sid, input integer H, input [2:0] ft, input integer frame,
+                             input integer xp);
     integer l, c;
     begin
-      @(posedge clk); scan_start <= 1'b1;
-      @(posedge clk); scan_start <= 1'b0;
+      @(posedge clk); scan_start <= 1'b1; sxp <= (xp != 0);
+      @(posedge clk); scan_start <= 1'b0; sxp <= 1'b0;
       for (l = 0; l < H; l = l + 1) begin
         if (l == tog_line) vscale_en <= tog_val[0];
         if (l == rtog_line) vscale_ratio <= rtog_val[2:0];
@@ -272,6 +289,22 @@ module disp_vscale_frame_tb;
           drive_scan(s, H, s[0] ? ROW_1_COL_0 : ROW_0_COL_0, 0);
         end
         if (want_lines >= 0 && last_lines != want_lines) begin
+          $display("  LINE COUNT scan %0d: model %0d, want %0d", s, last_lines, want_lines); lines_bad = 1;
+        end
+      end
+      if (lines_bad) errs = errs + 1;
+    end else if (tcase == "field_x") begin
+      if (!$value$plusargs("ratio=%d", R)) R = 3;
+      if (!$value$plusargs("h=%d", H)) H = 240;
+      vscale_en = 1'b1; vscale_ratio = R[2:0]; src_lines = 2 * H; lines_bad = 0;
+      want_lines = (R == 3) ? H + H / 5 : H - H / 10;
+      // T native, B xpar, T xpar, B native, T xpar, B xpar: every combination, and back to back
+      for (s = 0; s < 6; s = s + 1) begin : fx
+        integer xp;
+        xp = (s == 1 || s == 2 || s == 4 || s == 5);
+        expect_cfx(s, H, s[0] ? ROW_1_COL_0 : ROW_0_COL_0, 0, R, xp);
+        drive_scanx(s, H, s[0] ? ROW_1_COL_0 : ROW_0_COL_0, 0, xp);
+        if (last_lines != want_lines) begin
           $display("  LINE COUNT scan %0d: model %0d, want %0d", s, last_lines, want_lines); lines_bad = 1;
         end
       end

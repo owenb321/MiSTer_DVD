@@ -102,7 +102,7 @@ module pause_still_tb;
     .video_live(), .pickup_hold(1'b0), .pause(pause), .step_req(step_req),
     .raster_par_err(1'b0), .vscale_mode(2'd0), .hcrop_en(1'b0),
     .sched_due(1'b1), .sched_next_due(1'b1),
-    .still_en(still_en), .blend_en(1'b0), .bob_en(1'b0), .std_cad(1'b0), .scan_start(scan_start), .scan_half(scan_half)
+    .still_en(still_en), .blend_en(1'b0), .bob_en(1'b0), .std_cad(1'b0), .fa_cls(2'd0), .scan_xpar(), .scan_start(scan_start), .scan_half(scan_half)
   );
 
   wire [7:0] vs_y, vs_u, vs_v, vs_osd;
@@ -110,7 +110,7 @@ module pause_still_tb;
   wire       vs_wr, hs_in_almost_full;
   disp_vscale disp_vscale (
     .clk(clk), .clk_en(1'b1), .rst(rst),
-    .vscale_en(lb != 0), .vscale_ratio(3'd0), .src_lines(12'd480), .scan_start(scan_start), .scan_half(scan_half),
+    .vscale_en(lb != 0), .vscale_ratio(3'd0), .src_lines(12'd480), .scan_start(scan_start), .scan_half(scan_half), .scan_xpar(1'b0),
     .in_y(px_y), .in_u(px_u), .in_v(px_v), .in_osd(px_osd),
     .in_pos(px_position), .in_wr(px_wr_en), .in_almost_full(px_wr_almost_full),
     .out_y(vs_y), .out_u(vs_u), .out_v(vs_v), .out_osd(vs_osd),

@@ -56,7 +56,8 @@ done
 # +stdcad: Standard Convert's synthetic 3:2 (docs/standard_convert.md "Phase 3"): arms 1
 # (progressive pictures), 3 (progressive_frame=0) and 4 (progressive_sequence=1), and control 2
 # (cadence off: all gaps 2). Arm 5 (To PAL, Phase 4): 2:2 on a soft-telecine stream, all gaps 2.
-for m in 1 2 3 4 5; do for p in 0 1; do
+# Arm 6 (To PAL field-accurate video, Phase 4b): the newest field each time, T B T B B T B T.
+for m in 1 2 3 4 5 6; do for p in 0 1; do
   vvp bench/dvd/field_phase_sim +stdcad=$m +phase=$p | grep -E '^\[13|FAIL|PASS|BROKEN|VACUOUS'; [ "${PIPESTATUS[0]}" -eq 0 ] || fail=1
 done; done
 
@@ -101,6 +102,15 @@ PYEOF
         "wire       rff_eff = cad_on ? cad_rff : repeat_first_field;" 5 'FAIL \[D\]'
   _cmut C9_22_stream_rff "wire       rff_eff = cad_on ? (cad_rff & ~std_cad[1]) : repeat_first_field;" \
         "wire       rff_eff = cad_on ? (std_cad[1] ? repeat_first_field : cad_rff) : repeat_first_field;" 5 'FAIL \[D\]'
+  # To PAL field-accurate video
+  _cmut F1_fa_ignored "  wire       fa_both    = (fa_cls == 2'd0);" \
+        "  wire       fa_both    = 1'b1;" 6 'FAIL \[[EF]\]'
+  _cmut F2_fa_slot_reads "      xp_0 <= fa_on & fa_xp0;" \
+        "      xp_0 <= 1'b0;" 6 'FAIL \[[EX]\]'
+  _cmut F3_fa_wrong_field "  wire       fa_rd0_bot = (fa_cls == 2'd2) ? top_field_first : ~top_field_first;" \
+        "  wire       fa_rd0_bot = ~top_field_first;" 6 'FAIL \[[EX]\]'
+  _cmut F4_fa_on_film "  assign     fa_on   = cad_on && std_cad[1] && ~progressive_frame && ~progressive_sequence;" \
+        "  assign     fa_on   = cad_on && std_cad[1] && ~progressive_sequence;" 5 'FAIL \[[CA]\]'
   rm -rf "$CT"
 
   echo

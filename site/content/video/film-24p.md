@@ -155,7 +155,9 @@ A disc already in the chosen standard plays normally, so you can leave this set.
   earlier moment, so motion briefly steps backward. 480p is unaffected.
 - On a CRT with **To PAL**, every picture gets exactly two fields, the way PAL film plays. NTSC film
   becomes clean 25 fps film.
-- With **To PAL**, true 30i video (often animated menus and extras) loses one picture in five, because
-  31 pictures a second cannot fit a 25-picture output. Motion there looks less smooth.
+- With **To PAL**, true 30i video (often animated menus and extras) has more moments than a 50 Hz
+  output can show. On a CRT each field shows the newest one, so a sixtieth-of-a-second step is
+  skipped about 12 times a second and the picture is slightly softer; on HDMI one picture in five
+  is dropped instead, which is a larger step about 6 times a second.
 - Hard-telecined NTSC discs keep their baked-in pulldown, so they do not become clean 25 fps film.
 - VCD and other SIF-height discs, audio CDs and WAV files always play at their true speed.

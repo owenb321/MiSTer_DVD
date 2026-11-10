@@ -75,6 +75,11 @@ green_arms() {   # green_arms <sim> <prefix> <expect>
   run "$sim" "${p}frame_r4"      "$w" +case=frame_r +ratio=4 +lines=432
   run "$sim" "${p}field_r4"      "$w" +case=field_r +ratio=4 +lines=216
   run "$sim" "${p}field_r4_bp"   "$w" +case=field_r +ratio=4 +lines=216 +bp=1
+  # To PAL field-accurate video: fields of the other parity, every (slot, xpar) combination
+  run "$sim" "${p}field_x3"      "$w" +case=field_x +ratio=3
+  run "$sim" "${p}field_x3_bp"   "$w" +case=field_x +ratio=3 +bp=1
+  run "$sim" "${p}field_x4"      "$w" +case=field_x +ratio=4
+  run "$sim" "${p}field_x4_bp"   "$w" +case=field_x +ratio=4 +bp=1
 }
 
 echo "== disp_vscale frame path: GREEN arms"
@@ -140,7 +145,7 @@ if [ "${1:-}" = "--red" ]; then
     run mut_U2_replay_b U2_replay_b fail +case=field_r +ratio=3 +lines=288
   else fail=1; fi
   # U3: no bottom-field clamp: the bottom field starts at 0 like the top (a bob on fine detail)
-  if mutate U3_no_clamp "s/wire        e_upre       = h_ft ? (h_up \& (h_pos == ROW_1_COL_0)/wire        e_upre       = h_ft ? (1'b0 \& (h_pos == ROW_1_COL_0)/"; then
+  if mutate U3_no_clamp "s/  wire        e_upre       = h_ft ? ((h_up \& (h_pos == ROW_1_COL_0)/  wire        e_upre       = h_ft ? ((1'b0 \& (h_pos == ROW_1_COL_0)/"; then
     run mut_U3_no_clamp U3_no_clamp fail +case=field_r +ratio=3 +lines=288
     run mut_U3_no_clamp U3_no_clamp_frame pass +case=frame_r +ratio=3 +lines=576   # a frame has no bottom start
   else fail=1; fi
@@ -160,6 +165,25 @@ if [ "${1:-}" = "--red" ]; then
   # U7: the replay reads the wrong linebuf bank for `a` (the tail's a = b broken)
   if mutate U7_tail_bank "s/{rp_tail ? wr_bank : rd_bank, rp_col\[9:0\]}/{rd_bank, rp_col[9:0]}/"; then
     run mut_U7_tail_bank U7_tail_bank fail +case=frame_r +ratio=3 +lines=576
+  else fail=1; fi
+  # --- To PAL field-accurate video (2026-11-09, Phase 4b) ---
+  # X1: the sideband is dropped: every field drawn at its own slot's phase (a half-line bounce)
+  if mutate X1_xpar_lost "s/  wire        xp_px    = in_ft ? sb_xpar : scan_xp_in;/  wire        xp_px    = 1'b0;/"; then
+    run mut_X1_xpar_lost X1_xpar_lost fail +case=field_x +ratio=3
+    run mut_X1_xpar_lost X1_xpar_lost_native pass +case=field_r +ratio=3 +lines=288
+  else fail=1; fi
+  # X2: a top field in a bottom slot starts at the native bottom phase instead of S/2
+  if mutate X2_xp_bot_phase "s/  wire  \[7:0\] xp_bot_r     = (h_ratio == 3'd4) ? 8'd100 : 8'd75;/  wire  [7:0] xp_bot_r     = (h_ratio == 3'd4) ? 8'd100 : 8'd90;/"; then
+    run mut_X2_xp_bot_phase X2_xp_bot_phase fail +case=field_x +ratio=3
+  else fail=1; fi
+  # X3: a bottom field in a top slot is not clamped (it starts at 0, half a line low)
+  if mutate X3_xp_no_clamp "s/                                     (h_bnd \& (h_pos == ROW_0_COL_0) \& h_xp))/                                     1'b0)/"; then
+    run mut_X3_xp_no_clamp X3_xp_no_clamp fail +case=field_x +ratio=4
+  else fail=1; fi
+  # X4: 9/10 unbounded (no tail): the 5/9 start runs a line short
+  if mutate X4_r4_no_tail "s/  wire        scan_up    = ((scan_ratio == 3'd3) | (scan_ratio == 3'd4))/  wire        scan_up    = ((scan_ratio == 3'd3))/"; then
+    run mut_X4_r4_no_tail X4_r4_no_tail fail +case=field_x +ratio=4
+    run mut_X4_r4_no_tail X4_r4_no_tail_native pass +case=field_r +ratio=4 +lines=216
   else fail=1; fi
   score
 fi

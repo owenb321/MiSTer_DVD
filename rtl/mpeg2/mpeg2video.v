@@ -558,6 +558,8 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   wire             pixel_wr_almost_full;    // disp_vscale -> resample
   wire             still_scan_start;        // DVD-FORK (pause field still): resample_addrgen -> disp_vscale sideband
   wire             still_scan_half;
+  wire             fa_scan_xpar;            // DVD-FORK (Standard Convert To PAL): resample_addrgen -> disp_vscale sideband
+  wire        [1:0]sched_fa_cls;            // DVD-FORK (Standard Convert To PAL): disp_sched -> resample_addrgen
   wire             blend_scan_w;            // DVD-FORK (field blend): resample_addrgen -> field_blend sideband (filtered scan)
   wire             bob_scan_w;              // DVD-FORK (progressive bob): ... the bob kernel
   wire             bob_bot_w;               // DVD-FORK (progressive bob): ... keeping the BOTTOM field
@@ -1650,6 +1652,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .skip_rff(skip_rff),
     .half_scan(half_scan),
     .drop_fast(sched_drop_fast),
+    .fa_cls(sched_fa_cls),
     .pic_due(sched_due),
     .next_due(sched_next_due),
     .stc(stc),
@@ -1731,6 +1734,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .still_en(1'b1),
     .scan_start(still_scan_start),
     .scan_half(still_scan_half),
+    .fa_cls(sched_fa_cls), .scan_xpar(fa_scan_xpar),
     .blend_en(blend_en),                                     // DVD-FORK (field blend)
     .scan_blend(blend_scan_w),
     .bob_en(bob_en),
@@ -1764,6 +1768,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .clk(clk), .clk_en(1'b1), .rst(sync_rst),
     .vscale_en(disp_vscale_en), .vscale_ratio(disp_vscale_ratio), .src_lines(vertical_size[11:0]),
     .scan_start(still_scan_start), .scan_half(still_scan_half),   // DVD-FORK (pause field still)
+    .scan_xpar(fa_scan_xpar),                                     // DVD-FORK (Standard Convert To PAL)
     /* from field_blend (= resample unless a scan is blended) */
     .in_y(y_fb), .in_u(u_fb), .in_v(v_fb), .in_osd(osd_fb),
     .in_pos(position_fb), .in_wr(pixel_wr_en_fb), .in_almost_full(pixel_wr_almost_full_fb),

@@ -336,6 +336,47 @@ capture card): `big-buck-bunny-NTSC.iso` menu and feature, `BBB_NTSC.VOB`, `MEN_
   lines a field, below native PAL's 288, so the display side should be lighter than a PAL disc.
 - **Flow control in `disp_vscale`** is the one piece with no precedent in the tree.
 
+## Phase 4b: field-accurate NTSC video on To PAL (agreed 2026-11-09)
+
+**The choice.** True NTSC video sped up is 62.5 fields/s on a 50-field raster. Phase 4 dropped one
+picture in five (a 32 ms jump 6.25 times a second). The smoothest result without motion estimation
+shows, on every raster field, the newest source field: one field in five skipped, a 16 ms jump
+12.5 times a second. The maintainer chose that, with every field equally soft rather than half of
+them softened (the alternative pulses sharp and soft at about 6 Hz on still detail).
+
+**Why "equally soft" costs nothing here.** A field skip leaves the next source field on the other
+raster parity, so half the fields are drawn half a line shifted. On the To PAL path every field is
+already resampled by `disp_vscale` (6/5 or 9/10), so a shifted field uses the same set of blend
+fractions as a native one, in a different order: at 6/5 both are {0, 1/6, ..., 5/6}; at 9/10 the
+mean softness (the mean of f(1-f)) is 0.165 against 0.168. No extra filter is needed.
+
+**Which field.** From the picture's lateness L at pickup, in ticks of the sped-up STC (a source
+field is 1501.5, an output field 1876.875): L < 1126 both fields; 1126 to 1501 the first only; 1502
+and over the second only. `disp_sched` computes it (`fa_cls`) from `d_stc_want`. A free-running
+counter would also give 2, 2, 1, 2, 1, but out of phase with the timeline it shows pictures early
+and the scheduler holds them; lateness keeps it locked. The walk stays in [0, 1877) ticks, below
+`LATE_DROP`, so no catch-up drops are requested.
+
+**Film is never taken here.** It applies only to `progressive_frame = 0` pictures. MPEG-2 allows
+`repeat_first_field` (soft telecine) only on progressive frames, so NTSC film is always flagged as
+film, unlike the PAL direction (Phase 0). Hard-telecined film is interlaced on the disc and gets the
+video treatment, which is no worse than dropping pictures.
+
+**As built.**
+- `resample_addrgen`: `xp_0`/`xp_1` ride the image list ("read the other parity"); the read start
+  and the field's last-line test (`last_y_native`, which tested the SLOT and would never have ended
+  a top field read into a bottom slot) follow the read parity; `scan_xpar` goes to `disp_vscale`.
+  The slot tag is untouched, so the mixer and the parity corrector are unaffected.
+- `disp_vscale`: a field of parity sp in a slot of parity op starts at i*S + (op*S - sp)/2: S/2
+  (5/12, 5/9) for a top field in a bottom slot, -1/2 (clamped, then 1/3 or 11/18) for a bottom
+  field in a top slot. 9/10 is now bounded too (the 5/9 start runs out one line early: tail).
+- Overlays need nothing: `crt_ov_map` maps raster lines to source FRAME positions, which a shifted
+  field is resampled to.
+- Gates: `run_vscale_frame.sh` (`field_x3/4`, X1-X4), `field_phase_tb +stdcad=6` (reads follow
+  T B T B B T B T, 1.6 fields a pickup, `scan_xpar` on the off-slot fields; F1-F4, and arm 5 now
+  drives `fa_cls` so film must ignore it).
+- Not changed: the scaler (HDMI) path still drops one picture in five; it shows woven frames.
+
 ## Not done yet
 
 - Phase 3 step 1 is wired (2026-11-08): `std_conv_an` (PAL→NTSC with `interlaced_eff | analog_want`)
