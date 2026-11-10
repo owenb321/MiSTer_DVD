@@ -169,6 +169,8 @@ module crt_syncgen_tb;
   // CONSECUTIVE, step exactly 1. Skipping the parity checks alone would leave the phase
   // asserting nothing about interlace at all.
   integer prog_step_errs = 0;
+  integer de_in_vs = 0;               // PHASE 8: dots with pixel_en inside vsync
+  always @(posedge clk) if (rst && clk_en && track_fields && pixel_en && v_sync) de_in_vs = de_in_vs + 1;
   integer exp_field_lines = 240;      // 240 NTSC / 288 PAL, per vsync interval
   reg     prog_fields = 0;
   always @(posedge clk) if (rst && clk_en && track_fields) begin
@@ -549,6 +551,39 @@ module crt_syncgen_tb;
       $display("[PAL  288p ] PASS: vsync every %0d clk27 (312 lines, CONSTANT = 50.0616 Hz) x%0d, no half-line, 288 consecutive active lines over %0d frames",
                P288_DOTS, vs_rises, fields_seen);
     track_fields = 0; prog_fields = 0; chk_vs_half = 0; exp_field_lines = 240;
+
+    // =======================================================================
+    // PHASE 8 — Standard Convert on the CRT: a 576-line PAL stream on the 480i
+    // raster (PHASE 2c's values; dvd/emu.sv writes them unchanged). The stream is
+    // taller than the field, so the window must come from the RASTER: 240 lines a
+    // field, and pixel_en never high inside vsync. Before the fix DE ran through
+    // vblank and vsync (MiSTer reported 290x519i, the CRT lost the OSD and colour).
+    // =======================================================================
+    rst = 0;
+    horizontal_resolution = 12'd1440; horizontal_sync_start = 12'd1471;
+    horizontal_sync_end   = 12'd1595; horizontal_length     = 12'd1715;
+    vertical_resolution   = 12'd480;  vertical_sync_start   = 12'd244;
+    vertical_sync_end     = 12'd247;  vertical_length       = 12'd261;
+    horizontal_halfline   = 12'd858;  interlaced            = 1'b1;
+    horizontal_size = 14'd1440;  vertical_size = 14'd576;
+    waitclk(8); rst = 1;
+    reset_trackers;
+    exp_hs_period  = 1716;
+    exp_vs_spacing = ILACE480_DOTS / 2;
+    exp_vs_width   = 3 * 1716;
+    settle_rises   = 2;
+    track_fields   = 1;
+    de_in_vs       = 0;
+    waitclk(ILACE480_DOTS * 4);
+    if (bad_hs || bad_vs_spacing || bad_vs_width || parity_errs || field_line_errs || parity_alt_errs || de_in_vs) begin
+      errors = errors + 1;
+      $display("[576 on 480i] FAIL: hs=%0d vs_spacing=%0d vs_width=%0d parity=%0d lines=%0d alt=%0d de_in_vsync=%0d",
+               bad_hs, bad_vs_spacing, bad_vs_width, parity_errs, field_line_errs, parity_alt_errs, de_in_vs);
+    end else
+      $display("[576 on 480i] PASS: a 576-line stream shows 240 lines/field over %0d fields, no DE inside vsync",
+               fields_seen);
+    track_fields = 0;
+    horizontal_size = 14'd720;  vertical_size = 14'd480;
 
     if (errors == 0) $display("\n==== PASS: CRT 2:1 interlace locks (262.5-line vsync cadence), native 240p/288p are progressive and constant-rate, legacy modes unchanged, film rasters exact ====");
     else begin

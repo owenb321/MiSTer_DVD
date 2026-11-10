@@ -527,6 +527,9 @@ Each of these cost at least one hardware round. The story is in `docs/status_log
 - **One-cycle pulses ANDed with a level that settles later never fire.** Latch the event.
 - **Derive a predicate from what it selects, not from the case it was written for**
   (`~keep_vbuf` vs a domain crossing; a menu context vs a menu domain).
+- **Telemetry that says rates and cadence are right says nothing about the picture.** A new
+  raster or output path also needs Main's reported resolution and a look at the output
+  (Standard Convert's 480i shipped with DE high through vsync, 2026-11-09).
 - **HIL:** run the control arm (old build) first; ssh latency is part of the instrument;
   one behavioural change per flash; a build is not testable until its artefact is on the
   board. See `.claude/skills/hil-testing/`.

@@ -276,6 +276,22 @@ exact. The horizontal path (`disp_hstretch` Crop, SIF fill) is untouched.
   one, which ps=1 implies. Bench arm `+stdcad=4`, mutations C5 (term back), C6 (branch not
   gated), C7 (`nxt_first_top` not gated). Rig re-check on the rebuilt core (`86c56fe`, SEED 7):
   `BBB_PAL` pair sums 4/5/6 = 60/394/61 (was 130/138/136), `VTS_04_2` 84/351/82, 0 lates, 0 drops.
+- **First look on a CRT, 2026-11-09 (maintainer, The Incredible Hulk PAL, 480i): broken.** HDMI
+  reported `290x519i` with a skewed picture, the CRT kept its geometry but lost colour on S-Video
+  and composite (RGBS through a RetroTINK had colour), and the MiSTer OSD showed on HDMI but not
+  on the analog output. One cause: `sync_gen` bounds an interlaced field's active window by
+  `vertical_size/2` and by `vertical_resolution` **unhalved**, and the walk writes the frame
+  count (480) for 480i. Every native mode is bounded by the stream (240 = 240, 288 = 288), so the
+  unhalved compare never mattered; a 576-line stream on the 262-line NTSC field gives 288 > 262,
+  and DE never fell: it ran through vblank and vsync. That breaks ascal's measurement (519 DE
+  lines a frame), Main's Y/C burst setup and burst placement (no colour on Y/C), and the analog
+  OSD. RGB has no burst, hence its colour. 480p was never affected (its compare is not halved),
+  and the telemetry runs above measured rates and cadence, not the picture: **nothing looked at
+  the 480i output until the maintainer did.** Fixed in `rtl/mpeg2/syncgen.v`: the interlaced bound
+  is `vertical_resolution` halved, rounded up (a legacy 479 still gives 240), identical wherever
+  the stream fits. The same fault would have hit `Video Standard = NTSC` forced on a PAL disc at
+  480i. Gate: `crt_syncgen_tb` PHASE 8 (576-line stream on the shipped 480i raster: 240 lines a
+  field, no DE inside vsync), mutation R2 in `run_p240.sh --red`.
 - ⏳ **Next step:** by eye on a CRT: a PAL film, a filmised drama, and a sport or concert 50i
   disc to judge the accepted judder (library share needed).
 - ⏳ `tools/hil_suite.py` with conversion Off against v0.10.0 has not run; Off matched the control on

@@ -345,9 +345,20 @@ module sync_gen    (clk, clk_en, rst,
     else v_sync_1 <= v_sync_1;
 
   /* vertical blanking */
+  /* DVD-FORK FIX (Standard Convert, 2026-11-09): when interlaced, the raster bound is
+   * vertical_resolution HALVED, the same per-field reading v_size/v_display_size already
+   * give it. The walk in dvd/emu.sv writes the FRAME count (480/576) for an interlaced
+   * raster, so the unhalved compare never fired, and the field window was bounded only by
+   * the stream: vertical_size/2. That is fine while the stream fits the raster (every native
+   * mode: 240 = 240, 288 = 288), but a 576-line PAL stream on the 262-line NTSC field gave
+   * 288 > 262, so pixel_en never fell: DE stayed high through vblank and vsync ("290x519i"
+   * on HDMI, no OSD and no colour on the CRT). Identical wherever the stream fits. The half
+   * rounds UP so a legacy "count minus one" value (479) still bounds at 240, not 239. */
+  wire [11:0] v_res_field = interlaced ? ({1'b0, vertical_resolution[11:1]} + {11'd0, vertical_resolution[0]})
+                                       : vertical_resolution;
   always @(posedge clk)
     if (~rst) v_blank_1 <= 1'b1;
-    else if (clk_en) v_blank_1 <= (v_cntr >= vertical_resolution) || (v_cntr >= v_size) || (v_cntr >= v_display_size);
+    else if (clk_en) v_blank_1 <= (v_cntr >= v_res_field) || (v_cntr >= v_size) || (v_cntr >= v_display_size);
     else v_blank_1 <= v_blank_1;
 
   /* 
