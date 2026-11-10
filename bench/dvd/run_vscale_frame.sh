@@ -149,7 +149,7 @@ if [ "${1:-}" = "--red" ]; then
     run mut_U4_no_tail U4_no_tail fail +case=frame_r +ratio=3 +lines=576
   else fail=1; fi
   # U5: the tail unbounded by N*6/5 (a bottom field would emit an extra line)
-  if mutate U5_unbounded "s/wire        up_room    = (emitted_cnt < up_m);/wire        up_room    = 1'b1;/"; then
+  if mutate U5_unbounded "s/    up_room    <= (emitted_cnt < up_m_c);/    up_room    <= 1'b1;/"; then
     run mut_U5_unbounded U5_unbounded fail +case=field_r +ratio=3 +lines=288
   else fail=1; fi
   # U6: 9/10 without its bottom phase; the frame path never uses it

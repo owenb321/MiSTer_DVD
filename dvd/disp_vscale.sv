@@ -310,7 +310,7 @@ module disp_vscale (
   /* (2026-11-09) 180ths: (r*91 + 32) >> 6 = round(256*r/180) at every reachable remainder, and
    * at r = 3*r60 it is the sixtieths formula (r60*273 + 32) >> 6 exactly. */
   wire [14:0] f_prod = {7'd0, next_r} * 15'd91 + 15'd32;
-  wire  [7:0] f_nr   = f_prod[13:6];
+  wire  [7:0] f_nr_c = f_prod[13:6];
   /* the step per ratio (1 + frac/180 source lines; the upscale's is 0 + 150/180 = 5/6), and the
    * bottom field's starting phase (header). The upscale's -1/12 is the clamp below, not a phase. */
   wire  [7:0] step_frac  = (scan_ratio == 3'd1) ? 8'd36  : (scan_ratio == 3'd2) ? 8'd108 :
@@ -318,8 +318,8 @@ module disp_vscale (
   wire        step_int   = (scan_ratio != 3'd3);
   wire  [8:0] step_sum   = {1'b0, next_r} + {1'b0, step_frac};
   wire        step_cy    = (step_sum >= 9'd180);
-  wire  [7:0] step_r     = step_cy ? (step_sum[7:0] - 8'd180) : step_sum[7:0];
-  wire [11:0] step_k     = next_k + {11'd0, step_int} + {11'd0, step_cy};
+  wire  [7:0] step_r_c   = step_cy ? (step_sum[7:0] - 8'd180) : step_sum[7:0];
+  wire [11:0] step_k_c   = next_k + {11'd0, step_int} + {11'd0, step_cy};
   wire  [7:0] bot_phase  = (h_ratio == 3'd1) ? 8'd18 : (h_ratio == 3'd2) ? 8'd54 :
                            (h_ratio == 3'd4) ? 8'd10 : 8'd0;
   /* ---- upscale bounds: N source lines and N*6/5 output lines per scan ----
@@ -328,9 +328,29 @@ module disp_vscale (
   wire        h_up       = (h_ratio == 3'd3) & ((h_mode == M_LB) | (h_mode == M_LBH));
   wire [11:0] up_n       = scan_frame ? src_lines : {1'b0, src_lines[11:1]};
   wire [21:0] up_n205    = {10'd0, up_n} * 22'd205;
-  wire [11:0] up_m       = up_n + up_n205[21:10];
-  wire [11:0] up_last    = up_n - 12'd1 + {11'd0, scan_mode == M_LBH};   // the HALF stream has one more line
-  wire        up_room    = (emitted_cnt < up_m);
+  wire [11:0] up_m_c     = up_n + up_n205[21:10];
+  wire [11:0] up_last_c  = up_n - 12'd1 + {11'd0, scan_mode == M_LBH};   // the HALF stream has one more line
+  /* ★ TIMING (2026-11-09: 74.9 MHz against 86 with these combinational). Everything the walk
+   * decides from is REGISTERED one cycle ahead: the bounds, the next step, the weight and the
+   * three compares. Exact, not approximate: they are read only at a line start (col0), at a
+   * line's last pixel, or at a replay's last pixel, and next_k/next_r/sline/emitted_cnt/scan_*
+   * change only at a line start, a scan start or a replay start, each of which is a whole line
+   * (>= one macroblock of pixels, or a replay of the same width) before the next read. */
+  reg  [11:0] up_m, up_last;
+  reg   [7:0] f_nr, step_r;
+  reg  [11:0] step_k;
+  reg         up_room, k_eq_sline, k_eq_prev, sline_last;
+  always @(posedge clk) begin
+    up_m       <= up_m_c;
+    up_last    <= up_last_c;
+    f_nr       <= f_nr_c;
+    step_r     <= step_r_c;
+    step_k     <= step_k_c;
+    up_room    <= (emitted_cnt < up_m_c);
+    k_eq_sline <= (next_k == sline);
+    k_eq_prev  <= (next_k == sline - 12'd1);
+    sline_last <= (sline == up_last_c);
+  end
 
   /* combinational "effective" line/bank/column for the CURRENT head pixel. These are stable
    * from the S_READ cycle through the S_BLEND commit (head is not popped and the persistent
@@ -350,7 +370,7 @@ module disp_vscale (
   wire        e_upre       = h_ft ? (h_up & (h_pos == ROW_1_COL_0) & (h_mode == M_LB)) : (h_col0 ? 1'b0 : line_pre);
   wire        e_line_emit  = h_ft ? (e_plain | e_upre)
                            : (h_col0 ? (seen_frametop && (e_plain || (e_mode == M_HALF) ||
-                                                          ((next_k == sline) && (~scan_up || up_room))))
+                                                          (k_eq_sline && (~scan_up || up_room))))
                                      : line_emit);
   wire        e_line_first = h_ft ? (e_plain | e_upre)
                            : (h_col0 ? (emitted_cnt == 12'd0) : line_first);
@@ -365,8 +385,8 @@ module disp_vscale (
   reg         rp_active, rp_tail, rp_first, rp_second;
   reg  [10:0] rp_col, rp_wm1;
   reg   [7:0] rp_f;
-  wire        rp_pair_due = scan_up & up_room & (next_k == sline - 12'd1);
-  wire        rp_tail_due = scan_up & up_room & (sline == up_last) & (next_k == sline);
+  wire        rp_pair_due = scan_up & up_room & k_eq_prev;
+  wire        rp_tail_due = scan_up & up_room & sline_last & k_eq_sline;
   wire        rp_due      = rp_pair_due | rp_tail_due;
   wire        rp_issue    = rp_active & ~out_almost_full;
   wire        rp_end      = rp_issue & (rp_col == rp_wm1);
