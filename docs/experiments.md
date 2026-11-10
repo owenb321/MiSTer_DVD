@@ -327,3 +327,69 @@ clock, on the DAC word only:
 **Status:** evaluated 2026-10-06. The as-is port was ruled out (weaker than `dac_dither`).
 The faster-clock variant is not scheduled; revisit only if the CRT still shows dither
 texture worth removing.
+
+---
+
+## Cached thumbnails for the scrub preview
+
+**Idea:** while a held Fast Fwd / Rewind scrub moves its cursor, show a small picture of the
+content at the cursor, from a set of thumbnails decoded once per disc and kept in memory.
+Today the video freezes and only the seek bar moves (`dvd/scrub_ctrl.sv`).
+
+**Why it is worth it:** the scrub's tiers run at about 15 / 60 / 240 / 960 content-seconds per
+second (`docs/transport_hud.md`), so nobody can tell where they are from the clock alone at the
+fast end. A thumbnail answers that at every speed, and the release seek stays the one exact
+TMAP seek it is now.
+
+**Why cached, not decoded live.** The first answer considered was a live I-frame preview: splice
+the I-frame at the cursor into the decoder without flushing, the same engine trick play would
+need (`docs/dvd_nav.md` §2d). It is the regime the 2026-07-10 HW rounds proved fatal (flush and
+re-lock per hop: black frames, watchdog resyncs), made safe only by never flushing and by
+keeping one or two pictures in flight, and it needs its own HW round. Finding the I-frames was
+never the problem: `VTS_TMAP` gives each VOBU's address, and the I-frame follows the NAV pack,
+ending at `dsi_1stref_ea`. Cached thumbnails avoid the fabric decoder entirely. Trick play at
+×2 to ×8 still needs the splice engine; that is a separate feature.
+
+**Rough approach:**
+- **Produced by Main, not the fabric.** The fabric decoder has one set of reference frames and
+  one display schedule, so a side decode means a second context in upstream `rtl/mpeg2`.
+  A low-priority Main thread (CPU 1; the read-ahead worker is on CPU 0, and `user_io_poll()`
+  must never block) does, for each grid point: a TMAP lookup, a read of the NAV pack and the
+  I-frame, a software decode (libmpeg2 or FFmpeg's), a downscale, and a write into a DDR3 table.
+  CSS is already handled by Main's read path.
+- **Size:** 160×90 at 4:2:0 is ~22 KB, so one every 10 s of a 2 h film (720) is ~16 MB. Full
+  720×480 frames (~518 KB each, ~373 MB) are too much. The FPGA's DDR3 half has room above the
+  core's 32 MiB window at `0x30000000` (`docs/audio_ddr_path.md`); pick a fixed region.
+- **Saved to the SD card** under the disc ID, as save states are (`savestates/DVD/<disc id>_N.ss`),
+  so a disc is indexed once and later loads are instant. Coarse grid first (one a minute),
+  then fill to every 10 s, nearest the playback position first. Unindexed stretches scrub as
+  today, cursor only.
+- **Shown in a box above the seek bar** at the cursor (the streaming-player look), not full
+  screen: a 160×90 thumbnail scaled to the whole screen looks poor. Needs a DDR3 read master
+  sharing `ram2` with the DTS codebooks through an arbiter (`docs/hw_budget_and_lessons.md`),
+  a line buffer, and a blend next to the seek bar. A DDR3 line pump measured ~190 ALM + 6 M10K,
+  so expect a few hundred ALM in all. Video is paused during a scrub, so bandwidth is not the
+  issue.
+
+**Physical discs.** Done naively, the index pass thrashes the drive and starves playback.
+Scheduled, it does not:
+- Only fetch while the read-ahead ring is full: 32 MB, ~25 s at the DVD maximum bitrate
+  (`docs/physical_disc.md`). Slow reads after a seek measured 100–313 ms on the rig's drive,
+  so a thumbnail costs an estimated 0.2–0.6 s (seek away, ~100 KB, seek back). A batch of
+  10–15 per full ring leaves margin.
+- Batch in LBA order (short forward hops), finish one layer before crossing to the other, and
+  index freely while paused, in a menu or idle.
+- Once per disc ever, thanks to the SD-card cache.
+- Unmeasured estimate: a full 10 s grid in about 10 minutes of playback, the coarse grid in
+  the first couple. Measure on the rig: batch timing, the ring's lowest fill, `lates`.
+- The real cost is noise: the drive stays spun up. Wear is not a concern (libdvdcss key
+  cracking at mount is already seek-heavy). A "Scrub Previews" option could restrict physical
+  discs to pause/idle indexing, or turn it off.
+
+**Risk / cost:** a software MPEG-2 decoder in Main (licence check against Main's GPL); the
+fabric preview box at ~8 % ALM headroom; custom Main only (stock Main keeps today's scrub);
+linear files (`.mpg`, VCD) have no TMAP and would need a GOP-header scan. A new OSD option
+must land in `site/content/playback/settings.md` (`tools/docs_check.py` enforces it).
+
+**Status:** idea, chosen as the preferred direction for the scrub preview (maintainer,
+2026-11-09). Not scheduled.
