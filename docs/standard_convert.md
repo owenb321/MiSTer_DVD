@@ -399,6 +399,13 @@ composite through the capture card).
 - Film unchanged: BBB_NTSC.VOB 50.0 fields/s, 25.0 pictures/s, 0 lates, 0 drops.
 - 576i at 50 Hz, colour, and the MiSTer OSD over the picture on composite (RetroTINK capture).
 - ⏳ By eye on a CRT: the field-skip motion and the even softness.
+- **Unreproduced field report (maintainer, 2026-11-10):** To PAL, after ~10 min of MiB's film, a
+  mount of `WAKE_UP_WITH_ELMO.iso` (NTSC, still menu) gave no picture and no sound while the raster,
+  signal and MiSTer OSD stayed up; a core Reset cleared it. The same MiB → Elmo mount had worked
+  earlier in the same boot. Not reproduced in 8 scripted mounts (`mount` on the custom Main's
+  `/tmp/dvd_ctl`): 3 from MiB's menu, 5 from its film (slot save at 2264 s, 20–120 s of play).
+  Treated as a fluke by the maintainer. If it recurs, capture `tools/mister.py telem` before
+  resetting: `vbuf_fill`, `pic_n` and `flags` separate a reader stall from a decoder or display one.
 
 ## Not done yet
 
