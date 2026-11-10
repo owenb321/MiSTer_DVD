@@ -62,6 +62,13 @@
  * 6 at 5/6, 18 at 5/8, 0 at 3/4. bench/dvd/crt_ov_map_tb.sv T10 co-simulates the two real
  * modules against each other in both fields and on the frame path.
  *
+ * ★ TO PAL (2026-11-09, Phase 4): 3 = 6/5 UP and 4 = 9/10, so the remainder counts 180ths
+ * (steps 60/36/108/-30/20 past one line; the upscale's 5/6 is 0 + 150) and the nearest tap is
+ * k+1 from r >= 90. 6/5's bottom field starts at -1/12, which disp_vscale clamps: its first
+ * line shows source line 0 and the walk resumes at 3/4 (r = 135), so here too (l_pre). Its
+ * last lines are the last source line alone in disp_vscale, but no clamp is needed here: the
+ * last position is N - 5/6 (top) or N - 11/12 (bottom), whose nearest tap is already N - 1.
+ *
  * PASS-THROUGH: with letterbox_en/crop_en low the outputs are combinational copies of
  * the inputs — bit-identical to the pre-mapper wiring (HDMI and CRT-Fit unaffected).
  */
@@ -75,7 +82,7 @@ module crt_ov_map (
     input  wire        letterbox_en,   // CRT Letterbox active (disp_vscale_en)
     input  wire        crop_en,        // CRT Crop OR SIF fill active (analog_crop | sif_hfill_eff)
     input  wire        interlaced,     // CRT 480i: v_pos = absolute frame line, +2 per field line
-    input  wire  [1:0] ratio,          // disp_vscale's ratio: 0 = 3/4, 1 = 5/6, 2 = 5/8
+    input  wire  [2:0] ratio,          // disp_vscale's ratio: 0 = 3/4, 1 = 5/6, 2 = 5/8, 3 = 6/5, 4 = 9/10
 
     /* DVD-FORK FIX (SIF analog fill): invert the addrgen 2x line repeat (vscale_mode==2).
      * The forward walk (resample_addrgen, v_step=128, rounded) maps output line i to
@@ -112,28 +119,36 @@ module crt_ov_map (
 
     reg  [11:0] v_q;        // last seen v_pos (change detector)
     reg  [11:0] ly;         // Bresenham base line k (absolute source frame line)
-    reg  [5:0]  lr;         // Bresenham remainder 0..59, sixtieths of a source line (disp_vscale's)
-    wire [5:0]  l_frac  = (ratio == 2'd1) ? 6'd12 : (ratio == 2'd2) ? 6'd36 : 6'd20;
-    wire [6:0]  l_sum   = {1'b0, lr} + {1'b0, l_frac};
-    wire [5:0]  l_phase = (ratio == 2'd1) ? 6'd6 : (ratio == 2'd2) ? 6'd18 : 6'd0;
+    reg  [7:0]  lr;         // Bresenham remainder 0..179, 180ths of a source line (disp_vscale's)
+    reg         l_pre;      // 6/5 bottom field: the clamped first line (source line 0)
+    wire [7:0]  l_frac  = (ratio == 3'd1) ? 8'd36  : (ratio == 3'd2) ? 8'd108 :
+                          (ratio == 3'd3) ? 8'd150 : (ratio == 3'd4) ? 8'd20  : 8'd60;
+    wire        l_int   = (ratio != 3'd3);
+    wire [8:0]  l_sum   = {1'b0, lr} + {1'b0, l_frac};
+    wire        l_cy    = (l_sum >= 9'd180);
+    wire [7:0]  l_phase = (ratio == 3'd1) ? 8'd18 : (ratio == 3'd2) ? 8'd54 : (ratio == 3'd4) ? 8'd10 : 8'd0;
+    wire        l_bot   = (v_pos_in != v_bar);           // at a band start: the bottom field
     reg         ly_valid;   // inside the content band with a valid walk
 
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
-            v_q <= 12'hFFF; ly <= 12'd0; lr <= 6'd0; ly_valid <= 1'b0;
+            v_q <= 12'hFFF; ly <= 12'd0; lr <= 8'd0; ly_valid <= 1'b0; l_pre <= 1'b0;
         end else begin
             v_q <= v_pos_in;
             if (v_pos_in != v_q) begin
                 if ((v_pos_in == v_bar) || (interlaced && (v_pos_in == v_bar + 12'd1))) begin
                     /* band start (per-field in 480i: each parity re-arms at its first line) */
                     ly       <= v_pos_in - v_bar;   // source line 0 (or 1 = odd field)
-                    lr       <= (v_pos_in == v_bar) ? 6'd0 : l_phase;   // a bottom field's phase
+                    lr       <= l_bot ? l_phase : 8'd0;   // a bottom field's phase
+                    l_pre    <= l_bot & (ratio == 3'd3);
                     ly_valid <= 1'b1;
                 end else if (ly_valid && (v_pos_in == v_q + vstep) &&
                              ((v_pos_in - v_bar) < v_band)) begin
                     /* next line of the same scan: advance (k,r) as disp_vscale does */
-                    if (l_sum >= 7'd60) begin lr <= l_sum[5:0] - 6'd60; ly <= ly + (vstep << 1); end
-                    else                begin lr <= l_sum[5:0];         ly <= ly + vstep;          end
+                    l_pre <= 1'b0;
+                    if (l_pre)     begin lr <= 8'd135; end                       // resume at 3/4, still line 0
+                    else if (l_cy) begin lr <= l_sum[7:0] - 8'd180; ly <= ly + (l_int ? (vstep << 1) : vstep); end
+                    else           begin lr <= l_sum[7:0];          ly <= ly + (l_int ? vstep : 12'd0); end
                 end else begin
                     /* left the band (bottom bar / blanking / field jump): invalidate until
                      * the next band start so a stale walk can never be queried */
@@ -143,8 +158,8 @@ module crt_ov_map (
         end
     end
 
-    /* nearest tap: k+1 from half a line on (r >= 30); at 3/4 that is the old k+1 at f = 2/3 */
-    wire [11:0] ly_eff = ly + ((lr >= 6'd30) ? vstep : 12'd0);
+    /* nearest tap: k+1 from half a line on (r >= 90); at 3/4 that is the old k+1 at f = 2/3 */
+    wire [11:0] ly_eff = ly + ((lr >= 8'd90) ? vstep : 12'd0);
 
     /* ---------------- horizontal: inverse crop resample (per displayed column) ----------------
      * Rounding Bresenham: cx after j columns = floor((j*hsrc_w + hdst_w/2)/hdst_w) = the

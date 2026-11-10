@@ -218,9 +218,11 @@ exact. The horizontal path (`disp_hstretch` Crop, SIF fill) is untouched.
    raster standard. Subtitles and highlights keep querying source coordinates through
    `dvd/crt_ov_map.sv`, which gains the 5/6 and 5/8 inverses with the bottom-field phase.
    `tools/check_std_convert_wiring.py` pins both sides.
-4. **No mixer change:** it places lines by their frame-top codes plus `disp_v_offset`, and the
-   display window is the smaller of the raster and the stream, so 480 scaled lines on a 480-line
-   raster just fit.
+4. **No mixer change:** it places lines by their frame-top codes plus `disp_v_offset`.
+   ⚠ **Corrected 2026-11-09:** "the display window is the smaller of the raster and the stream"
+   was true at 480p only. On an interlaced raster `sync_gen` compared `vertical_resolution`
+   unhalved, so the field window was the stream's alone, and DE ran through vsync (fixed in
+   `syncgen.v`, see the CRT first-look entry under "Not done yet").
 
 **Risks:**
 
@@ -231,6 +233,75 @@ exact. The horizontal path (`disp_hstretch` Crop, SIF fill) is untouched.
 - **Before step 2,** a film picture on the 59.94 field raster got 2:2:2:4 (pair re-scan), not
   3:2. Progressive analog (480p) always got 3:2 from the due test, since 23.976 pictures meet
   59.94 frames at 2.5 refreshes each.
+
+## Phase 4 plan: NTSC→PAL on direct analog (agreed 2026-11-09)
+
+The mirror of Phase 3: an NTSC disc with `Standard Convert = To PAL` on an analog output plays
+4.3 % fast on the plain PAL raster, 576i or 576p as `Video Output` says, with `disp_vscale`
+scaling the picture up. Reused unchanged: `std_rate` mode 2 (1001/960) and its NCO trim, the
+per-disc decision and `std_conv_wait`, conversion over passthrough, the native 576i/576p
+modelines, composite sync, and Main's Y/C setup (it picks a PAL burst from the measured rate).
+
+**Decisions (maintainer, 2026-11-09):**
+
+- **Upscale with a second line buffer in `disp_vscale`** (one 1024 x 32 bank, 3 to 4 M10K; 33 free), not
+  `resample_addrgen` sending every fifth line twice. The addrgen route costs no M10K but
+  touches the module that has broken most often and adds display reads.
+- **True 30i loses 1 picture in 5,** accepted, as on the scaler path. The drop ceiling
+  (`DROP_COOL`, about 6/s) is raised only while converting, because the scaler path rides at
+  that ceiling with the picture 60 to 105 ms behind the sound.
+- **Both 576i and 576p.**
+- **Every picture is film,** as for To NTSC: 2 fields a picture, the disc's `repeat_first_field`
+  ignored. NTSC film (23.976 sped up to 25) then plays as PAL film does.
+
+| Analog Aspect | Scale | Lines |
+|---|---|---|
+| Fit / Crop | 6/5 up | 480 → 576, 240 → 288 per field |
+| Letterbox (16:9 on 4:3) | 9/10 down | 480 → 432 |
+
+**Implementation:**
+
+1. **`dvd/disp_vscale.sv`:** ratio 3 = 6/5 and ratio 4 = 9/10. The 9/10 step (10/9 of a source
+   line) is not a whole number of sixtieths, so the remainder unit goes to **180ths** (every
+   existing step and phase is a multiple of 3 there; the weight table must stay bit-identical
+   for ratios 0 to 2). An upscale emits two output lines from one source pair about once in
+   six. The second line buffer keeps the incoming line, so the second output reads both
+   buffers with no input arriving; flow control must let the output side run ahead of the
+   input, which today's "one output while receiving one input" design does not. Bottom-field
+   phase: at S = 5/6 a bottom-field line lands at `i·S − 1/12`, and at 10/9 `+1/18`. The sign
+   matters: a negative phase is clamped to source line 0, and that clamp needs a bench arm.
+2. **The display window must grow to 576.** `sync_gen` bounds the field by the stream height,
+   so a 480-line stream on 576i would show 240 lines a field and black below: the 2026-11-09
+   bug in reverse. `mpeg2video`'s `eff_vertical_size` already doubles the height for the SIF
+   fill; it reports 576 under the upscale (432 under Letterbox is inside 480, so no change).
+3. **`dvd/emu.sv`:** `std_conv_an` also engages for an NTSC disc with To PAL. `ov_pal` must
+   mean "the raster is PAL" in both directions (today it can only clear). `disp_fps` 47
+   (47.95 refreshes per authored second; rounded down so a still can only under-hold),
+   `half_scan` for a 50 Hz field in sped-up ticks, the mixer's `v_bar`/`v_band` and
+   `disp_v_offset` for 432 between bars (72).
+4. **Cadence in `resample_addrgen`:** a To PAL picture always gets two fields, top first, with
+   `repeat_first_field` ignored; `disp_sched` keeps the true flags as for To NTSC.
+5. **Overlays:** `crt_ov_map` gets the 6/5 and 9/10 inverses (with the bottom-field phase), and
+   `sub_anchor` moves 1:1 subtitles by 6/5.
+6. **Drops:** the drop rate limit is raised while converting, so 6.25 drops a second don't hold
+   the picture behind the sound.
+
+**Verification:**
+
+- Benches with `--red` arms: 6/5 and 9/10 golden blends, field and frame, both field phases;
+  a `crt_syncgen_tb` phase with a 480-line stream on the 576i window (288 lines a field, no DE
+  in vsync); 2:2 cadence with `rff` set on alternate pictures; the drop limit while converting.
+- Rig, against a control build: the RetroTINK through the capture card for 576i/50 Hz, colour
+  on composite and the MiSTer OSD; a 720×576 screenshot; 0 lates on film, 2-field pickups from
+  `--telem-fast-ms`, `pic_max`; MEN_IN_BLACK (soft telecine with a 30i menu), BBB_NTSC,
+  ULTIMATE_T2 (DTS), ROGER (30i) once the library share is back.
+- The maintainer's look on a CRT.
+
+**Risks:**
+
+- **Decode pacing:** 31.25 decodes a second, 4 % above native NTSC. Display reads are 240 source
+  lines a field, below native PAL's 288, so the display side should be lighter than a PAL disc.
+- **Flow control in `disp_vscale`** is the one piece with no precedent in the tree.
 
 ## Not done yet
 

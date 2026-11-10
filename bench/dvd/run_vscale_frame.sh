@@ -14,6 +14,8 @@
 #   frame_fit   vscale_en = 0: frame scans pass through untouched.
 #   toggle      a Letterbox change landing between a frame's line 0 and line 1 takes effect
 #               on the NEXT scan, in both directions.
+#   *_r3, *_r4  Standard Convert To PAL: 6/5 UP (replay lines, the bottom field's clamp, the
+#               tail) and 9/10, with exact line counts (docs/standard_convert.md Phase 4).
 set -u
 cd "$(dirname "$0")/../.."
 OUT=.sim/vscale_frame; mkdir -p "$OUT"
@@ -65,6 +67,14 @@ green_arms() {   # green_arms <sim> <prefix> <expect>
   run "$sim" "${p}field_r0_cf"   "$w" +case=field_r +ratio=0 +h=240 +lines=180
   run "$sim" "${p}rtoggle"       "$w" +case=rtoggle
   run "$sim" "${p}rtoggle_bp"    "$w" +case=rtoggle +bp=1
+  # To PAL (2026-11-09): 6/5 UP (480 -> 576, 240 -> 288 a field) and 9/10 (480 -> 432, 240 -> 216)
+  run "$sim" "${p}frame_r3"      "$w" +case=frame_r +ratio=3 +lines=576
+  run "$sim" "${p}frame_r3_bp"   "$w" +case=frame_r +ratio=3 +lines=576 +bp=1
+  run "$sim" "${p}field_r3"      "$w" +case=field_r +ratio=3 +lines=288
+  run "$sim" "${p}field_r3_bp"   "$w" +case=field_r +ratio=3 +lines=288 +bp=1
+  run "$sim" "${p}frame_r4"      "$w" +case=frame_r +ratio=4 +lines=432
+  run "$sim" "${p}field_r4"      "$w" +case=field_r +ratio=4 +lines=216
+  run "$sim" "${p}field_r4_bp"   "$w" +case=field_r +ratio=4 +lines=216 +bp=1
 }
 
 echo "== disp_vscale frame path: GREEN arms"
@@ -97,13 +107,13 @@ if [ "${1:-}" = "--red" ]; then
   if mutate M4_row1_on_fields 's/(e_line_second \&\& scan_frame) ? ROW_1_COL_0/e_line_second ? ROW_1_COL_0/'; then
     run mut_M4_row1_on_fields M4_row1_on_fields fail +case=field_lb
   else fail=1; fi
-  # M5: the 5/6 step off by one sixtieth (drift down the picture)
-  if mutate M5_r1_step "s/(scan_ratio == 2'd1) ? 6'd12/(scan_ratio == 2'd1) ? 6'd13/"; then
+  # M5: the 5/6 step off by three 180ths, i.e. one sixtieth (drift down the picture)
+  if mutate M5_r1_step "s/(scan_ratio == 3'd1) ? 8'd36 /(scan_ratio == 3'd1) ? 8'd39 /"; then
     run mut_M5_r1_step M5_r1_step_frame fail +case=frame_r +ratio=1 +lines=480
     run mut_M5_r1_step M5_r1_step_r2 pass +case=frame_r +ratio=2 +lines=360   # other ratios untouched
   else fail=1; fi
   # M6: no bottom-field phase (the bob the plan fixes); the frame path never uses it
-  if mutate M6_no_bot_phase "s/: (h_pos == ROW_1_COL_0) ? bot_phase : 6'd0;/: 6'd0;/"; then
+  if mutate M6_no_bot_phase "s/: (h_pos == ROW_1_COL_0) ? bot_phase : 8'd0;/: 8'd0;/"; then
     run mut_M6_no_bot_phase M6_no_bot_phase fail +case=field_r +ratio=1 +lines=240
     run mut_M6_no_bot_phase M6_no_bot_phase_frame pass +case=frame_r +ratio=1 +lines=480
   else fail=1; fi
@@ -112,12 +122,44 @@ if [ "${1:-}" = "--red" ]; then
     run mut_M7_live_ratio M7_live_ratio fail +case=rtoggle
   else fail=1; fi
   # M8: weight without its rounding term (every non-integer blend lands one LSB low)
-  if mutate M8_weight_floor "s/\* 14'd273 + 14'd32;/* 14'd273;/"; then
+  if mutate M8_weight_floor "s/\* 15'd91 + 15'd32;/* 15'd91;/"; then
     run mut_M8_weight_floor M8_weight_floor fail +case=field_r +ratio=2 +lines=180
   else fail=1; fi
   # M9: ratio 0 given a bottom phase (3/4 must stay bit-identical in this change)
-  if mutate M9_r0_phase "s/(h_ratio == 2'd2) ? 6'd18 : 6'd0;/(h_ratio == 2'd2) ? 6'd18 : 6'd10;/"; then
+  if mutate M9_r0_phase "s/(h_ratio == 3'd4) ? 8'd10 : 8'd0;/(h_ratio == 3'd4) ? 8'd10 : 8'd30;/"; then
     run mut_M9_r0_phase M9_r0_phase fail +case=field_lb
+  else fail=1; fi
+  # --- To PAL (2026-11-09) ---
+  # U1: no replay: a pair never gives its second line (the upscale comes out one line in six short)
+  if mutate U1_no_replay "s/wire        rp_pair_due = scan_up \& up_room/wire        rp_pair_due = 1'b0 \& up_room/"; then
+    run mut_U1_no_replay U1_no_replay fail +case=frame_r +ratio=3 +lines=576
+    run mut_U1_no_replay U1_no_replay_r4 pass +case=field_r +ratio=4 +lines=216   # downscales never replay
+  else fail=1; fi
+  # U2: the replay blends the stale incoming pixel instead of buf2's line
+  if mutate U2_replay_b "s/s3_rep ? b_q\[31:24\] : s3_by/s3_by/"; then
+    run mut_U2_replay_b U2_replay_b fail +case=field_r +ratio=3 +lines=288
+  else fail=1; fi
+  # U3: no bottom-field clamp: the bottom field starts at 0 like the top (a bob on fine detail)
+  if mutate U3_no_clamp "s/wire        e_upre       = h_ft ? (h_up \& (h_pos == ROW_1_COL_0)/wire        e_upre       = h_ft ? (1'b0 \& (h_pos == ROW_1_COL_0)/"; then
+    run mut_U3_no_clamp U3_no_clamp fail +case=field_r +ratio=3 +lines=288
+    run mut_U3_no_clamp U3_no_clamp_frame pass +case=frame_r +ratio=3 +lines=576   # a frame has no bottom start
+  else fail=1; fi
+  # U4: no tail: the scan stops short of the bottom of the raster
+  if mutate U4_no_tail "s/wire        rp_tail_due = scan_up \& up_room/wire        rp_tail_due = 1'b0 \& up_room/"; then
+    run mut_U4_no_tail U4_no_tail fail +case=frame_r +ratio=3 +lines=576
+  else fail=1; fi
+  # U5: the tail unbounded by N*6/5 (a bottom field would emit an extra line)
+  if mutate U5_unbounded "s/wire        up_room    = (emitted_cnt < up_m);/wire        up_room    = 1'b1;/"; then
+    run mut_U5_unbounded U5_unbounded fail +case=field_r +ratio=3 +lines=288
+  else fail=1; fi
+  # U6: 9/10 without its bottom phase; the frame path never uses it
+  if mutate U6_r4_phase "s/(h_ratio == 3'd4) ? 8'd10 : 8'd0;/(h_ratio == 3'd4) ? 8'd0 : 8'd0;/"; then
+    run mut_U6_r4_phase U6_r4_phase fail +case=field_r +ratio=4 +lines=216
+    run mut_U6_r4_phase U6_r4_phase_frame pass +case=frame_r +ratio=4 +lines=432
+  else fail=1; fi
+  # U7: the replay reads the wrong linebuf bank for `a` (the tail's a = b broken)
+  if mutate U7_tail_bank "s/{rp_tail ? wr_bank : rd_bank, rp_col\[9:0\]}/{rd_bank, rp_col[9:0]}/"; then
+    run mut_U7_tail_bank U7_tail_bank fail +case=frame_r +ratio=3 +lines=576
   else fail=1; fi
   score
 fi

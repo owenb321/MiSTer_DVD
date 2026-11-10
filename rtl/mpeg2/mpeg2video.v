@@ -83,7 +83,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
              soft_flush,                                           // DVD-FORK (mount soft reset): watchdog-equivalent decode-pipeline reset on a file mount
              disp_vscale_mode,                                     // DVD-FORK (CRT anamorphic vscale): 0=fit 1=letterbox(dormant) 2=SIF 2x line repeat
              disp_vscale_en,                                       // DVD-FORK (CRT anamorphic letterbox AA): enable downstream disp_vscale 2-tap blend
-             disp_vscale_ratio,                                    // DVD-FORK (Standard Convert): 0 = 3/4, 1 = 5/6, 2 = 5/8
+             disp_vscale_ratio,                                    // DVD-FORK (Standard Convert): 0 = 3/4, 1 = 5/6, 2 = 5/8, 3 = 6/5, 4 = 9/10
              disp_hcrop_en,                                        // DVD-FORK (CRT anamorphic horizontal crop / pan-scan)
              disp_hfill_en,                                        // DVD-FORK FIX (SIF analog fill): stretch sub-D1 lines to the 720 raster
              film24,                                               // DVD-FORK (Film 24p Out): 1 frame/refresh, ascal does the 3:2
@@ -281,8 +281,9 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * (Fit/Crop bit-identical). Also gates the mixer's letterbox bar offset below. */
   input            disp_vscale_en;
   /* DVD-FORK (Standard Convert, docs/standard_convert.md): disp_vscale's ratio. 0 = 3/4 (the
-   * Letterbox it always was), 1 = 5/6 (576 -> 480), 2 = 5/8 (576 -> 360). Quasi-static. */
-  input       [1:0]disp_vscale_ratio;
+   * Letterbox it always was), 1 = 5/6 (576 -> 480), 2 = 5/8 (576 -> 360), 3 = 6/5 (480 -> 576,
+   * To PAL), 4 = 9/10 (480 -> 432, To PAL Letterbox). Quasi-static. */
+  input       [2:0]disp_vscale_ratio;
   /* DVD-FORK (CRT anamorphic horizontal crop / pan-scan): 1 => the resample reads only the
    * centre ~3/4 of the columns and the mixer stretches them to full raster width (Crop
    * mode). 0 outside Crop => full width, mixer stretch off (bit-identical). */
@@ -1758,7 +1759,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * pass-through unless disp_vscale_en (Fit/Crop bit-identical). See dvd/disp_vscale.sv. */
   disp_vscale disp_vscale (
     .clk(clk), .clk_en(1'b1), .rst(sync_rst),
-    .vscale_en(disp_vscale_en), .vscale_ratio(disp_vscale_ratio),
+    .vscale_en(disp_vscale_en), .vscale_ratio(disp_vscale_ratio), .src_lines(vertical_size[11:0]),
     .scan_start(still_scan_start), .scan_half(still_scan_half),   // DVD-FORK (pause field still)
     /* from field_blend (= resample unless a scan is blended) */
     .in_y(y_fb), .in_u(u_fb), .in_v(v_fb), .in_osd(osd_fb),
@@ -1823,7 +1824,12 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * No N'() size casts (Quartus 17 mangles them — docs/mpeg1.md). */
   wire        sif_v2x = disp_vscale_mode[1];
   wire [13:0] eff_horizontal_size = disp_hfill_en ? 14'd720 : horizontal_size;
-  wire [13:0] eff_vertical_size   = sif_v2x ? {vertical_size[12:0], 1'b0} : vertical_size;
+  /* DVD-FORK (Standard Convert To PAL): disp_vscale scales a 480-line picture UP to the 576-line
+   * PAL raster (6/5), or to 432 between bars (9/10). The window must be the raster's 576, or
+   * sync_gen bounds each field at 240 (the 2026-11-09 window bug, the other way round). Only a
+   * 480-line stream is converted, so the constant is exact. */
+  wire        conv_up = disp_vscale_en & ((disp_vscale_ratio == 3'd3) | (disp_vscale_ratio == 3'd4));
+  wire [13:0] eff_vertical_size   = conv_up ? 14'd576 : sif_v2x ? {vertical_size[12:0], 1'b0} : vertical_size;
 
   /* DVD-FORK FIX (single-raster analog, 2026-09-03): the modeline COPIES inside
    * syncgen_intf used to sit on dot_rst, which pulses on every WATCHDOG expiry and
@@ -1884,9 +1890,12 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * NTSC raster, so their bars are the RASTER's: none at 5/6 (480 fills it), (480 - 360)/2 = 60
    * at 5/8. vertical_size/8 would give 72, the PAL 3/4 bar. Only a 576-line source is converted
    * on this path; another height is top-aligned and the display window clips it. */
+  /* To PAL: none at 6/5 (576 fills the raster), (576 - 432)/2 = 72 at 9/10. */
   wire [11:0] disp_v_offset = ~disp_vscale_en               ? 12'd0 :
-                              (disp_vscale_ratio == 2'd1)   ? 12'd0 :
-                              (disp_vscale_ratio == 2'd2)   ? 12'd60 :
+                              (disp_vscale_ratio == 3'd1)   ? 12'd0 :
+                              (disp_vscale_ratio == 3'd2)   ? 12'd60 :
+                              (disp_vscale_ratio == 3'd3)   ? 12'd0 :
+                              (disp_vscale_ratio == 3'd4)   ? 12'd72 :
                                                               {1'b0, eff_vertical_size[13:3]};
 
   /* DVD-FORK (CRT anamorphic horizontal crop / pan-scan): the mixer stretches the cropped

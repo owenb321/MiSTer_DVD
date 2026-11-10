@@ -110,7 +110,7 @@ module pause_still_tb;
   wire       vs_wr, hs_in_almost_full;
   disp_vscale disp_vscale (
     .clk(clk), .clk_en(1'b1), .rst(rst),
-    .vscale_en(lb != 0), .vscale_ratio(2'd0), .scan_start(scan_start), .scan_half(scan_half),
+    .vscale_en(lb != 0), .vscale_ratio(3'd0), .src_lines(12'd480), .scan_start(scan_start), .scan_half(scan_half),
     .in_y(px_y), .in_u(px_u), .in_v(px_v), .in_osd(px_osd),
     .in_pos(px_position), .in_wr(px_wr_en), .in_almost_full(px_wr_almost_full),
     .out_y(vs_y), .out_u(vs_u), .out_v(vs_v), .out_osd(vs_osd),

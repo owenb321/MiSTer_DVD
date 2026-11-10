@@ -84,9 +84,12 @@ PYEOF
     fi
   }
   RED_FAIL=0
-  ov_mut "R1 no bottom-field phase" crt_ov_map "lr       <= (v_pos_in == v_bar) ? 6'd0 : l_phase;" "lr       <= 6'd0;" T10
-  ov_mut "R2 nearest tap one late"  crt_ov_map "(lr >= 6'd30) ? vstep" "(lr >= 6'd31) ? vstep" T10
-  ov_mut "R3 5/6 step off by 1/60"  crt_ov_map "(ratio == 2'd1) ? 6'd12 : (ratio == 2'd2) ? 6'd36 : 6'd20;" "(ratio == 2'd1) ? 6'd13 : (ratio == 2'd2) ? 6'd36 : 6'd20;" T10
+  ov_mut "R1 no bottom-field phase" crt_ov_map "lr       <= l_bot ? l_phase : 8'd0;" "lr       <= 8'd0;" T10
+  ov_mut "R2 nearest tap one late"  crt_ov_map "(lr >= 8'd90) ? vstep" "(lr >= 8'd91) ? vstep" T10
+  ov_mut "R3 5/6 step off by 1/60"  crt_ov_map "(ratio == 3'd1) ? 8'd36  :" "(ratio == 3'd1) ? 8'd39  :" T10
+  # To PAL (2026-11-09): 6/5's bottom-field clamp, and its step of less than one line
+  ov_mut "R8 no 6/5 bottom clamp"   crt_ov_map "l_pre    <= l_bot & (ratio == 3'd3);" "l_pre    <= 1'b0;" T10
+  ov_mut "R9 6/5 steps a whole line" crt_ov_map "wire        l_int   = (ratio != 3'd3);" "wire        l_int   = 1'b1;" T10
   ov_mut "R4 offset not in the read" spu_decode "bmp_rd <= bmp[q_row_base + q_off_base + {{(ABW-12){1'b0}}, q_x}];" "bmp_rd <= bmp[q_row_base + {{(ABW-12){1'b0}}, q_x}];" T11
   ov_mut "R5 area test unoffset"     spu_decode "(q_y_eff >= c_sy) && (q_y_eff <= c_ey);" "(q_y >= c_sy) && (q_y <= c_ey);" T11
   ov_mut "R6 no sentinel guard"      spu_decode "wire in_y = (q_y != 12'hFFF) && " "wire in_y = " T11

@@ -135,7 +135,7 @@ module field_blend_chain_tb;
   wire       vs_wr, hs_in_almost_full;
   disp_vscale disp_vscale (
     .clk(clk), .clk_en(1'b1), .rst(rst),
-    .vscale_en(vscale_r), .vscale_ratio(2'd0), .scan_start(scan_start), .scan_half(scan_half),
+    .vscale_en(vscale_r), .vscale_ratio(3'd0), .src_lines(12'd480), .scan_start(scan_start), .scan_half(scan_half),
     .in_y(fb_y), .in_u(fb_u), .in_v(fb_v), .in_osd(fb_osd),
     .in_pos(fb_pos), .in_wr(fb_wr), .in_almost_full(vs_in_almost_full),
     .out_y(vs_y), .out_u(vs_u), .out_v(vs_v), .out_osd(vs_osd),
