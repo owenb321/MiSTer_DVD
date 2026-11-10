@@ -377,6 +377,29 @@ video treatment, which is no worse than dropping pictures.
   drives `fa_cls` so film must ignore it).
 - Not changed: the scaler (HDMI) path still drops one picture in five; it shows woven frames.
 
+**Timing.** The first fit (SEED 7) read clk_dec 85.79/83.67 MHz: the replay mux sat in front of
+the blend multiply. Choosing the replay's `b` one stage earlier (`s3_b*`) moved it off that path;
+SEED 7 then rolled worse on both clocks (placement), and a sweep found SEED 8: clk_dec
+89.02/86.81, clk_mem 95.96/98.17 MHz (38,501 ALMs, 92 %; 523 M10K; 90 DSP).
+
+**HW, 2026-11-10** (`.236`, `dev-stdconvert4`, Video Output = Interlaced, To PAL; RetroTINK on
+composite through the capture card).
+- MiB's 30i menu: 30.77 pictures/s on 50.0 fields (ideal 31.25), 1.1 lates/s and 0.49 drops/s,
+  against 25.0 pictures/s, 12.5 lates/s and 6.23 drops/s on `dev-stdconvert3`. `disp_lag` sits at
+  −2 to −21 ms (−60 to −85 before). The 10 ms trace shows the lateness walk as designed: lag steps
+  −2.1, −10.7, −19.0, −6.4, −14.8 ms, i.e. +751 ticks after a two-field picture and −1126 after a
+  one-field one, never past 19 ms.
+- **The residual drops are the decoder, not the walk.** Every drop is 2 lates + 1 drop from the
+  frame-drop governor (decoder starvation), each just after a ONE-field pickup, with the decoder
+  pipe-stalled (`dec_back` high, `dec_disp` 0) across it. A one-field picture gives the decoder one
+  field (20 ms) to have the next picture ready, where native 30i gives it 33 ms; about 1 in 25 of
+  those misses. Control, same disc and build, conversion Off: 29.98 pictures/s, 0 lates, 0 drops.
+  Not chased further (the fix would be letting the decoder run a picture further ahead, an
+  architectural change); the walk itself never asks for a drop.
+- Film unchanged: BBB_NTSC.VOB 50.0 fields/s, 25.0 pictures/s, 0 lates, 0 drops.
+- 576i at 50 Hz, colour, and the MiSTer OSD over the picture on composite (RetroTINK capture).
+- ⏳ By eye on a CRT: the field-skip motion and the even softness.
+
 ## Not done yet
 
 - Phase 3 step 1 is wired (2026-11-08): `std_conv_an` (PAL→NTSC with `interlaced_eff | analog_want`)

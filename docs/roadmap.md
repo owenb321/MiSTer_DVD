@@ -715,8 +715,10 @@ pushing both branches.**
 - [~] NTSC→PAL on direct analog (Phase 4, agreed 2026-11-09): `disp_vscale` 6/5 up and 9/10 (second
   line buffer), the 576 window, the overlay inverses, 2:2 for every picture, catch-up drops at twice
   the rate while converting (30i needs 6.25/s). Rig 2026-11-09: 576i, colour, OSD, 2:2, 0 lates on
-  film; 30i menus ride 30–50 ms behind (the drop threshold). ⏳ By eye on a CRT; decide whether
-  to lower the drop threshold while converting.
+  film. Phase 4b (2026-11-10): field-accurate 30i, one source field in five skipped; rig: MiB's
+  30i menu 0.49 drops/s (was 6.23), lag −2 to −21 ms (was −60 to −85); the residual drops are
+  decoder starvation after a one-field picture. ⏳ By eye on a CRT. Optional: let the decoder run a
+  picture further ahead to remove the last drops.
 - Deferred: inverse telecine for hard-telecined NTSC.
 
 ### ⏳ 2026-10-01 spec-audit: DVD Demystified 3rd-edition follow-ups (items 1–8 and 10b ✅; the rest re-ranked 2026-10-06, PR #165)

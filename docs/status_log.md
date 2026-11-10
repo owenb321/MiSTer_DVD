@@ -38,7 +38,11 @@ video "look and sound good" converted. **Phase 4, To PAL on a CRT (agreed 2026-1
 2:2 for every picture, catch-up drops at twice the rate while converting. **HW 2026-11-09:** 576i,
 colour and the OSD on composite through the RetroTINK, 25.0 pictures on 50.0 fields, 2:2 measured,
 0 lates on film; 30i at 6.23 drops/s, 30–50 ms behind (the drop threshold, not the ceiling).
-**Refuted:** that raising the drop ceiling fixes the 30i lag. **Refuted:** that `disp_sched` needed a 1440-tick field period.
+**Phase 4b, field-accurate 30i on To PAL (2026-11-10):** every raster field shows the newest source
+field (one in five skipped), chosen per picture from its lateness (`fa_cls`). Rig: MiB's 30i menu
+30.77 pictures/s, 0.49 drops/s and 1.1 lates/s (was 6.23 and 12.5), lag −2 to −21 ms; the residual
+drops are decoder starvation after a one-field picture (20 ms to decode the next), not the walk.
+Film unchanged (0 lates). SEED 8. **Refuted:** that raising the drop ceiling fixes the 30i lag. **Refuted:** that `disp_sched` needed a 1440-tick field period.
 Full account: `standard_convert.md`.
 
 ## Read-ahead: a jump past a full ring's head deadlocked (2026-11-01, found in the v0.10.0 smoke)
