@@ -327,3 +327,215 @@ clock, on the DAC word only:
 **Status:** evaluated 2026-10-06. The as-is port was ruled out (weaker than `dac_dither`).
 The faster-clock variant is not scheduled; revisit only if the CRT still shows dither
 texture worth removing.
+
+---
+
+## Cached thumbnails for the scrub preview
+
+**Idea:** while a held Fast Fwd / Rewind scrub moves its cursor, show a small picture of the
+content at the cursor, from a set of thumbnails decoded once per disc and kept in memory.
+Today the video freezes and only the seek bar moves (`dvd/scrub_ctrl.sv`).
+
+**Why it is worth it:** the scrub's tiers run at about 15 / 60 / 240 / 960 content-seconds per
+second (`docs/transport_hud.md`), so nobody can tell where they are from the clock alone at the
+fast end. A thumbnail answers that at every speed, and the release seek stays the one exact
+TMAP seek it is now.
+
+**Why cached, not decoded live.** The first answer considered was a live I-frame preview: splice
+the I-frame at the cursor into the decoder without flushing, the same engine trick play would
+need (`docs/dvd_nav.md` §2d). It is the regime the 2026-07-10 HW rounds proved fatal (flush and
+re-lock per hop: black frames, watchdog resyncs), made safe only by never flushing and by
+keeping one or two pictures in flight, and it needs its own HW round. Finding the I-frames was
+never the problem: `VTS_TMAP` gives each VOBU's address, and the I-frame follows the NAV pack,
+ending at `dsi_1stref_ea`. Cached thumbnails avoid the fabric decoder entirely. Trick play at
+×2 to ×8 still needs the splice engine; that is a separate feature.
+
+**Rough approach:**
+- **Produced by Main, not the fabric.** The fabric decoder has one set of reference frames and
+  one display schedule, so a side decode means a second context in upstream `rtl/mpeg2`.
+  A low-priority Main thread (CPU 1; the read-ahead worker is on CPU 0, and `user_io_poll()`
+  must never block) does, for each grid point: a TMAP lookup, a read of the NAV pack and the
+  I-frame, a software decode (libmpeg2 or FFmpeg's), a downscale, and a write into a DDR3 table.
+  CSS is already handled by Main's read path.
+- **Size:** 160×90 at 4:2:0 is ~22 KB, so one every 10 s of a 2 h film (720) is ~16 MB. Full
+  720×480 frames (~518 KB each, ~373 MB) are too much. The FPGA's DDR3 half has room above the
+  core's 32 MiB window at `0x30000000` (`docs/audio_ddr_path.md`); pick a fixed region.
+- **Saved to the SD card** under the disc ID, as save states are (`savestates/DVD/<disc id>_N.ss`),
+  so a disc is indexed once and later loads are instant. Coarse grid first (one a minute),
+  then fill to every 10 s, nearest the playback position first. Unindexed stretches scrub as
+  today, cursor only.
+- **Shown in a box above the seek bar** at the cursor (the streaming-player look), not full
+  screen: a 160×90 thumbnail scaled to the whole screen looks poor. Needs a DDR3 read master
+  sharing `ram2` with the DTS codebooks through an arbiter (`docs/hw_budget_and_lessons.md`),
+  a line buffer, and a blend next to the seek bar. A DDR3 line pump measured ~190 ALM + 6 M10K,
+  so expect a few hundred ALM in all. Video is paused during a scrub, so bandwidth is not the
+  issue.
+
+**Physical discs.** Done naively, the index pass thrashes the drive and starves playback.
+Scheduled, it does not:
+- Only fetch while the read-ahead ring is full: 32 MB, ~25 s at the DVD maximum bitrate
+  (`docs/physical_disc.md`). Slow reads after a seek measured 100–313 ms on the rig's drive,
+  so a thumbnail costs an estimated 0.2–0.6 s (seek away, ~100 KB, seek back). A batch of
+  10–15 per full ring leaves margin.
+- Batch in LBA order (short forward hops), finish one layer before crossing to the other, and
+  index freely while paused, in a menu or idle.
+- Once per disc ever, thanks to the SD-card cache.
+- Unmeasured estimate: a full 10 s grid in about 10 minutes of playback, the coarse grid in
+  the first couple. Measure on the rig: batch timing, the ring's lowest fill, `lates`.
+- The real cost is noise: the drive stays spun up. Wear is not a concern (libdvdcss key
+  cracking at mount is already seek-heavy). A "Scrub Previews" option could restrict physical
+  discs to pause/idle indexing, or turn it off.
+
+**Risk / cost:** a software MPEG-2 decoder in Main (licence check against Main's GPL); the
+fabric preview box at ~8 % ALM headroom; custom Main only (stock Main keeps today's scrub);
+linear files (`.mpg`, VCD) have no TMAP and would need a GOP-header scan. A new OSD option
+must land in `site/content/playback/settings.md` (`tools/docs_check.py` enforces it).
+
+**Status:** idea, chosen as the preferred direction for the scrub preview (maintainer,
+2026-11-09). Not scheduled.
+
+---
+
+## Pointer input: mouse and light guns on disc menus
+
+**Idea:** aim at a menu button and click or pull the trigger to select it. Every HLI button
+already carries its rectangle, so this is a coordinate-to-button lookup plus "select".
+libdvdnav has the same operation (`dvdnav_mouse_select`). It turns the DVD shooting games
+(Mad Dog McCree is already in the HIL suite) into light-gun games, and makes every menu
+pointable. The maintainer is on board with mouse support (2026-11-09).
+
+**Two kinds of gun:**
+1. **IR / USB guns** (Sinden, Gun4IR, AimTrak, Retro Shooter): any display, HDMI or CRT.
+   MiSTer passes them to a core as an absolute analog axis or a mouse, so they share the mouse
+   path. Cost beyond mouse support: close to nothing.
+2. **CRT light guns over SNAC** (GunCon-class, as the PSX and NES cores support): the
+   photodiode fires as the beam passes the aim point, and the core latches its own h/v
+   counters. DVD games were written for remotes and never flash a target, so the core must
+   flash one white field on the trigger, as Zapper games do. Needs user-port wiring, the
+   flash, the latch and a calibration step. Later, if asked.
+
+**Rough approach:** the aim point goes through the inverse of the current framing
+(`dvd/crt_ov_map.sv` already inverts Letterbox/Crop for the overlays) into HLI coordinates,
+then a hit test against the current button set (`dvd/nav_pci.sv`). Hovering moves the
+selection, the click activates it. Optional cursor sprite on the overlay path. `emu.sv`
+takes no mouse or analog input today.
+
+**Risk / cost:** small (a hit test over at most 36 buttons, plus input plumbing). A new
+input must land in `site/content/playback/controls.md` (`tools/docs_check.py` enforces it).
+
+**Status:** idea, maintainer interested in mouse support (2026-11-09). Not scheduled.
+
+---
+
+## CD+G karaoke graphics
+
+**Idea:** show the CD+G graphics carried in an audio CD's R–W subchannel while the CD plays.
+We already play audio CDs (physical, `.cue`/`.bin`, WAV) and have an overlay compositor.
+CD+G is 300×216 in 16 colours from a small, publicly documented command set (tile blocks,
+memory preset, border, scroll, colour tables). The maintainer called it a good candidate
+(2026-11-09).
+
+**Rough approach:** subchannel data in (raw `READ CD` with R–W subchannel from a drive,
+`.sub`/CloneCD `.img`+`.sub`+`.ccd`, or a `.cdg` sidecar next to a `.wav`/`.bin`); decode
+the commands into a 300×216×4-bit frame (~32 KB, likely M10K or DDR3); composite it scaled
+to the raster. Main could also decode the commands and write the frame, which keeps the
+fabric to a display path.
+
+**Test material:**
+- Real discs: CD+G karaoke discs (Sound Choice, Chartbuster, Pocket Songs, …) are cheap
+  second-hand.
+- The rig's drive must return raw R–W subchannel, and drives differ: **probe it first**.
+- Rips need the subchannel too (`cdrdao read-cd --read-subchan rw_raw`, or CloneCD format).
+- A synthetic generator (as `tools/dts_writer.py` is for DTS) gives benches with known
+  answers before a disc arrives.
+- ⚠ MP3+G (`.mp3` + `.cdg`) is the common file form today, and MP3 (Layer III) is far beyond
+  our MP2 decoder. Out of scope unless Main decodes the MP3.
+
+**Risk / cost:** the subchannel read path in Main (drive variance, de-interleaving and
+error correction of the R–W packs), and the overlay's M10K. CD+G mode also has CD+EG and
+the Karaoke VCD/DVD forms, which are separate.
+
+**Status:** idea, candidate feature (2026-11-09). Next step: probe the rig's drive for R–W
+subchannel reads. Not scheduled.
+
+---
+
+## VCD 2.0 playback control (PBC), driven from Main
+
+**Idea:** the menus, selection lists and segment stills of VCD 2.0 / SVCD, which karaoke and
+Asian-market VCDs rely on. `docs/vcd_svcd.md` lists "No menus / PBC / segment stills".
+
+**Why it can be conservative:** the maintainer will not give up fabric logic for this
+(2026-11-09), so the PBC engine must live in Main, as DVD-VR's navigation does. Main parses
+`PSD.VCD` / `LOT.VCD` (play lists, selection lists with number keys and
+Prev/Next/Return/Default, end lists) and tells the core which sector range to play. Number
+keys already reach the core ("Select menu button by number").
+
+**What the fabric would still need:** a "play this sector range, report its end" interface
+on the `.bin` reader, and segment stills (MPEG stills, which the decoder already holds as DVD
+menu stills; VCD 2.0's 704×480 stills need checking). Estimate: tens of ALMs. ⏳ Check how
+the raw-CD reader would take a range command before committing.
+
+**Risk / cost:** custom Main only (stock Main keeps today's linear VCD); physical VCDs and
+`.cue` images both need the range path.
+
+**Status:** idea, acceptable only as a Main-side design (2026-11-09). Not scheduled.
+
+---
+
+## DVD-VR recorder discs (already built, unmerged)
+
+Not an idea any more: implemented on branch `feature/dvd-vr` (2026-09-19), design record
+`docs/dvd_vr.md` on that branch. Main reads the UDF filesystem itself and serves the
+recordings in program order as a flat stream, with no RTL change. Host-proven against
+libudfread and dvd-vr and one real recorder IFO; ⏳ HW-confirm pending. The maintainer
+considers VR discs a real gap (2026-11-09).
+
+**Next step:** the branch is ~800 commits behind `main`, and `main/` has changed a lot since
+(the read-ahead ring among others). Rebase it, then a HIL round with a recorder image (the
+archive.org disc its doc names). Known limits are in that doc §6: no chapter or
+next-recording buttons yet, no playlists, captions stored in RDI packs not shown.
+
+---
+
+## Zoom and pan
+
+**Idea:** the 2× / 3× zoom with panning that set-top players offer.
+
+**Rough approach:** the same machinery as Crop and Letterbox with new ratios: a programmable
+ratio in `dvd/disp_hstretch.sv` (fixed 528→720 today), 2×/3× line ratios in
+`dvd/disp_vscale.sv`, pan offsets in `resample_addrgen`'s read window (whole macroblocks,
+plus an `hstretch` phase offset for smooth horizontal pan), `crt_ov_map` generalised so
+subtitles and highlights follow, and a control mode.
+
+**Cost:** today's entities (fit report, `feature/std-convert`, 2026-11-09):
+`disp_hstretch` ~246 ALM, `disp_vscale` ~359, `crt_ov_map` ~147, `resample_addrgen` ~749.
+Extending them, an estimated ~150–300 ALM, no new M10K, perhaps a DSP or two (not
+measured). The larger cost is verification: zoom against Letterbox, Crop, Standard Convert,
+240p and Interlaced.
+
+**Status:** idea, low priority (2026-11-09). Not scheduled.
+
+---
+
+## Smaller ideas from the 2026-11-09 brainstorm (unranked)
+
+- **FMV files from other consoles:** PS2 `.pss` (MPEG-2 PS + Sony ADPCM) and Sofdec `.sfd`
+  (MPEG-1 + ADX). Video is already decoded; both audio codecs are simple ADPCM, a candidate
+  fourth program on the shared audio engine.
+- **DVD-Audio LPCM tracks** (`AUDIO_TS/*.AOB`, not MLP), up to 192 kHz stereo over HDMI. Many
+  such discs are CPPM-encrypted; sweep the library first.
+- **Headphone virtual surround:** a crossfeed / binaural program for the 5.1 downmix. Pairs
+  with issue #189 (dynamic range).
+- **HDCD decoding** for audio CDs.
+- **A richer audio-CD visualiser**, our own design.
+- **"Tape mode":** an optional VHS / LaserDisc look (chroma bleed, softening, light noise) in
+  the pixel path, which sits in the crowded display region.
+
+**Ruled out (2026-11-09, maintainer):**
+- **A laserdisc arcade host:** other efforts cover laserdisc, and this core stays
+  DVD-focused.
+- **Field-sequential (HQFS) 3D with shutter glasses:** skipped. The note for anyone
+  revisiting it: those discs need interlaced output with every field shown once and in
+  order (no 3:2 repeat, Bob or Blend), and external controllers sync from the video signal,
+  so it may already work on a CRT with Video Output = Interlaced.
