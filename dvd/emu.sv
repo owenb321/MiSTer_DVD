@@ -3465,6 +3465,10 @@ subp_stream_map u_subp_map (
 // a conforming player does; showing it illegibly is our own invention.
 // Bound: 3 title PGCs in a 221-disc/22,733-PGC sweep (see subp_stream_map.sv).
 wire sp_user_absent = sp_stream_absent & ~(menu_sp_ctx | vm_owns_route | force_43_subp | fs_route);
+// The USER's stream is the one displayed: the complement of sp_track_eff's select
+// below. Read by the overlay context (sp_ctx_mapped_w). The same four terms as that
+// mux -- tools/check_subp_ctx_wiring.py proves the two sets equal.
+wire sp_user_path   = ~(menu_sp_ctx | vm_owns_route | force_43_subp | fs_route);
 
 // VM streams ALWAYS map (in-title HLI). The user path maps only under Force 4:3 Subpics
 // (a user-selected commentary track -> its letterbox physical substream, MiB logical 3 ->
@@ -6444,11 +6448,21 @@ wire [11:0] sp_qx = il_eff ? {1'b0, sp_qx_dot[11:1]} : sp_qx_dot;
 //   - the SIF fill stays FULLY mapped in every context (sub-720 SPU bitmaps are
 //     authored in SIF source space — raw coords would draw them quarter-screen);
 //   - a disc whose VM SetSTN-forces a real dialogue-subtitle stream rides
-//     vm_owns_route and keeps the mapped (nearest) path — revisit if reported.
+//     vm_owns_route and keeps the mapped path.
 // hl_btns_armed (not hl_on_w) so the mapped space covers the arm→fetch window
-// AND the O[2] dbg_rectb gate: whenever any rect can draw, the space is mapped,
-// by construction. in_title_hli is subsumed by hl_btns_armed (its definition).
-wire sp_ctx_mapped_w = hl_btns_armed              // any armed HLI (white rabbit included)
+// AND the O[2] dbg_rectb gate: whenever any rect can draw over disc-chosen art, the
+// space is mapped, by construction. in_title_hli is subsumed by hl_btns_armed (its
+// definition).
+// DVD-FORK FIX (the Matrix, 2026-11-11): EXCEPT over the USER's own stream
+// (sp_user_path). The Matrix arms its white-rabbit HLI in 146 VOBUs of the feature,
+// and since issue #178 (PR #192) the rabbit no longer takes over a stream the user
+// switched on -- so English via the Subtitle button flipped raw 1:1 -> mapped
+// nearest-tap at every rabbit window: stair-stepped, 3/4 the size and moved up, then
+// back. The rabbit art (FSTA_DSP on its own stream) is not even displayed then. Art
+// and rect stay one space (both raw), as §9a requires; dialogue has no imagery to
+// line up with. The forced route (subtitles off), where the rabbit IS drawn, keeps
+// the mapped space. This is the §9a "theoretical residue" refinement.
+wire sp_ctx_mapped_w = (hl_btns_armed & ~sp_user_path) // an armed HLI over disc-chosen art
                      | (menus_on && menu_active)  // menu-domain button art
                      | sp_menu_early              // Scene It: in-title menu art pre-arm
                      | vm_owns_route              // SetSTN-forced SP (art shows via this pre-arm)
