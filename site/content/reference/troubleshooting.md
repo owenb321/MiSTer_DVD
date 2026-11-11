@@ -544,6 +544,14 @@ subtitle setting, usually to translate a few lines of foreign-language dialogue,
 set-top player shows them too. They come from the subtitle track the disc chose, or from its
 first track if it chose none. Turn subtitles on with **B8** to see the full track instead.
 
+### Subtitles are cut off at the sides or bottom of a CRT with Analog Aspect on Crop
+
+With **Crop**, the core shows the disc's pan-and-scan subtitles, which some discs author wide
+and low enough for a CRT's overscan to hide their ends. That is the disc, and the same
+happens with Standard Convert on or off. **Auto** or **Letterbox** shows the disc's other
+subtitles, which usually sit well inside the screen. See
+[Analog Aspect](../video/analog-crt.md#analog-aspect).
+
 ### A menu button highlight or a subtitle graphic is drawn wrongly
 
 !!! info "Fixed in v0.7.0"

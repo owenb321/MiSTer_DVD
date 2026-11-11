@@ -132,6 +132,13 @@ overscan would hide it. On the few discs that carry a
 that can make it visible. It is on the disc, and a set-top player letterboxing the same
 disc puts it in the same place.
 
+Crop also changes which subtitle stream is shown: a disc can carry separate subtitles for a
+widescreen, letterboxed or pan-and-scan TV, and Crop shows the pan-and-scan ones, as a
+set-top player does. Some discs author those wide and low, with long lines running almost
+to the edges of the frame, so a CRT's overscan can cut off their ends or their bottom line.
+That is the disc, not the setting. If it happens, **Auto** or **Letterbox** shows the disc's
+other subtitles, which usually sit well inside the screen.
+
 For movies, **Auto never selects Crop** — it chooses between Letterbox and Fit, and Crop
 is a deliberate manual choice. Disc menus can override that choice, as described below.
 
