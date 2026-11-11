@@ -53,8 +53,8 @@ def main():
     # The window is min(decoded size, raster resolution), with a size of 0 (idle, or just
     # after a flush) meaning the full raster -- syncgen's own rule, replicated.
     want("act_vres",
-         r"wire \[11:0\] act_vres += p240_eff \? \(pal_eff \? 12'd288 : 12'd240\) "
-         r": \(pal_eff \? 12'd576 : 12'd480\);",
+         r"wire \[11:0\] act_vres += p240_eff \? \(ov_pal \? 12'd288 : 12'd240\) "
+         r": \(ov_pal \? 12'd576 : 12'd480\);",
          "act_vres must be the modeline's ACTIVE COUNT (240/288 on the progressive "
          "raster, 480/576 otherwise) -- it is the resolution half of the window")
 

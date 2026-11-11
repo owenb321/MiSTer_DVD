@@ -112,7 +112,7 @@ module field_blend_chain_tb;
     .sched_due(1'b1), .sched_next_due(1'b1),
     .still_en(1'b0), .scan_start(scan_start), .scan_half(scan_half),
     .blend_en(blend_en), .scan_blend(scan_blend),
-    .bob_en(bob_en), .scan_bob(scan_bob), .scan_bob_bot(scan_bob_bot)
+    .bob_en(bob_en), .std_cad(1'b0), .scan_bob(scan_bob), .scan_bob_bot(scan_bob_bot)
   );
 
   wire [7:0] fb_y, fb_u, fb_v, fb_osd;
@@ -135,7 +135,7 @@ module field_blend_chain_tb;
   wire       vs_wr, hs_in_almost_full;
   disp_vscale disp_vscale (
     .clk(clk), .clk_en(1'b1), .rst(rst),
-    .vscale_en(vscale_r), .scan_start(scan_start), .scan_half(scan_half),
+    .vscale_en(vscale_r), .vscale_ratio(2'd0), .scan_start(scan_start), .scan_half(scan_half),
     .in_y(fb_y), .in_u(fb_u), .in_v(fb_v), .in_osd(fb_osd),
     .in_pos(fb_pos), .in_wr(fb_wr), .in_almost_full(vs_in_almost_full),
     .out_y(vs_y), .out_u(vs_u), .out_v(vs_v), .out_osd(vs_osd),

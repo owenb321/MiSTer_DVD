@@ -110,7 +110,7 @@ module crt_ov_map_tb;
 
     crt_ov_map dut (
         .clk(clk), .rst_n(rst_n),
-        .letterbox_en(letterbox_en), .crop_en(crop_en), .interlaced(interlaced),
+        .letterbox_en(letterbox_en), .crop_en(crop_en), .interlaced(interlaced), .ratio(2'd0),
         .v2x_en(v2x_en), .v_src_max(v_src_max),
         .v_bar(P_VBAR), .v_band(P_VBAND),
         .hcrop_x0(P_HX0), .hsrc_w(P_HSRC), .hextra(P_HEXTRA),
@@ -163,7 +163,7 @@ module crt_ov_map_tb;
 
     disp_vscale vscale (
         .clk(clk), .clk_en(1'b1), .rst(rst_n),
-        .vscale_en(1'b1), .scan_start(1'b0), .scan_half(1'b0),
+        .vscale_en(1'b1), .vscale_ratio(2'd0), .scan_start(1'b0), .scan_half(1'b0),
         .in_y(vs_in_y), .in_u(8'd0), .in_v(8'd0), .in_osd(8'd0),
         .in_pos(vs_in_pos), .in_wr(vs_in_wr), .in_almost_full(vs_in_af),
         .out_y(vs_out_y), .out_u(), .out_v(), .out_osd(),
@@ -180,6 +180,92 @@ module crt_ov_map_tb;
         end
 
     // ------------------------------------------------------------------
+    // T10 (Standard Convert): the real disp_vscale against the real crt_ov_map at 5/6 and 5/8,
+    // in both fields and on the frame path. Source line j carries luma j, so disp_vscale's
+    // output (a blend of two lines one apart) IS the nearest source tap: j + (weight >= 128).
+    // The inverse must name that same line at the matching raster position. No closed form.
+    // ------------------------------------------------------------------
+    reg  [1:0]  r10 = 2'd1;
+    reg         i10 = 1'b1;
+    reg  [11:0] bar10 = 12'd0, band10 = 12'd480;
+    reg         v10_wr = 0;
+    reg  [7:0]  v10_y = 0;
+    reg  [2:0]  v10_pos = 0;
+    wire [7:0]  v10_out_y;
+    wire [2:0]  v10_out_pos;
+    wire        v10_out_wr, v10_af;
+    wire [11:0] q10_y;
+    disp_vscale vscale10 (
+        .clk(clk), .clk_en(1'b1), .rst(rst_n),
+        .vscale_en(1'b1), .vscale_ratio(r10), .scan_start(1'b0), .scan_half(1'b0),
+        .in_y(v10_y), .in_u(8'd0), .in_v(8'd0), .in_osd(8'd0),
+        .in_pos(v10_pos), .in_wr(v10_wr), .in_almost_full(v10_af),
+        .out_y(v10_out_y), .out_u(), .out_v(), .out_osd(),
+        .out_pos(v10_out_pos), .out_wr(v10_out_wr), .out_almost_full(1'b0)
+    );
+    crt_ov_map dut10 (
+        .clk(clk), .rst_n(rst_n),
+        .letterbox_en(1'b1), .crop_en(1'b0), .interlaced(i10), .ratio(r10),
+        .v2x_en(1'b0), .v_src_max(12'd575),
+        .v_bar(bar10), .v_band(band10),
+        .hcrop_x0(P_HX0), .hsrc_w(P_HSRC), .hextra(P_HEXTRA),
+        .h_pos_in(h_pos_in), .v_pos_in(v_pos_in),
+        .q_x_out(), .q_y_out(q10_y)
+    );
+    integer v10_line = -1;
+    integer v10_tag [0:511];
+    always @(posedge clk)
+        if (v10_out_wr) begin
+            if (v10_out_pos == ROW_0_COL_0 || v10_out_pos == ROW_1_COL_0 || v10_out_pos == ROW_X_COL_0)
+                v10_line = v10_line + 1;
+            v10_tag[v10_line] = v10_out_y;
+        end
+    // feed one scan of L lines tagged 0..L-1; frame = line 1 carries ROW_1_COL_0
+    task automatic t10_scan(input [2:0] ft, input integer L, input integer frame);
+        integer j, c;
+        begin
+            v10_line = -1;
+            for (j = 0; j < L; j = j + 1) begin
+                for (c = 0; c < VS_WIDTH; c = c + 1) begin
+                    @(negedge clk);
+                    v10_wr = 0;
+                    while (v10_af) @(negedge clk);
+                    v10_y   = j[7:0];
+                    v10_pos = (c == VS_WIDTH - 1) ? ROW_X_COL_LAST : (c != 0) ? ROW_X_COL_X :
+                              (j == 0) ? ft : (j == 1 && frame) ? ROW_1_COL_0 : ROW_X_COL_0;
+                    v10_wr  = 1;
+                end
+                @(negedge clk) v10_wr = 0;
+                repeat (30) @(negedge clk);
+            end
+            repeat (100) @(negedge clk);
+        end
+    endtask
+    // walk the inverse over the scan's raster lines; source frame line = field line*2 + parity
+    task automatic t10_check(input [8*12-1:0] lbl, input integer par, input integer frame,
+                             input integer want_lines);
+        integer i, step, want;
+        begin
+            if (v10_line + 1 != want_lines) begin
+                errors = errors + 1;
+                $display("T10 FAIL %0s: %0d output lines, want %0d", lbl, v10_line + 1, want_lines);
+            end
+            step = frame ? 1 : 2;
+            @(negedge clk) v_pos_in = 12'hFFF; repeat (3) @(negedge clk);
+            for (i = 0; i <= v10_line; i = i + 1) begin
+                step_v(bar10 + i * step + par);
+                want = frame ? v10_tag[i] : (v10_tag[i] * 2 + par);
+                if (q10_y !== want) begin
+                    errors = errors + 1;
+                    if (errors < 80)
+                        $display("T10 FAIL %0s: raster line %0d (output %0d) maps to source %0d, disp_vscale showed %0d",
+                                 lbl, bar10 + i * step + par, i, q10_y, want);
+                end
+            end
+        end
+    endtask
+
+    // ------------------------------------------------------------------
     // spu_decode under test for the T5 row-base adder walks. Only the display
     // query path is exercised: the bitmap is seeded hierarchically and q_idx
     // (= the raw bmp read, independent of SPU/commit state) is compared.
@@ -187,6 +273,7 @@ module crt_ov_map_tb;
     localparam SP_STRIDE = 720;
     reg         sp_interlaced = 0;
     reg  [11:0] sp_q_x = 0, sp_q_y = 12'hFFF;
+    reg  signed [11:0] sp_off = 12'sd0;   // T11: Standard Convert's subtitle row offset
     wire [1:0]  sp_q_idx;
 
     spu_decode #(.BMP_N(414720), .STRIDE(SP_STRIDE)) spu (
@@ -195,7 +282,7 @@ module crt_ov_map_tb;
         .interlaced(sp_interlaced),
         .sp_byte(8'd0), .sp_valid(1'b0), .sp_frame_start(1'b0),
         .sp_pts(33'd0), .sp_pts_valid(1'b0), .stc(33'd0),
-        .q_x(sp_q_x), .q_y(sp_q_y),
+        .q_x(sp_q_x), .q_y_off(sp_off), .area_sy(), .area_ey(), .q_y(sp_q_y),
         .q_idx(sp_q_idx), .q_inside(),
         .alpha0(), .alpha1(), .alpha2(), .alpha3(),
         .col0(), .col1(), .col2(), .col3(),
@@ -224,6 +311,26 @@ module crt_ov_map_tb;
                     if (errors < 80)
                         $display("%s FAIL: q(%0d,%0d) idx %0d expected %0d",
                                  lbl, x, y, sp_q_idx, gold_px(y * SP_STRIDE + x));
+                end
+            end
+        end
+    endtask
+
+    // T11: the same check with spu_decode's row offset: raster row y reads bitmap row y + off
+    task automatic sp_line_off(input [11:0] y, input integer off);
+        integer x;
+        begin
+            @(negedge clk) sp_q_y = y;
+            repeat (3) @(negedge clk);
+            for (x = 200; x < 206; x = x + 1) begin
+                @(negedge clk) sp_q_x = x[11:0];
+                @(negedge clk);
+                @(negedge clk);
+                if (sp_q_idx !== gold_px((y + off) * SP_STRIDE + x)) begin
+                    errors = errors + 1;
+                    if (errors < 80)
+                        $display("T11 FAIL: raster (%0d,%0d) off %0d read idx %0d, bitmap row %0d holds %0d",
+                                 x, y, off, sp_q_idx, y + off, gold_px((y + off) * SP_STRIDE + x));
                 end
             end
         end
@@ -788,7 +895,66 @@ module crt_ov_map_tb;
         for (v = 0; v < 30; v = v + 2) sp_line("T8b", v[11:0]);
         $display("T8 context-toggle semantics: %s", (errors != err0) ? "FAIL" : "PASS");
 
-        if (errors) begin $display("crt_ov_map_tb: FAIL (%0d errors)", errors); $finish; end
+        // ==============================================================
+        // T11 — Standard Convert: 1:1 subtitle row offset (dvd/sub_anchor.sv). The raster walk
+        //       is untouched (the walker sees q_y); the bitmap row read is q_y + off, for a
+        //       positive, a negative and a zero offset, on both fields. The area test uses the
+        //       offset row, and crt_ov_map's 0xFFF sentinel never lands inside a box.
+        // ==============================================================
+        err0 = errors;
+        sp_interlaced = 1;
+        begin : t11
+            integer oi, o, vv;
+            integer offs [0:2];
+            offs[0] = 96; offs[1] = -60; offs[2] = 0;
+            for (oi = 0; oi < 3; oi = oi + 1) begin
+                o = offs[oi];
+                sp_off = o; sp_q_y = 12'hFFF; repeat (6) @(negedge clk);
+                for (vv = 100; vv < 130; vv = vv + 2) begin    // top field: walker re-arms at 0
+                    if (vv == 100) begin sp_q_y = 12'd0; repeat (3) @(negedge clk);
+                        begin : walk_t integer w; for (w = 2; w < 100; w = w + 2) begin @(negedge clk) sp_q_y = w; repeat (2) @(negedge clk); end end
+                    end
+                    sp_line_off(vv[11:0], o);
+                end
+                sp_q_y = 12'hFFF; repeat (6) @(negedge clk);
+                sp_q_y = 12'd1; repeat (3) @(negedge clk);       // bottom field re-arms at 1
+                for (vv = 3; vv < 101; vv = vv + 2) begin @(negedge clk) sp_q_y = vv; repeat (2) @(negedge clk); end
+                for (vv = 101; vv < 121; vv = vv + 2) sp_line_off(vv[11:0], o);
+            end
+            // area test on the offset row, and the sentinel: box rows 150..170
+            spu.c_sy = 12'd150; spu.c_ey = 12'd170;
+            sp_off = 12'sd96;
+            @(negedge clk) sp_q_y = 12'd60; #1;
+            if (spu.in_y !== 1'b1) begin errors = errors + 1; $display("T11 FAIL: row 60 + 96 = 156 is in box 150..170 but in_y=%b", spu.in_y); end
+            @(negedge clk) sp_q_y = 12'd156; #1;
+            if (spu.in_y !== 1'b0) begin errors = errors + 1; $display("T11 FAIL: raw row 156 is offset to 252, outside the box, but in_y=%b", spu.in_y); end
+            sp_off = 12'sd160;                                  // 0xFFF + 160 wraps to 159: in the box
+            @(negedge clk) sp_q_y = 12'hFFF; #1;
+            if (spu.in_y !== 1'b0) begin errors = errors + 1; $display("T11 FAIL: the 0xFFF sentinel was offset into a box (in_y=%b)", spu.in_y); end
+            sp_off = 12'sd0; sp_q_y = 12'hFFF; repeat (4) @(negedge clk);
+        end
+        $display("T11 subtitle row offset: %s", (errors != err0) ? "FAIL" : "PASS");
+
+        // ==============================================================
+        // T10 — Standard Convert: forward disp_vscale vs inverse crt_ov_map, 5/6 and 5/8
+        // ==============================================================
+        err0 = errors;
+        r10 = 2'd1; bar10 = 12'd0;  band10 = 12'd480; i10 = 1'b1;
+        t10_scan(ROW_0_COL_0, 120, 0); t10_check("5/6 top",    0, 0, 100);
+        t10_scan(ROW_1_COL_0, 120, 0); t10_check("5/6 bottom", 1, 0, 100);
+        i10 = 1'b0;
+        t10_scan(ROW_0_COL_0, 240, 1); t10_check("5/6 frame",  0, 1, 200);
+        r10 = 2'd2; bar10 = 12'd60; band10 = 12'd360; i10 = 1'b1;
+        t10_scan(ROW_0_COL_0, 160, 0); t10_check("5/8 top",    0, 0, 100);
+        t10_scan(ROW_1_COL_0, 160, 0); t10_check("5/8 bottom", 1, 0, 100);
+        i10 = 1'b0;
+        t10_scan(ROW_0_COL_0, 240, 1); t10_check("5/8 frame",  0, 1, 150);
+        r10 = 2'd0; bar10 = 12'd60; band10 = 12'd360; i10 = 1'b1;
+        t10_scan(ROW_0_COL_0, 120, 0); t10_check("3/4 top",    0, 0, 90);
+        t10_scan(ROW_1_COL_0, 120, 0); t10_check("3/4 bottom", 1, 0, 90);
+        $display("T10 conversion ratios forward/inverse co-sim: %s", (errors != err0) ? "FAIL" : "PASS");
+
+        if (errors) begin $display("crt_ov_map_tb: FAIL (%0d errors)", errors); $fatal(1); end
         $display("crt_ov_map_tb: ALL TESTS PASS");
         $finish;
     end

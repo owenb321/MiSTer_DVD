@@ -701,6 +701,22 @@ save-states build, M10K 533 → 520, DSP 91 → 84, 98 % → 91 % ALM, timing PA
 against `main` (5.1, short blocks, stereo; `audio_check.py`), then the maintainer's call on
 pushing both branches.**
 
+### ⏳ Standard Convert: PAL → NTSC by speed change (✅ MERGED PR #191) (`docs/standard_convert.md`)
+
+- [~] Clock, audio and the scaler path, PAL→NTSC (PR #191; To PAL on HDMI removed 2026-11-10: no display needs it): measured on the rig
+  against v0.10.0. ⏳ Save state, subtitle placement by eye, pitch by ear, `hil_suite` with it Off.
+- [~] PAL→NTSC on direct analog: `disp_vscale` 5/6 and 5/8, the overlays, 1:1 subtitles and 3:2 for
+  every picture (all treated as film, by maintainer decision) are built and bench-proven.
+  Rig 2026-11-09: rates exact, 0 lates, 3:2 measured; a `progressive_sequence=1` gap found and
+  fixed. ⏳ By eye on a CRT (library share needed for the sport/drama discs).
+- [ ] ⏳ Separate bug, in v0.10.0 too: audio dead until a reboot after ~25 core loads in one boot
+  (`dts_copied` 0, `eng_frames` 0). Reproduce it by looping core loads and find what survives the
+  reload. Details in `docs/standard_convert.md`.
+- ❌ NTSC→PAL, both paths: the CRT path (Phases 4/4b) built and rig-measured, then removed on 2026-11-10
+  for ~296 ALM / 3 M10K / 3 DSP; the HDMI path removed the same day (HDMI follows the disc's 59.94 Hz;
+  most PAL CRTs accept 60 Hz). Maintainer's call.
+  The commits to cherry-pick back are in `docs/standard_convert.md` "The CRT half (Phases 4 and 4b)".
+
 ### ⏳ 2026-10-01 spec-audit: DVD Demystified 3rd-edition follow-ups (items 1–8 and 10b ✅; the rest re-ranked 2026-10-06, PR #165)
 
 The audit, with evidence and the user's decisions, is in

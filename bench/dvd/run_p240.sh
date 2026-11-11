@@ -33,7 +33,7 @@ if [ "${1:-}" != "--red" ]; then
 
   echo "== the raster: 262/312 lines, progressive, constant rate =="
   iverilog -g2012 -I rtl/mpeg2 -o "$SIM.csg" rtl/mpeg2/syncgen.v bench/dvd/crt_syncgen_tb.sv
-  run "crt_syncgen_tb (PHASE 1-7, incl. 240p/288p)" vvp "$SIM.csg"
+  run "crt_syncgen_tb (PHASE 1-8, incl. 240p/288p, 576 on 480i)" vvp "$SIM.csg"
 
   echo "== composite sync on the progressive raster =="
   iverilog -g2012 -I rtl/mpeg2 -o "$SIM.cs" rtl/mpeg2/syncgen.v dvd/csync_smpte.sv bench/dvd/csync_p240_tb.sv
@@ -195,6 +195,26 @@ else
     echo "  ok   caught"
   fi
 fi
+
+# R2 — Standard Convert: bound the field by the stream only (the pre-fix compare). A 576-line
+#      stream on the 480i raster then keeps DE high through vblank and vsync (PHASE 8).
+echo "== RED [raster: R2 interlaced window ignores the raster's own height] =="
+mut_sgv=/tmp/p240_sgv_$$.v
+sed 's|(v_cntr >= v_res_field)|(v_cntr >= vertical_resolution)|' rtl/mpeg2/syncgen.v > "$mut_sgv"
+if cmp -s rtl/mpeg2/syncgen.v "$mut_sgv"; then
+  echo "  FAIL: the mutation did not change syncgen.v (stale sed pattern)"
+  redfail=$((redfail+1))
+else
+  iverilog -g2012 -I rtl/mpeg2 -o "$SIM.sgv" "$mut_sgv" bench/dvd/crt_syncgen_tb.sv 2>/dev/null
+  vvp "$SIM.sgv" > "$SIM.sgv.log" 2>&1 || true
+  if grep -q "\[576 on 480i\] FAIL" "$SIM.sgv.log" && ! grep -qE "\[(CRT 480i|480i shipped raster|HDMI 576i)\] FAIL" "$SIM.sgv.log"; then
+    echo "  ok   caught, in PHASE 8 only"
+  else
+    echo "  FAIL: R2 not caught in PHASE 8 alone"; grep FAIL "$SIM.sgv.log" | head
+    redfail=$((redfail+1))
+  fi
+fi
+rm -f "$mut_sgv"
 
 rm -f "$SIM".* "$mut_emu" "$mut_emu.orig" "$mut_pd" "$mut_sg"
 echo

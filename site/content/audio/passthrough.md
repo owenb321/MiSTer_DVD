@@ -41,6 +41,10 @@ track is actually playing**, and switched back when the track changes, when you 
 another core, and when you reboot. You do not need to leave Passthru before loading
 something else.
 
+While [Standard Convert](../video/film-24p.md#standard-convert) is changing a disc's speed,
+passthrough is off and the core decodes that disc to stereo PCM, because compressed audio cannot
+change speed.
+
 !!! warning "If another core loses HDMI audio, update both halves and power-cycle"
     Earlier versions switched the transmitter as soon as Passthru was selected and never
     switched it back, so the next core was silent — and nothing but removing power cleared

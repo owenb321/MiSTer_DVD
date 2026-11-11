@@ -20,6 +20,27 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ---
 
+## Standard Convert: PAL → NTSC by speed change (2026-11-02, MERGED PR #191)
+
+**State:** PAL→NTSC only (To PAL removed 2026-11-10), ✅ MERGED PR #191. Maintainer's check on the final build (`dev-stdconvert6`): a PAL disc converted and NTSC discs unchanged look and sound right on a CRT; passthrough returns when conversion is turned off; seek, pause, chapter skip and audio switch keep lip sync. Crop's clipped subtitles on INCREDIBLE_HULK are the disc's pan&scan stream (identical with conversion off), documented in the manual. Measured on the rig against
+v0.10.0: raster, audio and STC all land on the exact ratios, with A/V stable over 120 s and 0 lates.
+**Found on the way:** passthrough rising in the gap after a mount made audio up to 210 ms late (fixed,
+`std_conv_wait`), and a separate fault, also in v0.10.0, where audio stays dead until a reboot after
+about 25 core loads. **Refuted:** that `pal_eff` needed splitting into source and raster at about 20 sites;
+it stays the source and only `pal_out` inverts. **Phase 3 (CRT, PAL→NTSC):** `disp_vscale` 5/6 and 5/8 with the true bottom-field phase,
+the overlay inverse, 1:1 subtitles moved by `sub_anchor`, and synthetic 3:2 for every picture (the
+maintainer's call, 2026-11-09: conversion is manual, so every picture is film; true 50i judders at
+480i), bench-proven. **HW 2026-11-09:** rates exact (59.944 Hz, 23.965 pictures/s, audio 46,033 Hz),
+0 lates, 3:2 measured on an interlaced-flagged PAL film; a `progressive_sequence=1` disc (Big Buck
+Bunny PAL) was still 2-2-2-4, fixed and re-measured 3:2 on the rig. **First look on a CRT (same day): broken** (no colour on Y/C, no OSD, HDMI `290x519i`): `sync_gen` never closed a 480i field's window for a 576-line stream, so DE ran through vsync; fixed in `syncgen.v`, `crt_syncgen_tb` PHASE 8; the maintainer then saw PAL film and
+video "look and sound good" converted. **Phase 4/4b, To PAL on a CRT (2026-11-09/10): built and REMOVED.** 6/5 upscale, 2:2, then
+field-accurate 30i (MiB's 30i menu 0.49 drops/s, was 6.23); 576i, colour, OSD and 0 lates on film
+on the rig. Removed by the maintainer on 2026-11-10 for its cost (~296 ALM, 3 M10K, 3 DSP; the fit
+left SEED 7): most PAL CRTs accept 60 Hz anyway, and HDMI keeps To PAL. Branch now +188 ALM / +0 M10K
+/ +3 DSP vs v0.10.0 at SEED 7. **To PAL on HDMI removed too (same day):** HDMI follows a disc's own
+rate, so it had no user; the option is now `Off / To NTSC` (`O[53]`), `std_rate` unity/slow only. `dev-stdconvert6` (cc35676): +216 ALM / +0 M10K / +3 DSP vs v0.10.0 at SEED 7, timing PASS (clk_dec 93.27/91.14, clk_mem 101.76/103.72); the removal saves nothing measurable, the +51 vs `dev-stdconvert5` is placement noise from the slug. **Refuted:** that raising the drop ceiling fixes the 30i lag. **Refuted:** that `disp_sched` needed a 1440-tick field period.
+Full account: `standard_convert.md`.
+
 ## Read-ahead: a jump past a full ring's head deadlocked (2026-11-01, found in the v0.10.0 smoke)
 
 **Report:** Ultimate T2, DTS selected, Next a few seconds into the DTS logo clip: frozen, Menu

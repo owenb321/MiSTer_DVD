@@ -38,7 +38,7 @@ module spu_decode_480i_tb;
         .clk(clk), .rst_n(rst_n), .enable(enable), .forced_only(1'b0), .interlaced(1'b1),
         .sp_byte(sp_byte), .sp_valid(sp_valid), .sp_frame_start(sp_frame_start),
         .sp_pts(sp_pts), .sp_pts_valid(sp_pts_valid),
-        .stc(stc), .q_x(q_x), .q_y(q_y), .q_idx(q_idx), .q_inside(q_inside),
+        .stc(stc), .q_x(q_x), .q_y_off(12'sd0), .area_sy(), .area_ey(), .q_y(q_y), .q_idx(q_idx), .q_inside(q_inside),
         .alpha0(alpha0), .alpha1(alpha1), .alpha2(alpha2), .alpha3(alpha3),
         .sp_active(sp_active)
     );

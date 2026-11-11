@@ -144,6 +144,14 @@ module spu_decode #(
     // (1-cycle BRAM latency) — the caller aligns video by one cycle to match.
     input  wire [11:0] q_x,
     input  wire [11:0] q_y,
+    // Standard Convert (docs/standard_convert.md, dvd/sub_anchor.sv): a row offset for 1:1
+    // dialogue subtitles under the vertical scale. The query reads bitmap row q_y + q_y_off,
+    // so the walker below still sees the raster's own q_y; the offset joins the read address
+    // as a constant (q_y_off * STRIDE) and the area test. Even, so each field keeps its own
+    // lines. 0 = the old behaviour exactly.
+    input  wire signed [11:0] q_y_off,
+    output wire [11:0] area_sy,       // the committed unit's box, source rows (for sub_anchor)
+    output wire [11:0] area_ey,
     output wire [1:0]  q_idx,
     output reg         q_inside,      // registered: inside DAREA AND currently visible
 
@@ -189,9 +197,15 @@ module spu_decode #(
     reg  [1:0]       bmp_wdata;
     reg  [1:0]       bmp_rd;
     reg  [ABW-1:0]   q_row_base;      // q_y*STRIDE (per-line adder; see below)
+    reg  [ABW-1:0]   q_off_base;      // q_y_off*STRIDE, registered (q_y_off changes per unit)
+    /* No N'(expr) size cast here: Quartus 17 has miscompiled them silently (CLAUDE.md). A wide
+     * signed product, then its low ABW bits, which wrap correctly for a negative offset. */
+    localparam logic signed [31:0] STRIDE_S = STRIDE;
+    wire signed [31:0] q_off_prod = $signed({{20{q_y_off[11]}}, q_y_off}) * STRIDE_S;
+    always @(posedge clk) q_off_base <= q_off_prod[ABW-1:0];
     always @(posedge clk) begin
         if (bmp_we) bmp[bmp_waddr] <= bmp_wdata;
-        bmp_rd <= bmp[q_row_base + {{(ABW-12){1'b0}}, q_x}];   // 1-cycle sync read
+        bmp_rd <= bmp[q_row_base + q_off_base + {{(ABW-12){1'b0}}, q_x}];   // 1-cycle sync read
     end
     assign q_idx = bmp_rd;
 
@@ -387,7 +401,12 @@ module spu_decode #(
     end
 
     wire in_x = (q_x >= c_sx) && (q_x <= c_ex);
-    wire in_y = (q_y >= c_sy) && (q_y <= c_ey);
+    /* the row the query reads; 0xFFF is crt_ov_map's "no source line" (a bar or blanking) and
+     * must stay outside every box, so it is never offset into one */
+    wire [11:0] q_y_eff = q_y + q_y_off;
+    wire in_y = (q_y != 12'hFFF) && (q_y_eff >= c_sy) && (q_y_eff <= c_ey);
+    assign area_sy = c_sy;
+    assign area_ey = c_ey;
 
     always @(posedge clk) begin
         q_inside <= visible && in_x && in_y;      // registered to match q_idx (bmp_rd)

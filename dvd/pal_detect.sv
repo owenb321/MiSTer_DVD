@@ -81,7 +81,10 @@ module pal_detect #(
     input  wire [13:0] vsize,        // decoder vertical_size_out (0 = no header in force)
 
     output wire        pal,          // the held verdict: 1 = 50 Hz content
-    output wire        sif           // the held verdict: 1 = SIF-height (<= 288 lines)
+    output wire        sif,          // the held verdict: 1 = SIF-height (<= 288 lines)
+    output wire        valid         // this FILE has a verdict. pal/sif keep the previous file's
+                                     // value across a mount, so a consumer that must not act on
+                                     // a stale or power-on verdict gates on this
 );
 
 // A plausible parsed height, and what it would mean.
@@ -101,6 +104,7 @@ assign pal   = vq[0];
 assign sif   = vq[1];
 
 reg         pal_init;        // a verdict has been established for this file
+assign valid = pal_init;
 reg  [13:0] cand;            // the disagreeing height being timed
 reg  [26:0] tmr;             // 0 = no candidate armed; else cycles it has held
 

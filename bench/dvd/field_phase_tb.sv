@@ -59,6 +59,15 @@
  * alone allows TRANS_FIELDS for the FRAME->field transition, which the core blanks.
  * +start_only runs [1], [10], [11], [12]; +only12 runs [1] and [12].
  *
+ * ★ +stdcad (2026-11, Standard Convert, docs/standard_convert.md "Phase 3"). resample_addrgen's
+ * synthetic 3:2: progressive pictures, always due, on the field raster. Judged from the DATA:
+ *   C  every field's source-line parity matches the raster field it landed in;
+ *   A  consecutive fields carry different source lines;
+ *   D  the gaps between pickups alternate 3, 2 (counted from output_frame_rd per field).
+ * +stdcad=1 (progressive pictures), +stdcad=3 (progressive_frame=0: every picture is film) and
+ * +stdcad=4 (progressive_sequence=1, as the Big Buck Bunny PAL DVD is coded) are the arms; +stdcad=2 (cadence off, progressive pictures) is the control whose gaps must
+ * all be 2.
+ *
  * ★ SCENARIO [6] IS THE ONE THAT FOUND THE HW DEFECT, and it is the mundane one: it
  * STARVES the pixel queue. Every scenario written from the field reports (seeks, cold
  * start, cadence breaks) passed with the withdrawn corrector enabled. A starved raster
@@ -131,6 +140,7 @@ module field_phase_tb;
   reg        top_field_first = 1;
   reg        repeat_first_field = 0;
   reg        film_mode = 0;                  // [5]: tff toggles per consumed picture
+  reg        std_cad_r = 0;                  // +stdcad: Standard Convert's synthetic 3:2
   always @(posedge clk)
     if (rst && film_mode && output_frame_rd) top_field_first <= ~top_field_first;
 
@@ -197,7 +207,7 @@ module field_phase_tb;
 `ifndef NO_PARITY_FIX
     .raster_par_err(par_err_sync),
 `endif
-    .vscale_mode(2'd0), .hcrop_en(1'b0), .still_en(1'b0), .blend_en(1'b0), .bob_en(1'b0), .sched_due(1'b1), .sched_next_due(1'b1)
+    .vscale_mode(2'd0), .hcrop_en(1'b0), .still_en(1'b0), .blend_en(1'b0), .bob_en(1'b0), .std_cad(std_cad_r), .sched_due(1'b1), .sched_next_due(1'b1)
   );
 
   // framestore_reader + full-rate behavioural memory, LINE-STAMPED.
@@ -302,6 +312,9 @@ module field_phase_tb;
   reg         rec_vpar [0:MAXFLD-1];   // raster field it landed in (v_pos parity)
   reg         rec_ilace[0:MAXFLD-1];   // ... and the raster was interlaced ([12])
   reg  [31:0] rec_hash [0:MAXFLD-1];   // FNV-1a over every emitted luma sample
+  integer     rec_pick [0:MAXFLD-1];   // +stdcad: pickups (output_frame_rd) during the field
+  integer     pick_pend = 0;
+  always @(posedge clk) if (rst && output_frame_rd) pick_pend = pick_pend + 1;
 
   integer     fld_n = 0;               // displayed fields WITH picture content so far
   reg  [7:0]  base_code = 8'hFF;       // smallest first-line stamp = source line 0
@@ -332,6 +345,7 @@ module field_phase_tb;
         rec_vpar[fld_n] = f_vpar;
         rec_ilace[fld_n] = ilace;
         rec_hash[fld_n] = acc_hash;
+        rec_pick[fld_n] = pick_pend; pick_pend = 0;
         if (stamp_track && f_code < base_code) base_code <= f_code;
         if (stamp_track && f_code > peak_code) peak_code <= f_code;
         if (dbg)   // stamp, not line: base_code is only known once both stamps are in
@@ -578,6 +592,7 @@ module field_phase_tb;
 
   integer phase = 0;
   integer start_only = 0;
+  integer sc_mode = 0;
   integer k, w0, sw_total, i0, skipped;
   localparam TRANS_FIELDS = 4;           // [12]: the FRAME->field transition, blanked on the core
 
@@ -592,6 +607,48 @@ module field_phase_tb;
     rst = 0; output_frame_valid = 0;
     repeat (8) @(posedge clk);
     rst = 1;
+
+    if ($value$plusargs("stdcad=%d", sc_mode)) begin : stdcad
+      integer f, i0, prev_pick, gap, last_gap, n_gaps, bad_c, bad_a, bad_d, linepar;
+      progressive_frame = (sc_mode != 3);
+      progressive_sequence = (sc_mode == 4);
+      std_cad_r         = (sc_mode != 2);
+      top_field_first = 1; repeat_first_field = 0;
+      repeat (2) @(negedge v_sync);
+      repeat (phase) @(negedge v_sync);
+      output_frame_valid = 1;
+      wait_flds(30);                                 // settle; both stamps are seen here
+      i0 = fld_n;
+      wait_flds(60);
+      bad_c = 0; bad_a = 0; bad_d = 0; prev_pick = -1; last_gap = 0; n_gaps = 0;
+      for (f = i0; f < i0 + 60; f = f + 1) begin
+        linepar = (rec_code[f] - base_code) & 1;
+        if (linepar != rec_vpar[f]) bad_c = bad_c + 1;
+        if (f > i0 && rec_code[f] == rec_code[f-1]) bad_a = bad_a + 1;
+        if (rec_pick[f] > 1) bad_d = bad_d + 1;          // two pickups in one field: no field shown
+        if (rec_pick[f] != 0) begin
+          if (prev_pick >= 0) begin
+            gap = f - prev_pick; n_gaps = n_gaps + 1;
+            if (sc_mode != 2) begin
+              if (gap != 2 && gap != 3) bad_d = bad_d + 1;
+              else if (last_gap != 0 && gap == last_gap) bad_d = bad_d + 1;   // must alternate
+            end else if (gap != 2) bad_d = bad_d + 1;
+            last_gap = gap;
+          end
+          prev_pick = f;
+        end
+        if (dbg) $display("    f%0d stamp %0d line-par %0d raster-par %0d picks %0d", f, rec_code[f], linepar, rec_vpar[f], rec_pick[f]);
+      end
+      $display("[13-stdcad=%0d +phase=%0d] %0d gaps: C %0d  A %0d  D %0d", sc_mode, phase, n_gaps, bad_c, bad_a, bad_d);
+      if (peak_code != base_code + 8'd1) $fatal(1, "==== BENCH BROKEN (+stdcad): stamps %0d/%0d ====", base_code, peak_code);
+      if (n_gaps < 15) $fatal(1, "[13] SCENARIO VACUOUS: only %0d pickups in 60 fields", n_gaps);
+      if (bad_c) $display("FAIL [C] %0d fields on the wrong raster parity", bad_c);
+      if (bad_a) $display("FAIL [A] %0d repeated source lines", bad_a);
+      if (bad_d) $display("FAIL [D] %0d cadence gaps wrong", bad_d);
+      if (bad_c || bad_a || bad_d) $fatal(1, "==== FAIL [13-stdcad=%0d] ====", sc_mode);
+      $display("==== PASS [13-stdcad=%0d +phase=%0d] ====", sc_mode, phase);
+      $finish;
+    end
 
     // [1] COLD START at the +phase-selected raster field parity. One of the two +phase
     // arms releases the first field toward the WRONG slot. Until 2026-10-08 that arm was
