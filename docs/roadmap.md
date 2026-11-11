@@ -633,7 +633,7 @@ Follow-ups, all pre-existing and outside #176:
 - 2 s authored-duration stills on video cells whose command is fixed (the same whole-second
   overshoot, without the #176 drain; a fix changes cell timing on every disc);
 - issue #178 (in-title HLI forces the subpicture layer on: Dinosaur's SDH): fixed on
-  `feature/hli-forced-subs`, ✅ HW A/B on Dinosaur, ⏳ white rabbit with SUB OFF (`docs/subpicture.md`);
+  `feature/hli-forced-subs`, ✅ HW A/B on Dinosaur, white rabbit checked by the maintainer (`docs/subpicture.md`);
 - Thayer's Quest after an early Menu press in the boot chain (maintainer, not yet diffed
   against libdvdnav);
 - still unchecked by hand: a gapless in-title loop (Fairytopia), Mad Dog II, Crime Patrol.

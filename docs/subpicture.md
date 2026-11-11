@@ -534,8 +534,9 @@ whenever SPRM2's display bit is clear in the title domain, and it has no button 
 
 **HW (2026-11-11).** Dinosaur, menu Play, Subtitle stepped to `SUB OFF`, both builds restored
 to one VM snapshot: SDH in 11/12 screenshots on `main`, 0/12 on the fix; `SUB 1/3 EN` still
-shows them. Not yet run: The Matrix's rabbit with `SUB OFF`. On `main` that case was already
-blank (`sp_user_absent`: the rabbit PGC declares logical 1 only), and the fix should now show it.
+shows them. The Matrix's white rabbit: checked on the board by the maintainer, "looks good".
+(On `main`, the rabbit with `SUB OFF` was blank: `sp_user_absent`, since the rabbit PGC
+declares logical 1 only. The fix routes it through `fs_log` = SPRM2 stream 1.)
 
 **Gates.** `tools/check_forced_subs_wiring.py` item 3b: `sp_disp_on` must not contain
 `in_title_hli`, `hl_btns_armed` or `in_title_menu` (RED on the pre-fix `emu.sv`, exactly

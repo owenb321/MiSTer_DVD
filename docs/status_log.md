@@ -26,16 +26,14 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 `dev-stdconvert6` = `main`): Dinosaur via the menu's Play, then Subtitle stepped to `SUB OFF`,
 both arms restored to the same VM snapshot (VTS 1 PGC 1 cell 46/153, SPRM2 `0x42`): SDH lines
 in **11/12** screenshots on `main`, **0/12** on the fix; stepping back to `SUB 1/3 EN` shows
-them (7/8). ⏳ The Matrix's white rabbit with `SUB OFF` not run on the board (its menu route
-was not found in time; with subtitles at the default the rabbit's path is unchanged, and on
-`main` it was already hidden with `SUB OFF` by `sp_user_absent`).
+them (7/8). ✅ The Matrix's white rabbit: the maintainer's check on the board (2026-11-11,
+same build), "looks good".
 **Field report:** Dinosaur showed its English SDH track with `SUB OFF`. **Root cause:**
 `in_title_hli` was a display-on routing term (white-rabbit era), so any armed in-title HLI
 routed the user's stream with every unit visible; Dinosaur arms a single-button HLI almost
 throughout. **Fix:** the term is gone from `sp_disp_on`; an armed button with subtitles off
 takes the forced route (libdvdnav `vm_get_subp_active_stream`, bit 7). The button graphics
-are FSTA_DSP units, so they still show. **Next step:** the white rabbit with `SUB OFF` on the
-board (expected to show now, through `fs_log` = SPRM2 stream 1), then merge. **Open, not decided here:** Dinosaur's forced units on 0x20 still
+are FSTA_DSP units, so they still show. **Next step:** merge. **Open, not decided here:** Dinosaur's forced units on 0x20 still
 show via PR #151's SPRM2 = 62 fallback. Detail: `docs/subpicture.md` "An armed in-title
 button is not a display-on path". Gates: `run_forced_subs.sh --red`,
 `check_forced_subs_wiring.py` (3b).
