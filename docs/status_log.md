@@ -20,9 +20,9 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ---
 
-## Standard Convert: PAL ↔ NTSC by speed change (2026-11-02, branch `feature/std-convert`)
+## Standard Convert: PAL → NTSC by speed change (2026-11-02, MERGED PR #191)
 
-**State:** PAL→NTSC only (To PAL removed 2026-11-10), not merged. Measured on the rig against
+**State:** PAL→NTSC only (To PAL removed 2026-11-10), ✅ MERGED PR #191. Maintainer's check on the final build (`dev-stdconvert6`): a PAL disc converted and NTSC discs unchanged look and sound right on a CRT; passthrough returns when conversion is turned off; seek, pause, chapter skip and audio switch keep lip sync. Crop's clipped subtitles on INCREDIBLE_HULK are the disc's pan&scan stream (identical with conversion off), documented in the manual. Measured on the rig against
 v0.10.0: raster, audio and STC all land on the exact ratios, with A/V stable over 120 s and 0 lates.
 **Found on the way:** passthrough rising in the gap after a mount made audio up to 210 ms late (fixed,
 `std_conv_wait`), and a separate fault, also in v0.10.0, where audio stays dead until a reboot after

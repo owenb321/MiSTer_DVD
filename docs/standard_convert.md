@@ -1,6 +1,6 @@
 # Standard conversion by speed change
 
-**Status:** 🔧 on `feature/std-convert`, not merged. **PAL→NTSC only** (`Standard Convert = Off /
+**Status:** 🔧 ✅ MERGED (PR #191); ⏳ a long by-eye session on a CRT. **PAL→NTSC only** (`Standard Convert = Off /
 To NTSC`, `O[53]`): clock and audio, the scaler path (HDMI, `vga_scaler`) and direct analog (Phase 3),
 all measured on the rig. **NTSC→PAL was removed entirely on 2026-11-10** (maintainer's call): first
 its CRT path (Phases 4 and 4b), then the HDMI one too. See "Why To PAL was removed" below; the To PAL
