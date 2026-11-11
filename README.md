@@ -49,7 +49,8 @@ know. It is not an endorsement of the approach — draw your own conclusions.
   [`MiSTer_DVDcss`](https://owenb321.github.io/MiSTer_DVD/formats/physical-discs/) add-on — no PC decrypt step, and
   encrypted images need no optical drive at all.
 - **Video** — MPEG-2 and MPEG-1, NTSC and PAL auto-detected, progressive or native
-  480i/576i, [3:2 pulldown for film](https://owenb321.github.io/MiSTer_DVD/video/film-24p/), and one clock for
+  480i/576i, [3:2 pulldown for film](https://owenb321.github.io/MiSTer_DVD/video/film-24p/), PAL discs
+  [converted to NTSC](https://owenb321.github.io/MiSTer_DVD/video/film-24p/#standard-convert) for 60 Hz-only TVs, and one clock for
   picture, sound, subtitles and captions — so lip sync holds across seeks, menus and mode changes.
 - **Audio** — AC-3 (every channel mode), DTS (the core stream, up to 5.1), MP2, and LPCM (up to
   96 kHz and 8 channels, downmixed) decoded
