@@ -12,9 +12,12 @@ the file (the check_subp_map_wiring.py pattern):
   1. spu_decode's .forced_only is fs_route.
   2. fs_route is derived from sp_disp_on (the display-ON terms), not restated, and is
      gated to a parsed TITLE-domain PGC that declares a subpicture stream.
-  3. sp_disp_on carries all five display-ON terms of the old sp_route_en, so the
-     white rabbit (in_title_hli / a SetSTN display-on), Scene It (sp_menu_early)
-     and menu domains can never fall into the forced-only route.
+  3. sp_disp_on carries the display-ON terms of the old sp_route_en, so a SetSTN
+     display-on, Scene It (sp_menu_early) and menu domains can never fall into the
+     forced-only route.
+  3b. ...and NOT in_title_hli (issue #178): an armed in-title button with subtitles
+     off must take the forced route. As a display-on term it routed the user's
+     stream unfiltered, and Dinosaur showed its whole SDH track with SUB OFF.
   4. sp_route_en = ~sp_user_absent & (sp_disp_on | fs_route).
   5. sp_sel_log selects fs_log for fs_route, AFTER the menu and VM arms.
   6. sp_track_eff resolves fs_route through the map (sp_phys_streamN), like SPRM2.
@@ -25,8 +28,8 @@ the file (the check_subp_map_wiring.py pattern):
   8. sp_user_absent does not mute the forced route.
 
     python3 tools/check_forced_subs_wiring.py [emu.sv]     # exit 0 = wired right
-    git show origin/main:dvd/emu.sv > /tmp/old.sv && \\
-        python3 tools/check_forced_subs_wiring.py /tmp/old.sv    # must exit 1
+    git show <pre-#178 commit>:dvd/emu.sv > old.sv && \\
+        python3 tools/check_forced_subs_wiring.py old.sv    # must exit 1 (3b)
 
 Comments are stripped first: emu.sv quotes old code in its comments, and a loose
 grep finds connections that are not connections.
@@ -112,8 +115,14 @@ def main():
     need(dp is not None, '3. sp_disp_on is not declared')
     if dp:
         for t in ('sub_on', 'menus_on&&menu_active', 'vm_owns_sp&&vm_spstn[6]',
-                  'in_title_hli', 'sp_menu_early'):
+                  'sp_menu_early'):
             need(t in dp, '3. sp_disp_on lacks the display-ON term %s: %s' % (t, dp))
+        # Neither the name nor its definition (hl_btns_armed): either one makes an
+        # armed button a display-on path again.
+        for t in ('in_title_hli', 'hl_btns_armed', 'in_title_menu'):
+            need(not re.search(r'\b%s\b' % t, dp),
+                 '3b. sp_disp_on holds %s, so an armed in-title button shows the '
+                 'user stream unfiltered with subtitles off (issue #178): %s' % (t, dp))
 
     re_ = stmt(src, r'sp_route_en')
     need(re_ is not None, '4. sp_route_en assignment not found')
