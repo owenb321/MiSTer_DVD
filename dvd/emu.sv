@@ -2044,8 +2044,10 @@ wire        menu_nav = menus_on && menu_active && hl_btns_armed;
 // IN-TITLE PCI/HLI BUTTON (e.g. Matrix "Follow the White Rabbit" icon): nav_pci
 // arms an HLI while a TITLE plays (not a disc menu). The button-graphic
 // subpicture must then be routed + decoded + highlight-recoloured just like a
-// menu button, so the subpicture plumbing (sp_route_en / sp_track_eff /
-// menu_mode) is un-gated on this signal too. menus_on is required (the nav layer
+// menu button. ⚠ It is NOT a display-ON routing term (issue #178): a button
+// graphic is a FORCED (FSTA_DSP) unit, so with subtitles off the forced route
+// (fs_route) carries it, and the user's stream is never shown in full just
+// because a button is armed. menus_on is required (the nav layer
 // / PCI forwarding is O[1]-gated) and menu_active must be OFF (this is the title,
 // not a menu). hl_btns_armed only asserts on VOBUs that actually carry HLI, so
 // normal titles (no in-title button) are unaffected.
@@ -3346,9 +3348,20 @@ wire        menu_sp_ctx   = menu_dom_live || sp_menu_early;
 //
 // fs_route is the third way the title's subpicture stream gets routed. It is
 // defined as "none of the display-ON terms of sp_route_en", so it can never
-// change what a display-on path shows: the white-rabbit icon (vm_owns_route,
-// in_title_hli), the Scene It menus (sp_menu_early) and menu domains are all
-// excluded by construction. spu_decode.forced_only = fs_route.
+// change what a display-on path shows: a SetSTN display-on (vm_owns_route), the
+// Scene It menus (sp_menu_early) and menu domains are all excluded by
+// construction. spu_decode.forced_only = fs_route.
+//
+// DVD-FORK FIX (issue #178): an armed in-title HLI (in_title_hli) is NOT a
+// display-on term. It used to be, for The Matrix's white rabbit, and it then
+// routed the USER's stream with the decoder showing every unit: on Dinosaur,
+// whose feature carries a single-button HLI almost throughout, subtitles off
+// (no SetSTN, or the Subtitle button stepped to OFF) showed the full English
+// SDH track. libdvdnav has no such term -- with SPRM2's display bit clear in the
+// title domain it returns the stream with bit 7, forced-only, button or not --
+// and the button graphics are FSTA_DSP units (The Matrix: 146/146 in its HLI
+// VOBUs), so the forced route still shows them. Multi-button in-title menus keep
+// sp_menu_early, a display-on path.
 //
 // All 32 streams since PR #152 (subp_declared / subp_first_decl are the
 // table state declared ahead of the Subtitle-button logic).
@@ -3360,7 +3373,7 @@ wire [4:0]  fs_log    = fs_vm_ok ? vm_spstn[4:0] : subp_first_decl;
 // derived from what selects the display path rather than restating it.
 wire        sp_disp_on = sub_on | (menus_on && menu_active)
                        | (menus_on && vm_owns_sp && vm_spstn[6])
-                       | in_title_hli | sp_menu_early;
+                       | sp_menu_early;
 wire        fs_route  = ~sp_disp_on & pgc_ctl_valid & pgc_dom_tt & subp_any_decl;
 
 wire [4:0]  sp_sel_log    = menu_sp_ctx  ? 5'd0 :
@@ -6380,9 +6393,10 @@ end
 // hide the menu - Phase 3). Drives BOTH spu_decode.enable and ps_demux.sp_enable
 // (the demux gate was missed in round 1 -> no button graphics unless subtitles
 // were already on).
-// sp_disp_on (declared with the forced-subtitle block above) is exactly the five
-// display-ON terms this used to list inline: sub_on, a menu domain, a SetSTN
-// display-on, in_title_hli (the white rabbit) and sp_menu_early (Scene It).
+// sp_disp_on (declared with the forced-subtitle block above) is the display-ON
+// terms this used to list inline: sub_on, a menu domain, a SetSTN display-on and
+// sp_menu_early (Scene It). in_title_hli (the white rabbit) was the fifth until
+// issue #178: an armed in-title button now rides fs_route when subtitles are off.
 // fs_route adds the FORCED-ONLY route for the title with subtitles off -- the
 // decoder then shows only FSTA_DSP units (.forced_only below).
 assign sp_route_en = ~sp_user_absent & ( sp_disp_on | fs_route );

@@ -4711,6 +4711,10 @@ to 168 discs) that rely on the identity fallback -- see `dvd/subp_stream_map.sv`
   feeds `sp_route_en` so an in-title armed HLI routes its button subpicture (the highlight
   recolour path `hl_use` is already menu-independent). NB the `SetSTN` also routes it via the
   existing `vm_owns_sp` path.
+  **Superseded by issue #178:** `in_title_hli` no longer feeds the routing. With subtitles off
+  the button graphic (an FSTA_DSP unit) rides the forced route instead, so an armed button
+  stops showing the user's whole stream (Dinosaur's SDH). See `docs/subpicture.md`
+  "An armed in-title button is not a display-on path".
 - **Activation** (`emu.sv`): in-title **Select** pulses `nav_act_p` (the rabbit is a single
   `fosl=1` auto-selected button, so no D-pad nav needed — D-pad stays chapter/scrub);
   `nav_pci → hl_btn_cmd → dvd_vm` then runs the button commands.

@@ -477,12 +477,12 @@ bit 7 set, meaning "only let Forced display show". VLC's `spudec` honours that a
 - `spu_decode`: `0x00` sets a per-unit `w_forced`, committed as `c_forced`. The new
   `forced_only` input gates `visible` to forced units. Every unit is still decoded and
   committed, so pressing Subtitle while a non-forced line is up shows it at once.
-- `emu.sv`: `sp_disp_on` names the five display-ON routing terms that `sp_route_en`
+- `emu.sv`: `sp_disp_on` names the display-ON routing terms (five until issue #178) that `sp_route_en`
   already listed:
   - `sub_on`;
   - a menu domain;
   - a SetSTN display-on;
-  - `in_title_hli` (the white rabbit);
+  - ~~`in_title_hli` (the white rabbit)~~ — removed by issue #178, see below;
   - `sp_menu_early` (Scene It).
 - `fs_route = ~sp_disp_on & pgc_ctl_valid & pgc_dom_tt & (|subp_declared)` is the forced
   route. It routes `fs_log`, which is SPRM2's stream when it names a declared stream 0..15,
@@ -495,6 +495,47 @@ bit 7 set, meaning "only let Forced display show". VLC's `spudec` honours that a
   choice), not the stream the user was last on. This matches libdvdnav, and was **decided by
   the maintainer 2026-10-04**. `SUB OFF` is reached by stepping past the last track, so "the
   user's last track" would be the disc's final language.
+
+### An armed in-title button is not a display-on path (issue #178, 2026-11-10)
+
+**Field report (HIL, Dinosaur Disc 1).** With `SUB OFF` the film showed the English SDH
+track (`Dad?`, `[ Low Rumbling ]`) — after playing without the disc's subtitle setup, and
+again after stepping the Subtitle button to OFF. The disc's own "None" hid them. 30 visible
+0x20 units in a 3-minute span, **none** forced, so it was not PR #151's fallback.
+
+**Cause.** `in_title_hli` (any armed HLI outside a menu domain) was one of the
+`sp_disp_on` terms, added for The Matrix's white rabbit. Dinosaur's feature carries a
+single-button HLI almost throughout (124 `hli_ss=1` windows + 551 continuations, all
+`e_ptm = 0xFFFFFFFF`). While it is armed and the VM does not own the route, the route was
+the user's stream, `sp_user_log` = logical 0 = 0x20, decoded with every unit visible.
+
+**Fix.** `in_title_hli` is out of `sp_disp_on`. With subtitles off, an armed in-title
+button now falls into `fs_route`: SPRM2's stream (else the first declared) with
+`forced_only`. That is libdvdnav: `vm_get_subp_active_stream` returns bit 7 (forced only)
+whenever SPRM2's display bit is clear in the title domain, and it has no button exception.
+- The button graphics are FSTA_DSP units: The Matrix's 146 white-rabbit units are all FSTA,
+  all in HLI VOBUs (measured for PR #151), and Dinosaur's button windows start exactly at
+  its 124 forced units. They still show.
+- The Matrix with the rabbit up still routes through `vm_owns_route` (its PGC pre-command
+  `SetSTN` is display-on), so nothing changes until the user steps Subtitle to OFF; then
+  `fs_log` = SPRM2's stream 1 = the rabbit stream, forced only.
+- Multi-button in-title menus (Scene It, motion menus) keep `sp_menu_early`, a display-on
+  path. `in_title_hli` still gates in-title Select and, via `hl_btns_armed`, the mapped
+  overlay space; only its routing term went.
+
+**Known limitations.**
+- A disc whose single in-title button graphic is authored with STA_DSP (not forced) and
+  that never `SetSTN`s display-on will now show no button art with subtitles off. None is
+  known; libdvdnav shows nothing there too.
+- Dinosaur with no subtitle setup (SPRM2 = 62): the fallback is logical 0 = 0x20, and the
+  forced units on that stream still show. That is PR #151's libdvdnav-equivalent fallback,
+  unchanged here; a set-top player that treats 62 as "no stream" would show nothing. Not
+  decided as part of #178.
+
+**Gates.** `tools/check_forced_subs_wiring.py` item 3b: `sp_disp_on` must not contain
+`in_title_hli`, `hl_btns_armed` or `in_title_menu` (RED on the pre-fix `emu.sv`, exactly
+3b). `bench/dvd/run_forced_subs.sh --red` adds three `emu.sv` mutations: re-adding the term
+by name or by its definition trips exactly 3b; dropping `sp_menu_early` trips exactly 3.
 
 **Measured** (`tools/spec_audit.py --deep`, which now reassembles each SPU unit and walks its
 DCSQ table):

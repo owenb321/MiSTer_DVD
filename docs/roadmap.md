@@ -632,7 +632,8 @@ Follow-ups, all pre-existing and outside #176:
 - the 5+1 pictures skipped at every PTS-restart junction;
 - 2 s authored-duration stills on video cells whose command is fixed (the same whole-second
   overshoot, without the #176 drain; a fix changes cell timing on every disc);
-- issue #178 (in-title HLI forces the subpicture layer on: Dinosaur's SDH);
+- issue #178 (in-title HLI forces the subpicture layer on: Dinosaur's SDH): fixed on
+  `feature/hli-forced-subs`, ⏳ HW-confirm pending (`docs/subpicture.md`);
 - Thayer's Quest after an early Menu press in the boot chain (maintainer, not yet diffed
   against libdvdnav);
 - still unchecked by hand: a gapless in-title loop (Fairytopia), Mad Dog II, Crime Patrol.

@@ -66,6 +66,31 @@ if [ "${1:-}" = "--red" ]; then
     red red-01forced 's|// STA_DSP -> show$|// STA_DSP -> show\n                        w_forced <= 1'"'"'b1;|' "F1 F5"
     # the visibility gate ignores forced_only -> nothing is ever hidden by it
     red red-nogate   's|(!forced_only \|\| c_forced) \&\&||' "F1 F5"
+
+    # emu.sv seam (issue #178): each mutation must fail the wiring check on exactly its item
+    red_emu() {   # name  sed-script  expected-item (e.g. "3b.")
+        local name=$1 script=$2 want=$3
+        local d; d=$(mktemp -d)
+        sed "$script" dvd/emu.sv > "$d/emu.sv"
+        if cmp -s "$d/emu.sv" dvd/emu.sv; then
+            echo "  FAIL $name: the mutation did not apply (anchor moved)"; fail=1
+        else
+            local got
+            got=$(python3 tools/check_forced_subs_wiring.py "$d/emu.sv" | grep -o '^  [0-9]*b*\.' | tr -d ' ' | sort -u | tr '\n' ' ' | sed 's/ $//')
+            if [ "$got" != "$want" ]; then
+                echo "  FAIL $name: check tripped [$got], want exactly [$want]"; fail=1
+            else
+                echo "  PASS $name (tripped exactly [$got])"
+            fi
+        fi
+        rm -rf "$d"
+    }
+    # the armed in-title button is a display-on term again -> SDH shows with SUB OFF
+    red_emu red-hli-disp 's/^\( *\)| sp_menu_early;$/\1| in_title_hli | sp_menu_early;/' "3b."
+    # ...or by its definition rather than its name
+    red_emu red-hli-armed 's/^\( *\)| sp_menu_early;$/\1| hl_btns_armed | sp_menu_early;/' "3b."
+    # Scene It's pre-arm falls out of the display-on terms -> its menus go forced-only
+    red_emu red-no-early 's/^\( *\)| sp_menu_early;$/\1;/' "3."
 fi
 
 [ $fail -eq 0 ] && echo "ALL GREEN" || echo "FAILURES"
