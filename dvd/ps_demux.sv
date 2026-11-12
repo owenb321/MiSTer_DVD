@@ -211,7 +211,19 @@ module ps_demux (
     // (not a raw ES). Gates the flat-file transport seek in emu: only a stream
     // with packs can be re-synced by the reader's post-seek pack hunt. Clears
     // on every pipe reset (per-jump), re-latching within ms of playback.
-    output logic        saw_pack
+    output logic        saw_pack,
+
+    // LINEAR-STREAM JUNCTION (issue #188). An ISO 11172-1 program end code (0xB9)
+    // ends one MPEG stream; whatever follows is a NEW stream with its own time base
+    // (a CD-i Digital Video disc's intro, then its movie; a .cue serving several VCD
+    // tracks as one span). With jn_en (emu: a linear source, never DVD cell mode) the
+    // demux emits the still-frame filler so the decoder finishes the last picture,
+    // then PARKS (in_ready low, jn_wait high) holding the next stream's first bytes
+    // until jn_go. emu waits for the old stream to finish playing, resets the
+    // timeline, and releases it, so the next stream starts like a cold load.
+    input  wire         jn_en,
+    input  wire         jn_go,
+    output logic        jn_wait
 );
 
 // ============================================================================
@@ -245,8 +257,9 @@ typedef enum logic [4:0] {
     S_ES_EMIT,        // raw ES: emit reconstructed 00 00 01 <code> preamble
     S_ES_PASS,        // raw ES: forward every input byte to video (no demux);
                       //   leaves on a 00 00 01 BA pack (issue #48)
-    S_VID_FLUSH       // after a sequence_end_code: emit trailing filler so the
+    S_VID_FLUSH,      // after a sequence_end_code: emit trailing filler so the
                       //   VLD can flush the still's last slice (see below)
+    S_JN_WAIT         // parked after a 0xB9 on a linear stream, until jn_go (see the port)
 } state_t;
 
 state_t state;
@@ -286,6 +299,7 @@ logic [2:0]  lpcm_nch_r;       //   channels - 1 (bits[2:0])
 logic        lpcm_fs96_r;      //   bits[5:4] == 1
 logic        lpcm_bad_r;       //   a reserved rate or word length
 logic        first_aud_byte;   // marks first forwarded byte of an audio frame
+logic        jn_pend;          // this filler run ends a stream: park after it
 logic        rlgn_pend;        // aud_realign seen; next forwarded audio must start on a real frame
 logic  [2:0] aud_ssid_r;       // low 3 bits of the current PES's audio substream id
 logic  [7:0] fap_hi_r;         // AC-3/DTS sub-header first_access_unit_pointer, high byte
@@ -304,6 +318,7 @@ logic        pack_fresh;       // a pack header has been dispatched and its one
 logic        mpeg1_ps;         // stream flavour, re-latched at every pack marker:
                                // 1 = MPEG-1 system stream (VCD), 0 = MPEG-2 PS (DVD)
 assign saw_pack = ever_seen_pack;
+assign jn_wait  = (state == S_JN_WAIT);
 
 // ============================================================================
 // Output handshake (1:1 passthrough, no buffering)
@@ -341,6 +356,7 @@ always_comb begin
         // Subpicture: spu_decode writes to a BRAM with no backpressure, so accept
         // always (in_ready=1) — never stall the shared stream on subtitle data.
         S_SP_DATA:    in_ready = 1'b1;
+        S_JN_WAIT:    in_ready = 1'b0;
         default:      in_ready = 1'b1;
     endcase
 end
@@ -467,6 +483,7 @@ always_ff @(posedge clk or negedge rst_n) begin
         mpeg1_ps       <= 1'b0;
         vid_hist       <= 32'd0;
         flush_cnt      <= 8'd0;
+        jn_pend        <= 1'b0;
         vid_pts        <= 33'd0;
         vid_pts_valid  <= 1'b0;
         mark_pending   <= 1'b0;
@@ -492,8 +509,16 @@ always_ff @(posedge clk or negedge rst_n) begin
         // handshake (input held), then resume hunting.
         end else if (state == S_VID_FLUSH) begin
             if (vid_ready) begin
-                if (flush_cnt == 8'd1) state <= S_HUNT;
-                else                   flush_cnt <= flush_cnt - 8'd1;
+                if (flush_cnt == 8'd1) begin
+                    if (jn_pend) state <= S_JN_WAIT;
+                    else         state <= S_HUNT;
+                end else         flush_cnt <= flush_cnt - 8'd1;
+            end
+        // Junction: hold the next stream's bytes until emu releases them.
+        end else if (state == S_JN_WAIT) begin
+            if (jn_go) begin
+                jn_pend <= 1'b0;
+                state   <= S_HUNT;
             end
         end else if (consume) begin
             case (state)
@@ -505,6 +530,12 @@ always_ff @(posedge clk or negedge rst_n) begin
                     casez (in_byte)
                         8'hBA:   begin ever_seen_pack <= 1'b1; pack_fresh <= 1'b1; bytes_remaining <= 16'd9; state <= S_PACK_SKIP; end
                         8'hE0:   state <= S_PES_LEN_HI;   // video
+                        // program end code: on a linear stream, a junction (see jn_en)
+                        8'hB9:   if (jn_en) begin
+                                     flush_cnt <= VID_FLUSH_LEN;
+                                     jn_pend   <= 1'b1;
+                                     state     <= S_VID_FLUSH;
+                                 end else state <= S_HUNT;
                         8'hBD:   state <= S_PES_LEN_HI;   // private stream 1 (audio)
                         // MPEG audio 0xC0-0xC7 (DVD-spec MP2, MPEG-1 Layer II).
                         // Unlike private_stream_1 there is NO substream_id byte and

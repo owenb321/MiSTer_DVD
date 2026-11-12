@@ -3595,6 +3595,10 @@ reg  aud_disc_rephase;   // content PTS jump -> audio-only re-phase (driven belo
 wire aud_resync_req;     // dvd_audio_decode: its latched re-time head is stale -> audio-only re-phase
 wire aud_anchor_disc;    // = rephase_req below: a display CONTENT jump -> dvd_audio_decode step 8
 wire pipe_rst_n, aud_rst_n;
+// LINEAR-STREAM JUNCTION (issue #188): the controller is beside vbuf_empty, below.
+wire dmx_jn_wait;        // ps_demux: parked after a 0xB9 on a linear stream
+wire dmx_jn_go;          // one clk: release it (the next stream starts)
+wire lin_junction;       // one clk: the drained junction's flush -> flush_ctl
 mode_realign mode_realign_i (
     .clk             (clk_sys),
     .rst_n           (reset_n),         // NOT pipe_rst_n: the arm must survive its
@@ -3659,6 +3663,7 @@ flush_ctl flush_ctl_i (
     .load_flush      (load_flush),
     .aud_rephase_req (aud_resync_req),     // the audio decoder's stale-latch verdict -> audio-only re-phase (docs/nonseamless_audio.md 4a step 6)
     .cell_seamless   (cell_seamless),      // ...unless the author says this cell continues the last one
+    .lin_junction    (lin_junction),       // a drained linear-stream junction: aud + seek flush, no load flush (issue #188)
     .aud_flush       (aud_flush),
     .aud_resync      (aud_resync),
     .seek_flush      (seek_flush),
@@ -4144,7 +4149,14 @@ ps_demux ps_demux_inst (
     // CSS detection: marker + denominator -> the css_detect density verdict below
     .pes_scrambled    (ps_pes_scrambled),
     .pes_hdr_ok       (ps_pes_hdr_ok),
-    .saw_pack         (ps_saw_pack)
+    .saw_pack         (ps_saw_pack),
+
+    // A program end code on a LINEAR stream parks the demux until the old stream has
+    // played out (the junction controller beside vbuf_empty). Never in DVD cell mode:
+    // there the navigation owns every cell junction.
+    .jn_en            (lin_mode_w),
+    .jn_go            (dmx_jn_go),
+    .jn_wait          (dmx_jn_wait)
 );
 
 // =========================================================================
@@ -5025,8 +5037,8 @@ always @(posedge clk_sys) begin
     if (menu_active) begin
         av_vid_hold     <= 1'b0;
         av_vid_hold_tmr <= '0;
-    end else if (!pipe_rst_n) begin
-        av_vid_hold     <= 1'b1;                // held from every load/reset
+    end else if (!pipe_rst_n || lin_junction) begin
+        av_vid_hold     <= 1'b1;                // held from every load/reset (and a linear junction: it is one)
         av_vid_hold_tmr <= '0;
     end else if (av_vid_hold) begin
         av_vid_hold_tmr <= av_vid_hold_tmr + 1'b1;
@@ -5925,6 +5937,26 @@ always @(posedge clk_sys) begin
     else if (vbuf_fill_s1 <  MENU_CAP_OFF) menu_vbuf_over <= 1'b0;
     vbuf_empty <= (vbuf_fill_s1 <= 8'h01);   // low-water mark: a natural verdict may execute
 end
+
+// =========================================================================
+// LINEAR-STREAM JUNCTION (issue #188, docs/vcd_svcd.md "CD-i Digital Video").
+// A 0xB9 on a linear stream parks ps_demux; this waits for the old stream to finish
+// playing (audio drained AND the VBUF empty), fires lin_junction -- aud_flush +
+// seek_flush, NOT load_flush (flush_ctl row [12]), plus the STD video hold above --
+// then releases the demux, so the next stream starts like a cold load. The why, the
+// rig measurement and the traps are in dvd/lin_junction.sv's header.
+// =========================================================================
+wire [7:0] jn_timeouts;     // junctions flushed by the ~5 s watchdog, not a drain
+lin_junction lin_junction_i (
+    .clk         (clk_sys),
+    .rst_n       (pipe_rst_n),     // a seek/load mid-wait resets the demux too
+    .jn_wait     (dmx_jn_wait),
+    .aud_drained (aud_drained_w),
+    .vbuf_empty  (vbuf_empty),
+    .junction    (lin_junction),
+    .go          (dmx_jn_go),
+    .timeouts    (jn_timeouts)
+);
 // DVD-FORK (av_sync STC reference): sticky decoder-domain "a decoded frame has been
 // picked up for display" level, 2-FF synced into clk_sys. av_sync freezes the STC at
 // its anchor PTS until this asserts, so the presentation clock references the SCREEN,

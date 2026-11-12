@@ -44,6 +44,7 @@ module flush_ctl_tb;
   reg  mode_switch = 0, aud_switch = 0, keep_vbuf = 0, aud_rephase_req = 0;
   reg  cell_seamless = 0;
   reg  jump_cross = 0;
+  reg  lin_junction = 0;
   wire load_flush, aud_flush, aud_resync, seek_flush, mount_flush, soft_flush;
   wire pipe_rst_n, aud_rst_n;
 
@@ -59,6 +60,7 @@ module flush_ctl_tb;
     .cell_seamless   (cell_seamless),
     .keep_vbuf       (keep_vbuf),
     .jump_cross      (jump_cross),
+    .lin_junction    (lin_junction),
     .load_flush      (load_flush),
     .aud_flush       (aud_flush),
     .aud_resync      (aud_resync),
@@ -281,6 +283,22 @@ module flush_ctl_tb;
     check_row(0, 0, 0, 1, 0, 0, "[10e] aud_switch still fires aud_resync on a seamless cell");
     cell_seamless = 0;
 
+    // [12] a drained LINEAR JUNCTION (issue #188) -> aud_flush + seek_flush, and
+    //      NOT load_flush: ps_demux is parked holding the next stream's first bytes,
+    //      and load_flush (pipe_rst_n) would reset it, its FIFO and the reader's hand.
+    expect_idle("[12] not idle before lin_junction");
+    lin_junction = 1;
+    fork pulse_and_measure; begin @(posedge clk); lin_junction <= 0; end join
+    check_row(0, 1, 1, 0, 0, 0, "[12] lin_junction: aud + seek, NO load/mount/soft");
+
+    // [12b] keep_vbuf does not gate it (it is never set on a linear stream, and a
+    //       stale level from an earlier menu must not suppress the reset)
+    keep_vbuf = 1;
+    lin_junction = 1;
+    fork pulse_and_measure; begin @(posedge clk); lin_junction <= 0; end join
+    check_row(0, 1, 1, 0, 0, 0, "[12b] lin_junction under keep_vbuf: aud + seek");
+    keep_vbuf = 0;
+
     // [11] core reset mid-flush clears every counter
     start_streaming = 1;
     @(posedge clk);
@@ -296,7 +314,7 @@ module flush_ctl_tb;
     repeat (2) @(posedge clk);
     expect_idle("[11] outputs not idle after reset");
 
-    if (errors == 0) $display("flush_ctl_tb: ALL TESTS PASSED (12 scenarios)");
+    if (errors == 0) $display("flush_ctl_tb: ALL TESTS PASSED (14 scenarios)");
     else             $fatal(1, "flush_ctl_tb: %0d FAILURE(S)", errors);
     $finish;
   end
