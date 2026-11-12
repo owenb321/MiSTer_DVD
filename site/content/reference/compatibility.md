@@ -15,7 +15,7 @@ What plays, what does not, and what is untested. Current as of **v0.10.0**.
 | **`.wav` audio file** | 16-bit stereo PCM at 44.1/48 kHz only — audio, no picture |
 | **Audio CD (physical)** | Plays with track skip and a progress bar, needs [`MiSTer_DVDcss`](../formats/physical-discs.md#audio-cds) |
 | **Audio CD image (`.cue` + `.bin` or `.wav`)** | Plays exactly as the physical disc does, needs `MiSTer_DVDcss` — see [Playing a `.cue`](../getting-started/loading.md#playing-a-cue). `.wav` tracks must be 16-bit stereo 44.1 kHz; MP3/FLAC sheets are refused |
-| **VCD/SVCD image via `.cue`** | Same playback as the `.bin`, without having to pick the track; also plays `MODE2/2336` rips. Needs `MiSTer_DVDcss` |
+| **VCD/SVCD image via `.cue`** | Same playback as the `.bin`, without having to pick the track; also plays `MODE2/2336` rips and [CD-i Digital Video](../formats/vcd-svcd.md#cd-i-digital-video-discs) sheets (`CDI/2352`). Needs `MiSTer_DVDcss` |
 | **CHD images** | **Not supported** |
 
 !!! note "ISO9660 only"

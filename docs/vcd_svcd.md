@@ -235,6 +235,92 @@ slightly long.
 Gate: `bench/dvd/lin_rate_tb.sv` (13 tests, stimulus is a stream model, mutation-proven
 against nine targeted RTL faults) under `bench/dvd/run_dpad_seek.sh`.
 
+## 3b. CD-i Digital Video discs and stream junctions (issue #188, 2026-11-12)
+
+**Status: sim-proven (`bench/dvd/run_lin_junction.sh --red`), ⏳ HW-confirm pending on
+branch `feature/vcd-pts-restart`.**
+
+**The report.** An original Philips/Paramount PAL "Video CD" of *Hunt for Red October*
+(Italian edition, catalogue 815 1023, "Compact Disc Digital Video") played 4-5 s out of
+sync on v0.10.0, from the physical disc and its `.bin` alike. The maintainer's rip of the
+English edition reproduces it.
+
+**What the disc is.** It is a CD-i Digital Video disc (Philips' pre-White-Book movie
+format), not a White Book VCD: the cue says `TRACK 01 CDI/2352`, and the CD-i disc label
+at sector 16 reads volume set `Philips_Movie_Video_1993`, application `CDI/CDI_FLM1.APP`.
+`tools/vcd_timeline.py` (header-only, safe to ask a reporter to run) shows the stream the
+core sees:
+
+| sectors | what |
+|---|---|
+| 0-4248 | CD-i application data (Form 2 images etc.); a few stray start codes, skipped by length |
+| 4249-5015 | **segment A**: a ~10 s intro. ONE still picture (video PTS 0.00/0.04) under 10 s of **mono** MP2 192k, ending in a program end code `0xB9` |
+| 5016-5217 | Form 1 CD-i data, which the deblocker drops |
+| 5218- | **segment B**: the movie, a fresh pack + system + sequence header; 368x272@25, **stereo** MP2 192k; **audio PTS restarts at 0.028** while the video PTS runs on forward (0.04 -> 0.16) |
+
+Disc 2 is built the same way. Inside each segment the mux is ordinary (PTS-SCR 0.1 s audio,
+0.3 s video, as on the HW-confirmed VCDs).
+
+**The mechanism (rig telemetry, v0.10.0 code).** At the junction the movie's first picture
+was ~10 s late on the clock, so the late leg (`LATE_MAX`) re-anchored the STC onto it while
+~0.8 s of the intro's audio was still queued. The movie's audio head was then already late
+on the new clock: the in-band re-time (`retime`, `RETIME_WIN`) would not release it, the
+~1 s ring filled, the full ring stopped the shared demux, video starved (`vbuf_fill` 0,
+pickups frozen ~2.5 s), and the `arm_timer` fallback released audio free-running. Steady
+state: `disp_lag` -2.5 s (just inside `LATE_MAX`, so never re-anchored), `av_drift` -3.8 s
+against a -0.43 s baseline. A seek cleared it (`av_drift` 0-70 ms after), which is why it
+looked like a constant offset rather than a drift; the reporter's "survives a skip" was a
+chapter skip, which does not move a linear stream.
+
+**The fix: play junctions in turn.** A standalone player ends one play item before starting
+the next; the DVD path does the same at a natural cell transition (`docs/dvd_nav.md` "A
+natural transition waits for the AUDIO too"). On a LINEAR stream only (`lin_mode_w` =
+`lin_seek_ok_w && !cell_ready`; DVD cell mode, where the navigation owns every junction, is
+untouched):
+
+1. `ps_demux` (`jn_en`) treats `0xB9` as a junction: it emits the still-frame filler (so the
+   decoder finishes segment A's last picture), then parks (`S_JN_WAIT`, `in_ready` low),
+   holding segment B's first bytes in `ps_stream_fifo` and the reader.
+2. `dvd/lin_junction.sv` waits for `aud_drain`'s `drained` AND `vbuf_empty`, continuously
+   for ~0.31 s (pictures in flight), bounded by a ~5 s watchdog (`timeouts`, counted).
+3. It pulses `lin_junction` into `flush_ctl` (row [12]): **aud_flush + seek_flush, NOT
+   load_flush**. Nothing is buffered to lose; load_flush (`pipe_rst_n`) would reset the
+   demux, its FIFO and the reader, which hold segment B. The STD video hold re-arms on it as
+   on a load. The reframers ARE reset (`rf_flush_q`): segment A's last frame start can sit
+   in their pipeline with A's PTS (the stale-PTS trap, `docs/dvd_nav.md` §2h).
+4. After the flush and its CDC into clk_dec, it releases the demux: segment B starts like a
+   cold load.
+
+Cost: the intro's last ~26 ms audio frame (the ring never commits a final frame) and about
+a third of a second holding segment A's last picture. The same path covers a `.cue` that
+serves several VCD tracks as one span (each track restarts its PTS) and concatenated
+`.mpg` files. A file's final `0xB9` parks at EOF and changes nothing visible.
+
+**Bug A, found on the way: MP2 started at 48 kHz.** Started directly into segment B (a
+trimmed rip), the engine decoded 41.7 MP2 frames/s against 38.3 and `av_drift` grew ~87 ms/s:
+44.1 kHz audio on a 48 kHz NCO. `nco_fs` freezes when the drain gate opens, and a flush
+resets the engine's `mp2_fs` to 48 kHz. The scheduled release now waits for the engine's
+`mp2_fs_ok` (a header has reported the rate since reset) while MP2 is active; the
+`arm_timer` fallback stays ungated so an engine that never reports cannot wedge the gate.
+`vcd_chain_tb` gained `+STC_LEAD=<ticks>` to start the clock past the first audio PTS.
+
+**`.cue`:** `CDI/2352` and `CDI/2336` tracks now serve as a Video CD span (`main/tests`
+[8l]-[8n]). A CD-i GAME image therefore reaches the core and plays black instead of being
+refused.
+
+**Gates:** `bench/dvd/run_lin_junction.sh --red` (7 arms; 7 mutations each fail exactly
+their own arms), `flush_ctl_tb` [12]/[12b], `tools/check_lin_junction_wiring.py --red`
+(11 miswirings), `main/tests/run_tests.sh --red` (`cue-cdi-not-served`).
+
+**Known limitations / next steps:**
+- ⏳ HW: the full HFRO disc 1 and 2 in sync through the junction and after seeks, against a
+  `main` control; dinosaur and QG0012 unchanged; then a build to the reporter (their
+  Italian disc may differ, e.g. a segment per chapter; the fix makes no assumption about
+  the count).
+- No sim gate drives a two-segment stream through the whole audio chain + scheduler; the
+  junction's timing is proven per module and on the rig.
+- `jn_timeouts` is not in telemetry yet.
+
 ## 4. Tests
 
 One entry point: **`bench/dvd/run_vcd.sh`** (raw reader TB + MPEG-1 demux TB + full

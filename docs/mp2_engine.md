@@ -84,6 +84,10 @@ but rounds differently: rejected, because bit identity is the VCD safety net.
 (mode_ext 1–3), table B.2b. The DVDs are 48 kHz, 256k stereo (two discs) and 384k with
 CRC (one disc). No real stream uses 32 kHz, dual channel, mono, or tables B.2c/d. Those
 come from the synthetic set alone, so it is what keeps the engine honest there.
+(2026-11-12: a real mono stream exists now, the ~10 s intro of the Philips CD-i Digital
+Video discs, 192k 44.1 kHz, followed by a stereo movie on the same stream; issue #188,
+`docs/vcd_svcd.md` §3b. It is not in the gate corpus. The same issue added `mp2_fs_ok`:
+the output gate waits for the engine's first rate report after a reset.)
 
 **The gate:** `bench/dvd/run_mp2_model.sh` writes a `mp2_ref.py` fixture of 24 frames
 for each stream and runs `mp2_decode_tb` on it. **89 of 89 bit-exact**, 27,648 samples
