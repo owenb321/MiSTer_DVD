@@ -56,8 +56,10 @@ enum { DVD_CUE_NONE = 0, DVD_CUE_AUDIO = 1, DVD_CUE_VCD = 2 };
 // WAVE is a .wav per track, as EAC and most rippers write.
 enum { DVD_CUE_FT_BINARY = 0, DVD_CUE_FT_MOTOROLA, DVD_CUE_FT_WAVE };
 
-// TRACK types this module can serve. Everything else (MODE1/*, MODE2/2048, CDG,
-// CDI/*) parses as OTHER: it is never served, and it ends a Video CD's span.
+// TRACK types this module can serve. MODE2 covers MODE2/2352, MODE2/2336 and the
+// CD-i Digital Video cues CDI/2352, CDI/2336 (issue #188). Everything else
+// (MODE1/*, MODE2/2048, CDG) parses as OTHER: it is never served, and it ends a
+// Video CD's span.
 enum { DVD_CUE_TT_AUDIO = 0, DVD_CUE_TT_MODE2, DVD_CUE_TT_OTHER };
 
 typedef struct {

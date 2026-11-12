@@ -83,6 +83,12 @@ static int parse_track_type(const char *w, int *type, int *ssize)
 		{ "AUDIO",      DVD_CUE_TT_AUDIO, 2352 },
 		{ "MODE2/2352", DVD_CUE_TT_MODE2, 2352 },
 		{ "MODE2/2336", DVD_CUE_TT_MODE2, 2336 },
+		// A CD-i Digital Video disc (Philips' early "Video CD" movies, issue #188)
+		// is cued as CDI: the same Mode 2 XA sectors as a VCD, served the same way.
+		// The core plays the MPEG it finds in them; a CD-i GAME image has none and
+		// plays black instead of being refused here.
+		{ "CDI/2352",   DVD_CUE_TT_MODE2, 2352 },
+		{ "CDI/2336",   DVD_CUE_TT_MODE2, 2336 },
 		// Everything below is legal cue syntax but nothing the core plays. It
 		// still has a sector size, because its bytes sit in the file between
 		// tracks that ARE played and have to be stepped over correctly.
@@ -90,8 +96,6 @@ static int parse_track_type(const char *w, int *type, int *ssize)
 		{ "MODE1/2048", DVD_CUE_TT_OTHER, 2048 },
 		{ "MODE2/2048", DVD_CUE_TT_OTHER, 2048 },
 		{ "MODE2/2324", DVD_CUE_TT_OTHER, 2324 },
-		{ "CDI/2336",   DVD_CUE_TT_OTHER, 2336 },
-		{ "CDI/2352",   DVD_CUE_TT_OTHER, 2352 },
 		{ "CDG",        DVD_CUE_TT_OTHER, 2448 },
 	};
 	for (unsigned i = 0; i < sizeof(tab) / sizeof(tab[0]); i++)

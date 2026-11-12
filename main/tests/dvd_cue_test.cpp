@@ -468,6 +468,20 @@ static void arm_mount_vcd(void)
 			if (fr[(size_t)s * 2352 + 16 + o] != disc_byte(s, o)) bad++;
 	check("[8k] each 2336-byte sector follows its 16-byte prefix", bad, 0);
 	g_vcd_close();
+
+	// CD-i Digital Video (issue #188): Philips' early movie discs are cued CDI/2352
+	// and are the same Mode 2 sectors as a VCD.
+	write_sectors("cdi.bin", 0, 40, 2352);
+	write_text("cdi.cue", "FILE \"cdi.bin\" BINARY\nTRACK 01 CDI/2352\nINDEX 01 00:00:00\n");
+	path_of(p, "cdi.cue");
+	g_vcd_len = -1;
+	check("[8l] CDI/2352 mounts as a Video CD", dvd_cue_mount(p), DVD_CUE_VCD);
+	check("[8m] ...40 sectors", g_vcd_len, 40);
+	g_vcd_close();
+	write_text("cdi6.cue", "FILE \"x.bin\" BINARY\nTRACK 01 CDI/2336\nINDEX 01 00:00:00\n");
+	path_of(p, "cdi6.cue");
+	check("[8n] CDI/2336 mounts as a Video CD", dvd_cue_mount(p), DVD_CUE_VCD);
+	g_vcd_close();
 }
 
 static void arm_mount_failures(void)
