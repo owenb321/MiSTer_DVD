@@ -69,6 +69,7 @@ module audio_engine (
     output logic [15:0] dts_r,
     output logic        dts_valid,
     output logic  [1:0] mp2_fs,              // MP2: the stream's rate (0 44.1, 1 48, 2 32 kHz)
+    output logic        mp2_fs_ok,           // a header has reported mp2_fs since reset
     output logic [15:0] n_ignored,           // CNT 0: DTS downmixes ignored, MP2 frames
                                              // longer than their header
     input  wire         dts_ready,
@@ -123,7 +124,7 @@ module audio_engine (
     assign fr_ready = e_fr_ready && !codec_busy;
 
     dts_top u_eng (
-        .clk, .rst_n(e_rst_n), .codec(eng_codec), .mp2_fs,
+        .clk, .rst_n(e_rst_n), .codec(eng_codec), .mp2_fs, .mp2_fs_ok,
         .fr_len, .fr_valid(e_fr_valid), .fr_ready(e_fr_ready), .in_byte, .in_valid, .in_ready,
         .cb_req, .cb_sel, .cb_addr, .cb_valid, .cb_data,
         .pcm_l(dts_l), .pcm_r(dts_r), .pcm_valid(dts_valid), .pcm_ready(dts_ready),

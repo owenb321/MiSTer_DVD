@@ -298,6 +298,7 @@ module dvd_audio_decode #(
     // nco_fs is latched in the drain-gate controller at the end of this file
     // (where `draining`/`cur_codec` are in scope — declaration-before-use).
     wire [1:0] mp2_fs;                       // the engine's (MFS: the MP2 header's rate)
+    wire       mp2_fs_ok;                    // ...and a header has reported it since the engine's reset
     logic [1:0] nco_fs;
     assign nco_fs_out = nco_fs;
 
@@ -876,6 +877,7 @@ module dvd_audio_decode #(
         .dts_valid   (dts_valid),
         .dts_ready   (dts_ready),
         .mp2_fs      (mp2_fs),
+        .mp2_fs_ok   (mp2_fs_ok),
         .n_ignored   (),
         .cb_req      (cb_req),
         .cb_sel      (cb_sel),
@@ -1305,8 +1307,17 @@ module dvd_audio_decode #(
                 if ((armed_data || frame_valid || (state != S_IDLE)) && ~&arm_timer)
                     arm_timer <= arm_timer + 1'b1;
 
+                // (!mp2_active || mp2_fs_ok): an MP2 stream releases only once the
+                // engine has REPORTED its rate, because nco_fs freezes at the release.
+                // A flush resets the engine and with it mp2_fs, to 48 kHz; a stream whose
+                // first frame is latched with the clock already past it (its audio muxed
+                // ahead of its first picture) released here before the engine had parsed
+                // that frame's header, and played 44.1 kHz audio at 48 kHz -- 8.8 % fast
+                // and drifting without bound (issue #188, MEASURED: 41.7 MP2 frames/s
+                // against 38.3). Microseconds of delay; the fallback below stays ungated,
+                // so an engine that never reports cannot wedge the gate.
                 if (play_pts_valid && disp_anchored && video_live && (start_delta >= 0) &&
-                    (!retime || (start_delta < RETIME_WIN))) begin
+                    (!retime || (start_delta < RETIME_WIN)) && (!mp2_active || mp2_fs_ok)) begin
                     draining    <= 1'b1;       // scheduled release (the normal path)
                     retime      <= 1'b0;
                     seen_valid  <= 1'b0;
