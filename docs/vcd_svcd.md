@@ -237,8 +237,12 @@ against nine targeted RTL faults) under `bench/dvd/run_dpad_seek.sh`.
 
 ## 3b. CD-i Digital Video discs and stream junctions (issue #188, 2026-11-12)
 
-**Status: sim-proven (`bench/dvd/run_lin_junction.sh --red`), ⏳ HW-confirm pending on
-branch `feature/vcd-pts-restart`.**
+**Status: ✅ HW-confirmed on the rig (build `DVD_vcdrestart_20261112_0549`, SCR trigger),
+branch `feature/vcd-pts-restart`, not merged; ⏳ the reporter's Italian disc.** HFRO disc 1
+and disc 2: the intro plays in full (all 383 MP2 frames), one junction at ~19.3 s, the movie
+in sync (`av_drift` -12..+90 ms, `disp_lag` ~-20 ms, control: -3.8 s / -2.5 s); seeks both
+ways keep sync. Unchanged against the control: dinosaur (PAL VCD), QG0012 (NTSC VCD), an
+SVCD `.mpg`, and Apollo 13 (DVD; last 30 s identical: 31.24 AC-3 frames/s, drift ±47 ms).
 
 **The report.** An original Philips/Paramount PAL "Video CD" of *Hunt for Red October*
 (Italian edition, catalogue 815 1023, "Compact Disc Digital Video") played 4-5 s out of
@@ -326,10 +330,11 @@ decoders on 37 HFRO packs and 1,805 SVCD packs), `flush_ctl_tb` [12]/[12b], `too
 (11 miswirings), `main/tests/run_tests.sh --red` (`cue-cdi-not-served`).
 
 **Known limitations / next steps:**
-- ⏳ HW: the full HFRO disc 1 and 2 in sync through the junction and after seeks, against a
-  `main` control; dinosaur and QG0012 unchanged; then a build to the reporter (their
-  Italian disc may differ, e.g. a segment per chapter; the fix makes no assumption about
-  the count).
+- ⏳ A build to the reporter: their Italian disc may differ (e.g. a segment per chapter;
+  the fix makes no assumption about the count). Ask them for `tools/vcd_timeline.py`'s output.
+- `run_stc_freerun.sh` (untouched `disp_sched`): green; its mutation stage did not finish
+  inside an hour on this run. `main/tests --red` failed once while Quartus was compiling
+  (log not kept), then passed twice.
 - No sim gate drives a two-segment stream through the whole audio chain + scheduler; the
   junction's timing is proven per module and on the rig.
 - `jn_timeouts` is not in telemetry yet.
