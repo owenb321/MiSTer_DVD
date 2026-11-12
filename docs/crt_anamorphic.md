@@ -519,7 +519,10 @@ rather than its exact text.
 **HW gate:** ✅ on the rig, 2026-11-12, with the prototype build carrying Fix 0 (the RTL of
 Fix 0/1 is the same here): The Matrix, English via the button, Interlaced. Letterbox 0:04:47,
 T 12 → 16 rows, drawn at its authored place low in the bottom bar; Crop 0:06:29, the same line
-346 → 254 px wide. ⏳ This branch's own build on the board.
+346 → 254 px wide. ✅ This branch's build too (`DVD_subvscale4`, SEED 7: 38,206 ALM / 520
+M10K / 87 DSP, = `main`'s 38,207 / 520 / 87; timing PASS, clk_mem 90.19 MHz at 100 °C, thin):
+Letterbox 0:05:24, each line 15 → 20–21 rows tall, widths unchanged; Crop 0:06:30, 254 px wide.
+⏳ The maintainer's look on a CRT.
 
 ## 9b. SIF analog fill reuse (✅ HW-CONFIRMED 2026-08-24, PR #2)
 

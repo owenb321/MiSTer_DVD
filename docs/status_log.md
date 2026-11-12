@@ -22,8 +22,9 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Button-chosen subtitles drawn mapped since v0.10.0: the SPRM2 write-back re-claimed the stream (2026-11-11, branch `feature/subpic-vscale`)
 
-**State:** 🔧 gates green; the fix HW-confirmed on the rig in a prototype build with the same RTL;
-⏳ this branch's build on the board. **Field report (maintainer):** subtitles look rough on a CRT
+**State:** ✅ HW on the rig (`DVD_subvscale4`, 2026-11-12: Letterbox lines 15 → 20–21 rows,
+Crop 254 px = 1:1; fit = `main`'s, 38,206 ALM; timing PASS with clk_mem 90.19 MHz at 100 °C);
+⏳ the maintainer's look on a CRT. **Field report (maintainer):** subtitles look rough on a CRT
 under Letterbox (The Matrix, English via the Subtitle button), and smaller than under Crop.
 **Root cause (measured):** the subtitle was in the MAPPED overlay context: ¾ tall and
 nearest-line under Letterbox (capital T 12 rows against the bitmap's 17), 1.36× wide under
@@ -38,8 +39,7 @@ variant (`0x21` = `0x20`'s bitmap). **Rejected by the maintainer:** a 2-tap filt
 overlays plus a flicker filter, prototyped and HIL-compared (+236 ALM, +2 M10K, +6 DSP), not
 worth the logic. **HW (prototype with this RTL, 2026-11-12):** Letterbox T 12 → 16 rows;
 Crop line 346 → 254 px. **Known residual:** subtitles chosen from a disc's own menu, or restored
-by a save-state load, stay VM-owned and mapped (¾, nearest-line under Letterbox). **Next step:**
-build this branch and confirm on the board. Detail: `docs/crt_anamorphic.md` §9c. Gates:
+by a save-state load, stay VM-owned and mapped (¾, nearest-line under Letterbox). **Next step:** the maintainer's look on a CRT, then the PR. Detail: `docs/crt_anamorphic.md` §9c. Gates:
 `check_subp_ctx_wiring.py` (arms 1–4), `run_subpic.sh --red` (X-R1, X-R2),
 `check_subp32_wiring.py`.
 
