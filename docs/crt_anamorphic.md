@@ -456,7 +456,7 @@ verified by review. All `run_subpic.sh` suites green.
 letterboxed raster is shared); T2/Matrix menu highlights still land on buttons; white
 rabbit aligned; MiB flipbook still tracks the picture; SIF disc subtitles unchanged.
 
-## 9c. The user's subtitle drawn mapped since v0.10.0 (the SPRM2 write-back); raw under an HLI (2026-11-11, branch `feature/subpic-vscale`)
+## 9c. The user's subtitle drawn mapped since v0.10.0 (the SPRM2 write-back); raw under an HLI (2026-11-11, ✅ HW-CONFIRMED, branch `feature/subpic-vscale`)
 
 **The report (maintainer):** subtitles look rough on a CRT under Letterbox (The Matrix, English
 switched on with the Subtitle button), and smaller in Letterbox than in Crop.
@@ -522,7 +522,7 @@ T 12 → 16 rows, drawn at its authored place low in the bottom bar; Crop 0:06:2
 346 → 254 px wide. ✅ This branch's build too (`DVD_subvscale4`, SEED 7: 38,206 ALM / 520
 M10K / 87 DSP, = `main`'s 38,207 / 520 / 87; timing PASS, clk_mem 90.19 MHz at 100 °C, thin):
 Letterbox 0:05:24, each line 15 → 20–21 rows tall, widths unchanged; Crop 0:06:30, 254 px wide.
-⏳ The maintainer's look on a CRT.
+✅ The maintainer's look on a CRT (2026-11-12): good in every aspect mode.
 
 ## 9b. SIF analog fill reuse (✅ HW-CONFIRMED 2026-08-24, PR #2)
 
