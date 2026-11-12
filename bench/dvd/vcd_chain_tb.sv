@@ -231,7 +231,9 @@ module vcd_chain_tb;
             $fatal(1, "fixtures missing (run bench/dvd/run_vcd.sh)");
         // STC preroll: by default ~33 ms below the first audio PES PTS. +STC_LEAD
         // starts it PAST that PTS instead, as when a stream's first audio is muxed
-        // ahead of its first picture (issue #188: the HFRO movie, +132 ms).
+        // ahead of its first picture (issue #188: the HFRO movie, +132 ms). ⚠ It does
+        // NOT reproduce #188's 48 kHz start: +STC_LEAD=11880 passes on the pre-fix RTL
+        // (docs/vcd_svcd.md §3b). A knob, not a gate.
         stc_r = apts[0][32:0] + 33'(stc_lead);
         stc_init = 1;
         $display("chain fixture: %0d PS bytes, %0d golden samples, sched=%0d",

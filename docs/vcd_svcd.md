@@ -308,7 +308,12 @@ trimmed rip), the engine decoded 41.7 MP2 frames/s against 38.3 and `av_drift` g
 resets the engine's `mp2_fs` to 48 kHz. The scheduled release now waits for the engine's
 `mp2_fs_ok` (a header has reported the rate since reset) while MP2 is active; the
 `arm_timer` fallback stays ungated so an engine that never reports cannot wedge the gate.
-`vcd_chain_tb` gained `+STC_LEAD=<ticks>` to start the clock past the first audio PTS.
+✅ **HW:** the movie-only slice now runs 38.27 MP2 frames/s with `av_drift` steady at
+-30 ms (control: 41.70, drifting, two runs). ⚠ **No sim gate reproduces it:**
+`vcd_chain_tb +SCHED +STC_LEAD=11880` (the clock started 132 ms past the first audio PTS,
+as at the movie's start) PASSES on the pre-fix RTL, so the board's race involves ordering
+that audio-only bench does not model (the codec switch's engine reset, the real video
+start). The plusarg stays as a knob; it is not evidence.
 
 **`.cue`:** `CDI/2352` and `CDI/2336` tracks now serve as a Video CD span (`main/tests`
 [8l]-[8n]). A CD-i GAME image therefore reaches the core and plays black instead of being
