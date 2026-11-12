@@ -418,6 +418,7 @@ refinement is raw art + raw rect for that case (prompt text doesn't align to vid
 imagery): drop the bare `hl_btns_armed` term and let `vm_owns_route` catch forced-stream
 prompts — deliberately NOT done now, since it trades a proven-safe superset for an
 assumption about discs never seen.
+**⚠ Done 2026-11-11 (§9c):** the term is now `hl_btns_armed & ~sp_user_path`.
 
 The select is **committed on `av_refresh_tick` (frame top) only**: `spu_decode`'s
 `q_row_base` walker accepts only {reset,+1,+2}/{reset≤1,+2,+4} q_y steps, so a mid-frame
@@ -454,6 +455,74 @@ verified by review. All `run_subpic.sh` suites green.
 **HW gate:** subtitle edges clean under Letterbox/Crop on the CRT (and HDMI-480i — the
 letterboxed raster is shared); T2/Matrix menu highlights still land on buttons; white
 rabbit aligned; MiB flipbook still tracks the picture; SIF disc subtitles unchanged.
+
+## 9c. The user's subtitle drawn mapped since v0.10.0 (the SPRM2 write-back); raw under an HLI (2026-11-11, ✅ HW-CONFIRMED, branch `feature/subpic-vscale`)
+
+**The report (maintainer):** subtitles look rough on a CRT under Letterbox (The Matrix, English
+switched on with the Subtitle button), and smaller in Letterbox than in Crop.
+
+**What it was: a v0.10.0 regression, measured on the board.** A button-chosen subtitle is meant
+to be §9a's RAW context, 1:1. It was in the MAPPED one. Its glyphs were the disc bitmap
+**squeezed to ¾ vertically under Letterbox** (a capital T 12 rows tall with a 1-row crossbar;
+the bitmap's capitals are 17 rows, decoded with `tools/spu_ref.py`) and **stretched 1.36×
+horizontally under Crop** (a line 346 px wide with 4 px stems, against 254 px and 3 px). Those
+are exactly §9's two inverse maps, nearest-tap, so Letterbox dropped every 4th line.
+
+**Why:** since 2026-10-27 (save states, in v0.10.0) a Subtitle step writes the user's choice
+back to SPRM2 (`spst_wb`, `docs/nav_engine.md` §11). That write moves `vm_spstn`, and the
+`vm_owns_sp` claim read it as a disc SetSTN, so the VM re-claimed the stream one cycle after
+the press released it. The write-back's comment said "with the same value, so nothing audible
+changes": true of the stream, false of the overlay, because `vm_owns_route` is also a
+mapped-context term (§9a).
+
+**Fix 0 (the fix for the report):** the write-back does not claim. `spst_wb_mask` marks the
+write in flight; a `vm_spstn` change that lands as `spst_wb_val` (`spst_wb_landing`) is ours.
+Any other change is the disc's and claims as before. A disc SetSTN of exactly the value the
+user chose is not claimed either: harmless, it is the same stream and it stays the user's,
+raw. Audio's write-back still re-claims, harmlessly (`vm_owns_aud` picks the track only).
+
+**Fix 1:** the §9a residue refinement, `hl_btns_armed & ~sp_user_path`. `sp_user_path` is the
+complement of `sp_track_eff`'s select (`menu_sp_ctx | vm_owns_route | force_43_subp |
+fs_route`), so an armed in-title HLI no longer flips the user's own stream to the mapped
+space. Menus, Scene It, SetSTN-forced art, the MiB flipbook and an armed HLI over the forced
+route (subtitles off, where the white rabbit is drawn) stay mapped.
+
+**Refuted on the way (each cost a HIL round; kept so they are not re-derived):**
+- "English goes nearest-tap at every white-rabbit window". The 9 rabbit windows (~9 s,
+  single-button HLI) are interleaved cells whose only subpicture streams are `0x22`/`0x23`;
+  English is not in them, and PLAY MOVIE does not play them. (Fix 1 is still right for the
+  residue; it was not this report.)
+- "interlace twitter on the raw path". It came from reading the Debug Overlay's block 1
+  (`hl_btns_armed`) red as "raw"; no block shows `vm_owns_sp`. The glyph measurement settled it.
+- "a disc-made letterbox variant": on The Matrix `0x21` is `0x20`'s bitmap byte for byte,
+  placed 20 lines lower.
+
+**Rejected (by the maintainer, after a prototype was built, fitted and HIL-compared):** a 2-tap
+vertical filter for every mapped overlay (the bitmap banked ×4 by row so two rows read per
+pixel, a second `hl_compose` and palette port, a two-tap compositor), plus an interlace
+flicker filter for unscaled overlays on the same hardware. Cost +236 ALM, +2 M10K, +6 DSP for a
+barely visible change on menu highlights, and the flicker filter answered the refuted twitter
+theory. Not worth ~7 % of the ALM headroom. If it is ever wanted, the design is: two taps
+named by `crt_ov_map` (disp_vscale's pair and weight), four row banks so taps k/k+1 and k/k+2
+never share one, compose both taps and blend the composites with disp_vscale's blend8.
+
+**Known residual:** a subtitle turned on from the disc's OWN menu is a real SetSTN, so it is
+VM-owned and mapped: ¾ tall and nearest-line under Letterbox, as before v0.10.0. So is one
+restored by a save-state load (SPRM2 comes back through the VM). Telling a dialogue stream
+from disc art at SetSTN time would fix both; nothing does that yet.
+
+**Verification:** `tools/check_subp_ctx_wiring.py` arms 1–4 (FAIL on `main` in 1, 2 and 4);
+`run_subpic.sh --red` X-R1 (the write-back claims again → arm 4 only) and X-R2 (a bare
+`hl_btns_armed` → arm 2 only). `check_subp32_wiring.py` arm 6 now reads the claim's condition
+rather than its exact text.
+
+**HW gate:** ✅ on the rig, 2026-11-12, with the prototype build carrying Fix 0 (the RTL of
+Fix 0/1 is the same here): The Matrix, English via the button, Interlaced. Letterbox 0:04:47,
+T 12 → 16 rows, drawn at its authored place low in the bottom bar; Crop 0:06:29, the same line
+346 → 254 px wide. ✅ This branch's build too (`DVD_subvscale4`, SEED 7: 38,206 ALM / 520
+M10K / 87 DSP, = `main`'s 38,207 / 520 / 87; timing PASS, clk_mem 90.19 MHz at 100 °C, thin):
+Letterbox 0:05:24, each line 15 → 20–21 rows tall, widths unchanged; Crop 0:06:30, 254 px wide.
+✅ The maintainer's look on a CRT (2026-11-12): good in every aspect mode.
 
 ## 9b. SIF analog fill reuse (✅ HW-CONFIRMED 2026-08-24, PR #2)
 

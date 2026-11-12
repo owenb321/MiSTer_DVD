@@ -717,7 +717,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-hliforcedsubs"
+`define CORE_VERSION "dev-subvscale"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -3136,15 +3136,30 @@ end
 // ⚠ The claim guard is "a real angle" (>= 1). SPRM3 resets to 1, so a disc that
 // never issues SetSTN AGLN would otherwise claim ownership of the default and
 // make the B6 button look dead until the first press releases it.
+// ⚠ The Subtitle write-back (spst_wb, below) moves vm_spstn too, and it must NOT
+// claim: vm_owns_sp is not only "which stream" (the same one) but also feeds
+// vm_owns_route, which puts the overlay in the MAPPED context. Since v0.10.0 every
+// Subtitle press re-claimed one cycle after releasing, so a button-chosen subtitle
+// was drawn mapped: 3/4 tall and nearest-line under Letterbox (the "rough" report,
+// 2026-11-11), 1.36x wide under Crop. spst_wb_mask marks the write in flight; the
+// change it lands as (vm_spstn == spst_wb_val) is ours, any other change is the
+// disc's. A disc SetSTN of exactly the value the user chose is also not claimed --
+// the same stream either way, and it stays the user's (raw) one.
+// Audio's write-back still re-claims, harmlessly: vm_owns_aud picks the track only.
 reg  vm_owns_aud, vm_owns_sp, vm_owns_angle;
 reg  [7:0] vm_astn_p, vm_spstn_p, vm_agln_p;
+reg  spst_wb_mask;
+wire spst_wb_landing = (spst_wb | spst_wb_mask) && (vm_spstn == spst_wb_val);
 always @(posedge clk_sys or negedge reset_n) begin
     if (!reset_n) begin
         vm_owns_aud <= 1'b0; vm_owns_sp <= 1'b0; vm_owns_angle <= 1'b0;
         vm_astn_p <= 8'd15;  vm_spstn_p <= 8'd0; vm_agln_p <= 8'd1;
+        spst_wb_mask <= 1'b0;
     end else begin
         vm_astn_p  <= vm_astn;   vm_spstn_p <= vm_spstn;
         vm_agln_p  <= vm_agln;
+        if (spst_wb)                      spst_wb_mask <= 1'b1;
+        else if (vm_spstn != vm_spstn_p || start_streaming) spst_wb_mask <= 1'b0;
         if (start_streaming) begin
             vm_owns_aud <= 1'b0; vm_owns_sp <= 1'b0; vm_owns_angle <= 1'b0;
         end else begin
@@ -3162,7 +3177,9 @@ always @(posedge clk_sys or negedge reset_n) begin
                 vm_owns_aud <= 1'b0;
             // subpicture: SetSTN display-on claims; a Subtitle STEP releases
             // (bit 5 clear: 62/63 = "none"/"forced" are not streams and never claim)
-            if (menus_on && vm_spstn != vm_spstn_p && vm_spstn[6] && !vm_spstn[5])
+            // (and never our own write-back landing: spst_wb_landing, above)
+            if (menus_on && vm_spstn != vm_spstn_p && vm_spstn[6] && !vm_spstn[5]
+                && !spst_wb_landing)
                 vm_owns_sp <= 1'b1;
             if (sub_step_w)
                 vm_owns_sp <= 1'b0;
@@ -3281,8 +3298,10 @@ assign     sub_on_eff = sub_on | (menus_on && vm_owns_sp && vm_spstn[6]);
 // and both a disc command reading it and a save state (docs/nav_engine.md §11) need
 // the stream playing, not the one the disc last set. Taken one cycle after the step,
 // from the EFFECTIVE selection (aud_log / sp_sel, after the step released the VM's
-// claim), never a predicted value. The write moves vm_astn/vm_spstn, which re-claims
-// the selection for the VM -- with the same value, so nothing audible changes.
+// claim), never a predicted value. The write moves vm_astn/vm_spstn. For AUDIO that
+// re-claims the selection for the VM with the same value, so nothing audible changes.
+// For the SUBTITLE it must not (spst_wb_landing, at vm_owns_sp): the claim also picks
+// the overlay context, and re-claiming drew the user's subtitle mapped (v0.10.0).
 // Subtitles OFF keep SPRM2's stream number and clear bit 6, as libdvdnav does: the
 // forced-subtitle fallback reads that stream (docs/subpicture.md).
 reg aud_step_q, sub_step_q;
@@ -3465,6 +3484,10 @@ subp_stream_map u_subp_map (
 // a conforming player does; showing it illegibly is our own invention.
 // Bound: 3 title PGCs in a 221-disc/22,733-PGC sweep (see subp_stream_map.sv).
 wire sp_user_absent = sp_stream_absent & ~(menu_sp_ctx | vm_owns_route | force_43_subp | fs_route);
+// The USER's stream is the one displayed: the complement of sp_track_eff's select
+// below. Read by the overlay context (sp_ctx_mapped_w). The same four terms as that
+// mux -- tools/check_subp_ctx_wiring.py proves the two sets equal.
+wire sp_user_path   = ~(menu_sp_ctx | vm_owns_route | force_43_subp | fs_route);
 
 // VM streams ALWAYS map (in-title HLI). The user path maps only under Force 4:3 Subpics
 // (a user-selected commentary track -> its letterbox physical substream, MiB logical 3 ->
@@ -6444,11 +6467,21 @@ wire [11:0] sp_qx = il_eff ? {1'b0, sp_qx_dot[11:1]} : sp_qx_dot;
 //   - the SIF fill stays FULLY mapped in every context (sub-720 SPU bitmaps are
 //     authored in SIF source space — raw coords would draw them quarter-screen);
 //   - a disc whose VM SetSTN-forces a real dialogue-subtitle stream rides
-//     vm_owns_route and keeps the mapped (nearest) path — revisit if reported.
+//     vm_owns_route and keeps the mapped path.
 // hl_btns_armed (not hl_on_w) so the mapped space covers the arm→fetch window
-// AND the O[2] dbg_rectb gate: whenever any rect can draw, the space is mapped,
-// by construction. in_title_hli is subsumed by hl_btns_armed (its definition).
-wire sp_ctx_mapped_w = hl_btns_armed              // any armed HLI (white rabbit included)
+// AND the O[2] dbg_rectb gate: whenever any rect can draw over disc-chosen art, the
+// space is mapped, by construction. in_title_hli is subsumed by hl_btns_armed (its
+// definition).
+// DVD-FORK FIX (the Matrix, 2026-11-11): EXCEPT over the USER's own stream
+// (sp_user_path). The Matrix arms its white-rabbit HLI in 146 VOBUs of the feature,
+// and since issue #178 (PR #192) the rabbit no longer takes over a stream the user
+// switched on -- so English via the Subtitle button flipped raw 1:1 -> mapped
+// nearest-tap at every rabbit window: stair-stepped, 3/4 the size and moved up, then
+// back. The rabbit art (FSTA_DSP on its own stream) is not even displayed then. Art
+// and rect stay one space (both raw), as §9a requires; dialogue has no imagery to
+// line up with. The forced route (subtitles off), where the rabbit IS drawn, keeps
+// the mapped space. This is the §9a "theoretical residue" refinement.
+wire sp_ctx_mapped_w = (hl_btns_armed & ~sp_user_path) // an armed HLI over disc-chosen art
                      | (menus_on && menu_active)  // menu-domain button art
                      | sp_menu_early              // Scene It: in-title menu art pre-arm
                      | vm_owns_route              // SetSTN-forced SP (art shows via this pre-arm)

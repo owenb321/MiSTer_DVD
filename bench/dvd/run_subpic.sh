@@ -22,6 +22,12 @@ python3 tools/check_subp_map_wiring.py
 echo "=== subpicture burn-in gate: pic_blank hides the layer (Stop / screensaver) ==="
 python3 tools/check_saver_overlay_wiring.py
 
+# The overlay CONTEXT (raw vs mapped) lives in emu.sv too: the user's stream stays raw
+# under an armed HLI, and the Subtitle write-back must not re-claim it for the VM
+# (docs/crt_anamorphic.md §9c).
+echo "=== overlay context: the user's subtitle stays raw (emu.sv) ==="
+python3 tools/check_subp_ctx_wiring.py
+
 echo "=== subp_stream_map: logical->physical subpicture map vs the golden model ==="
 python3 tools/gen_subp_map_vec.py >/dev/null
 iverilog -g2012 -o bench/dvd/subp_stream_map_sim dvd/subp_stream_map.sv bench/dvd/subp_stream_map_tb.sv 2>/dev/null
@@ -91,6 +97,22 @@ PYEOF
   ov_mut "R5 area test unoffset"     spu_decode "(q_y_eff >= c_sy) && (q_y_eff <= c_ey);" "(q_y >= c_sy) && (q_y <= c_ey);" T11
   ov_mut "R6 no sentinel guard"      spu_decode "wire in_y = (q_y != 12'hFFF) && " "wire in_y = " T11
   ov_mut "R7 offset not sign-extended" spu_decode "{{20{q_y_off[11]}}, q_y_off}" "{20'd0, q_y_off}" T11
+  # The overlay-context checker against mutated emu.sv: each must fail its own numbered arm only.
+  ctx_mut() {  # name old new arms   (arms: check_subp_ctx_wiring's numbered arms that must fail)
+    local name=$1 old=$2 new=$3 arms=$4
+    python3 - "$RD/emu.sv" dvd/emu.sv "$old" "$new" <<'PYEOF' || { echo "  FAIL $name: mutation did not apply"; RED_FAIL=1; return; }
+import sys
+s = open(sys.argv[2]).read()
+if s.count(sys.argv[3]) != 1:
+    sys.exit("RED anchor moved: " + sys.argv[3])
+open(sys.argv[1], 'w').write(s.replace(sys.argv[3], sys.argv[4]))
+PYEOF
+    local got; got=$(python3 tools/check_subp_ctx_wiring.py "$RD/emu.sv" | grep -oE '^  [0-9]+\.' | tr -d ' .' | sort -un | tr '\n' ' ' | sed 's/ $//')
+    if [ "$got" = "$arms" ]; then echo "  PASS $name (failed $arms)"
+    else echo "  FAIL $name: wanted [$arms], got [$got]"; RED_FAIL=1; fi
+  }
+  ctx_mut "X-R1 write-back claims the stream" "                && !spst_wb_landing)" ")" "4"
+  ctx_mut "X-R2 bare hl_btns_armed maps"      "wire sp_ctx_mapped_w = (hl_btns_armed & ~sp_user_path)" "wire sp_ctx_mapped_w = hl_btns_armed" "2"
   rm -rf "$RD"
   [ $RED_FAIL = 0 ] && echo "  RED: ALL OK" || { echo "  RED: SOME ARMS FAILED"; exit 1; }
 fi

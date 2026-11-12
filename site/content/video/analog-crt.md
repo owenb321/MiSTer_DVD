@@ -200,6 +200,16 @@ before.
     (MPEG-1/SIF, SVCD) keeps its scaled subtitles — those are authored at the smaller
     picture size.
 
+Subtitles you turn on with the Subtitle button are always drawn this way, at full
+resolution, including while a disc has buttons up during the film. (v0.10.0 drew them
+squeezed with the picture by mistake: three-quarters height under Letterbox, wider under
+Crop. That is fixed.)
+
+Subtitles switched on from a disc's **own** menu are the disc's choice, so they are treated
+like the disc's other on-screen art and follow the scaled picture: three-quarters height
+under Letterbox. Choosing the track with the Subtitle button instead draws it at full
+resolution.
+
 ## Sub-720 content on a CRT
 
 MPEG-1 SIF (352×240 / 352×288), SVCD (480 wide) and the sub-D1 DVD sizes (704, 544) are
