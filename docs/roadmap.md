@@ -635,8 +635,8 @@ Follow-ups, all pre-existing and outside #176:
 - issue #178 (in-title HLI forces the subpicture layer on: Dinosaur's SDH): ✅ MERGED PR #192,
   ✅ HW A/B on Dinosaur, white rabbit checked by the maintainer (`docs/subpicture.md`);
   follow-on: the CRT "rough subtitles" report was a v0.10.0 regression (the SPRM2 write-back
-  re-claimed the user's subtitle for the VM, so it drew mapped and nearest-line): 🔧
-  `feature/subpic-vscale` (`docs/crt_anamorphic.md` §9c), ✅ HW and the maintainer's CRT check. Still open after it: subtitles chosen
+  re-claimed the user's subtitle for the VM, so it drew mapped and nearest-line): ✅ MERGED
+  PR #193 (`docs/crt_anamorphic.md` §9c), ✅ HW and the maintainer's CRT check. Still open after it: subtitles chosen
   from a disc's own menu stay mapped (nearest-line, ¾ tall under Letterbox);
 - Thayer's Quest after an early Menu press in the boot chain (maintainer, not yet diffed
   against libdvdnav);

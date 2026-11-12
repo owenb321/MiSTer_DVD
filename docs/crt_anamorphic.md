@@ -456,7 +456,7 @@ verified by review. All `run_subpic.sh` suites green.
 letterboxed raster is shared); T2/Matrix menu highlights still land on buttons; white
 rabbit aligned; MiB flipbook still tracks the picture; SIF disc subtitles unchanged.
 
-## 9c. The user's subtitle drawn mapped since v0.10.0 (the SPRM2 write-back); raw under an HLI (2026-11-11, ✅ HW-CONFIRMED, branch `feature/subpic-vscale`)
+## 9c. The user's subtitle drawn mapped since v0.10.0 (the SPRM2 write-back); raw under an HLI (2026-11-11, ✅ MERGED PR #193, ✅ HW-CONFIRMED)
 
 **The report (maintainer):** subtitles look rough on a CRT under Letterbox (The Matrix, English
 switched on with the Subtitle button), and smaller in Letterbox than in Crop.
