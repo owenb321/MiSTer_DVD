@@ -171,7 +171,7 @@ PYEOF
   mut M9 $ST "if (side) off1 <= off1 - 10'd64; else off0 <= off0 - 10'd64;" "if (side) off1 <= off1 - 10'd32; else off0 <= off0 - 10'd32;" '\[vop\]' &
   mut M10 S2 "pb_r = ((st == V_EMITL) || (st == V_EMITW)) && !m_mono;" "pb_r = ((st == V_EMITL) || (st == V_EMITW));" '\[pcm\]' &
   mut M11 D1 "b2_we = (k_d < 12'd64); b2_wa = k_d[5:0];" "b2_we = 1'b0; b2_wa = k_d[5:0];" '\[vop\]' &
-  mut M12 $F32 "else if (vop_start && vop_op == 6'd29) mp2_fs <= vop_args[1:0];" "else if (vop_start && vop_op == 6'd29) mp2_fs <= 2'd1;" '\[count\]' &
+  mut M12 $F32 "            mp2_fs    <= vop_args[1:0];" "            mp2_fs    <= 2'd1;" '\[count\]' &
   wait
   mut M13 $ST "ma = {{17{a1[15]}}, a1}; mb = {10'd0, ic_q[16:0]}; acc_en = 1'b1;" "ma = {17'd0, a1}; mb = {10'd0, ic_q[16:0]}; acc_en = 1'b1;" '\[vop\]' &
   mut M14 $ST "if (!mwd_p) begin rsh = 6'd16; b2_we = 1'b1;" "if (!mwd_p) begin rsh = 6'd15; b2_we = 1'b1;" '\[vop\]' &
