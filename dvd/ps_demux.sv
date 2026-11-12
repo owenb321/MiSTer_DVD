@@ -213,14 +213,20 @@ module ps_demux (
     // on every pipe reset (per-jump), re-latching within ms of playback.
     output logic        saw_pack,
 
-    // LINEAR-STREAM JUNCTION (issue #188). An ISO 11172-1 program end code (0xB9)
-    // ends one MPEG stream; whatever follows is a NEW stream with its own time base
-    // (a CD-i Digital Video disc's intro, then its movie; a .cue serving several VCD
-    // tracks as one span). With jn_en (emu: a linear source, never DVD cell mode) the
-    // demux emits the still-frame filler so the decoder finishes the last picture,
-    // then PARKS (in_ready low, jn_wait high) holding the next stream's first bytes
+    // LINEAR-STREAM JUNCTION (issue #188). A program end code (0xB9) followed by a
+    // pack whose SCR steps BACKWARD starts a new stream with its own time base (a
+    // CD-i Digital Video disc's intro, then its movie; a .cue serving several VCD
+    // tracks as one span). With jn_en (emu: a linear source, never DVD cell mode)
+    // the demux then emits the still-frame filler so the decoder finishes the last
+    // picture, and PARKS (in_ready low, jn_wait high) holding the new stream's bytes
     // until jn_go. emu waits for the old stream to finish playing, resets the
-    // timeline, and releases it, so the next stream starts like a cold load.
+    // timeline, and releases it, so the new stream starts like a cold load.
+    // ⚠ A 0xB9 ALONE IS NOT A JUNCTION. A CD-i Digital Video stream ends each
+    // CHANNEL with one: the intro's video (one still picture) ends at sector 4255
+    // and its audio plays on, on the same clock, to the 0xB9 at 5015. Parking on
+    // the first flushed the intro's sound 0.5 s in (rig, first build). The SCR is
+    // what says the time base changed; backward only, because a continuing time
+    // base also steps FORWARD across the sectors the deblocker drops.
     input  wire         jn_en,
     input  wire         jn_go,
     output logic        jn_wait
@@ -299,7 +305,14 @@ logic [2:0]  lpcm_nch_r;       //   channels - 1 (bits[2:0])
 logic        lpcm_fs96_r;      //   bits[5:4] == 1
 logic        lpcm_bad_r;       //   a reserved rate or word length
 logic        first_aud_byte;   // marks first forwarded byte of an audio frame
-logic        jn_pend;          // this filler run ends a stream: park after it
+logic        jn_pend;          // a junction was found: filler, then park (S_JN_WAIT)
+logic        jn_fill;          // ...and this filler run is its own
+logic        jn_arm;           // a 0xB9 was seen: judge the next pack's SCR
+logic [32:0] jn_last_scr;      // the last pack's SCR
+logic        jn_scr_ok;        // ...is valid (a pack seen since reset)
+logic  [2:0] scr_n;            // SCR bytes captured of this pack (0 = none in flight)
+logic [31:0] scr_b;            // SCR bytes 0..3 (byte 4 is in_byte)
+logic        jn_hit;           // one clk: the junction verdict (SCR stepped back)
 logic        rlgn_pend;        // aud_realign seen; next forwarded audio must start on a real frame
 logic  [2:0] aud_ssid_r;       // low 3 bits of the current PES's audio substream id
 logic  [7:0] fap_hi_r;         // AC-3/DTS sub-header first_access_unit_pointer, high byte
@@ -357,11 +370,51 @@ always_comb begin
         // always (in_ready=1) — never stall the shared stream on subtitle data.
         S_SP_DATA:    in_ready = 1'b1;
         S_JN_WAIT:    in_ready = 1'b0;
+        // the cycle a found junction diverts into its filler takes no byte
+        S_HUNT:       in_ready = !(jn_pend && !jn_fill);
         default:      in_ready = 1'b1;
     endcase
 end
 
 wire consume = in_valid && in_ready;
+
+// ---- LINEAR-STREAM JUNCTION: the SCR judge (see the jn_en port) ----
+// A 0xB9 arms it; the next pack's SCR decides. Bytes 0..4 after 0xBA carry the SCR
+// in both layouts: MPEG-1 0010 s[32:30] 1 | s[29:22] | s[21:15] 1 | s[14:7] | s[6:0] 1,
+// MPEG-2 01 s[32:30] 1 s[29:28] | s[27:20] | s[19:15] 1 s[14:13] | s[12:5] | s[4:0] 1 ..
+// Byte 0 is the byte S_PACK_SKIP takes with bytes_remaining == 9 (both entries to it,
+// S_HUNT and S_ES_PASS, load 9); the next four are consumed back to back.
+localparam signed [32:0] JN_BACK = -33'sd9000;   // stepped back by more than 0.1 s
+wire [32:0] scr_now = (scr_b[31:28] == 4'b0010)
+    ? {scr_b[27:25], scr_b[23:16], scr_b[15:9], scr_b[7:0], in_byte[7:1]}
+    : {scr_b[29:27], scr_b[25:24], scr_b[23:16], scr_b[15:11], scr_b[9:8], scr_b[7:0], in_byte[7:3]};
+wire [32:0] scr_step = scr_now - jn_last_scr;    // modulo 2^33: a wrap is a small step
+always_ff @(posedge clk) begin
+    jn_hit <= 1'b0;
+    if (!rst_n) begin
+        scr_n     <= 3'd0;
+        jn_arm    <= 1'b0;
+        jn_scr_ok <= 1'b0;
+    end else if (consume) begin
+        if (state == S_HUNT && start_code_detected && in_byte == 8'hB9 && jn_en)
+            jn_arm <= 1'b1;
+        if (state == S_PACK_SKIP && bytes_remaining == 16'd9) begin
+            scr_b <= {in_byte, 24'd0};
+            scr_n <= 3'd1;
+        end else if (scr_n != 3'd0 && scr_n != 3'd4) begin
+            scr_b <= {scr_b[31:24], scr_b[23:0] | ({16'd0, in_byte} << (8 * (3 - scr_n)))};
+            scr_n <= scr_n + 3'd1;
+        end else if (scr_n == 3'd4) begin
+            scr_n       <= 3'd0;
+            jn_last_scr <= scr_now;
+            jn_scr_ok   <= 1'b1;
+            if (jn_arm) begin
+                jn_arm <= 1'b0;
+                jn_hit <= jn_scr_ok && ($signed(scr_step) < JN_BACK);
+            end
+        end
+    end
+end
 // the audio sub-header's last byte is being consumed and a payload follows
 wire sub_exit = consume && (state == S_AUD_SUBHDR) && (pes_length != 16'd1) &&
                 (bytes_remaining <= 16'd1);
@@ -484,6 +537,7 @@ always_ff @(posedge clk or negedge rst_n) begin
         vid_hist       <= 32'd0;
         flush_cnt      <= 8'd0;
         jn_pend        <= 1'b0;
+        jn_fill        <= 1'b0;
         vid_pts        <= 33'd0;
         vid_pts_valid  <= 1'b0;
         mark_pending   <= 1'b0;
@@ -494,6 +548,7 @@ always_ff @(posedge clk or negedge rst_n) begin
         pack_fresh     <= 1'b0;
     end else begin
         // PTS-valid strobes are one-cycle pulses
+        if (jn_hit) jn_pend <= 1'b1;   // the SCR judge found a junction (below)
         vid_pts_valid <= 1'b0;
         aud_pts_valid <= 1'b0;
         pes_scrambled <= 1'b0;
@@ -510,7 +565,7 @@ always_ff @(posedge clk or negedge rst_n) begin
         end else if (state == S_VID_FLUSH) begin
             if (vid_ready) begin
                 if (flush_cnt == 8'd1) begin
-                    if (jn_pend) state <= S_JN_WAIT;
+                    if (jn_fill) state <= S_JN_WAIT;
                     else         state <= S_HUNT;
                 end else         flush_cnt <= flush_cnt - 8'd1;
             end
@@ -518,8 +573,15 @@ always_ff @(posedge clk or negedge rst_n) begin
         end else if (state == S_JN_WAIT) begin
             if (jn_go) begin
                 jn_pend <= 1'b0;
+                jn_fill <= 1'b0;
                 state   <= S_HUNT;
             end
+        // A junction found inside the new stream's pack header: once the header is
+        // done, run the still-frame filler, then park (input held this cycle).
+        end else if (state == S_HUNT && jn_pend && !jn_fill) begin
+            jn_fill   <= 1'b1;
+            flush_cnt <= VID_FLUSH_LEN;
+            state     <= S_VID_FLUSH;
         end else if (consume) begin
             case (state)
 
@@ -530,12 +592,6 @@ always_ff @(posedge clk or negedge rst_n) begin
                     casez (in_byte)
                         8'hBA:   begin ever_seen_pack <= 1'b1; pack_fresh <= 1'b1; bytes_remaining <= 16'd9; state <= S_PACK_SKIP; end
                         8'hE0:   state <= S_PES_LEN_HI;   // video
-                        // program end code: on a linear stream, a junction (see jn_en)
-                        8'hB9:   if (jn_en) begin
-                                     flush_cnt <= VID_FLUSH_LEN;
-                                     jn_pend   <= 1'b1;
-                                     state     <= S_VID_FLUSH;
-                                 end else state <= S_HUNT;
                         8'hBD:   state <= S_PES_LEN_HI;   // private stream 1 (audio)
                         // MPEG audio 0xC0-0xC7 (DVD-spec MP2, MPEG-1 Layer II).
                         // Unlike private_stream_1 there is NO substream_id byte and

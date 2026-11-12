@@ -278,9 +278,15 @@ natural transition waits for the AUDIO too"). On a LINEAR stream only (`lin_mode
 `lin_seek_ok_w && !cell_ready`; DVD cell mode, where the navigation owns every junction, is
 untouched):
 
-1. `ps_demux` (`jn_en`) treats `0xB9` as a junction: it emits the still-frame filler (so the
-   decoder finishes segment A's last picture), then parks (`S_JN_WAIT`, `in_ready` low),
-   holding segment B's first bytes in `ps_stream_fifo` and the reader.
+1. `ps_demux` (`jn_en`) arms on a `0xB9` and judges the NEXT pack's SCR (MPEG-1 and
+   MPEG-2 layouts, modulo 2^33): only a step BACK of more than 0.1 s is a junction. It then
+   emits the still-frame filler (so the decoder finishes segment A's last picture) and
+   parks (`S_JN_WAIT`, `in_ready` low), holding segment B in `ps_stream_fifo` and the reader.
+   ⚠ **A `0xB9` alone is not a junction** (the first build parked on every one, and the rig
+   caught it): a CD-i stream ends each CHANNEL with one. The intro's video (one still) ends
+   at sector 4255 while its audio plays on, on the same clock (SCR +13 ms), to the `0xB9`
+   at 5015; parking on the first flushed the intro's sound 0.5 s in. Backward only, because
+   a continuing time base also steps FORWARD across the sectors the deblocker drops.
 2. `dvd/lin_junction.sv` waits for `aud_drain`'s `drained` AND `vbuf_empty`, continuously
    for ~0.31 s (pictures in flight), bounded by a ~5 s watchdog (`timeouts`, counted).
 3. It pulses `lin_junction` into `flush_ctl` (row [12]): **aud_flush + seek_flush, NOT
@@ -308,8 +314,10 @@ resets the engine's `mp2_fs` to 48 kHz. The scheduled release now waits for the 
 [8l]-[8n]). A CD-i GAME image therefore reaches the core and plays black instead of being
 refused.
 
-**Gates:** `bench/dvd/run_lin_junction.sh --red` (7 arms; 7 mutations each fail exactly
-their own arms), `flush_ctl_tb` [12]/[12b], `tools/check_lin_junction_wiring.py --red`
+**Gates:** `bench/dvd/run_lin_junction.sh --red` (9 arms; 10 mutations each fail exactly
+their own arms, including a bare-`0xB9` park, a forward step counted, and MPEG-2 packs
+read with the MPEG-1 layout; the RTL's SCR decode was also checked against independent
+decoders on 37 HFRO packs and 1,805 SVCD packs), `flush_ctl_tb` [12]/[12b], `tools/check_lin_junction_wiring.py --red`
 (11 miswirings), `main/tests/run_tests.sh --red` (`cue-cdi-not-served`).
 
 **Known limitations / next steps:**

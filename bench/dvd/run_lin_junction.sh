@@ -4,7 +4,7 @@
 # stream to play out, fires flush_ctl's lin_junction row (aud + seek flush, no load
 # flush) and releases the demux. docs/vcd_svcd.md "CD-i Digital Video".
 #
-#   GREEN  bench/dvd/lin_junction_tb.sv  the real ps_demux + lin_junction, 7 arms
+#   GREEN  bench/dvd/lin_junction_tb.sv  the real ps_demux + lin_junction, 9 arms
 #          bench/dvd/flush_ctl_tb.sv     the trigger matrix, row [12]/[12b] included
 #   RED    (--red) one mutation per claim; each must fail EXACTLY its own arms
 #          (the set of failing arms is compared, not just "something failed").
@@ -73,18 +73,27 @@ if [ "${1:-}" = "--red" ]; then
         rm -f "$m"
     }
     red "M1 re-arms on the release cycle" dvd/lin_junction.sv \
-        "IDLE: if (jn_wait && !go) begin" "IDLE: if (jn_wait) begin" "fail:[4]"
+        "IDLE: if (jn_wait && !go) begin" "IDLE: if (jn_wait) begin" "fail:[4] [9]"
     red "M2 a drain blip does not restart the settle" dvd/lin_junction.sv \
         "? settle + 1'b1 : '0;" "? settle + 1'b1 : settle;" "fail:[2]"
     red "M3 no watchdog" dvd/lin_junction.sv \
         "if ((&settle) || (&wd)) begin" "if (&settle) begin" "fail:[5]"
     red "M4 parks with jn_en low (DVD cell mode)" dvd/ps_demux.sv \
-        "8'hB9:   if (jn_en) begin" "8'hB9:   if (1'b1) begin" "fail:[7]"
+        "in_byte == 8'hB9 && jn_en)" "in_byte == 8'hB9)" "fail:[7]"
     red "M5 parks without the still-frame filler" dvd/ps_demux.sv \
-        "                                     state     <= S_VID_FLUSH;" \
-        "                                     state     <= S_JN_WAIT;" "fail:[1]"
+        "            flush_cnt <= VID_FLUSH_LEN;
+            state     <= S_VID_FLUSH;
+        end else if (consume) begin" \
+        "            state     <= S_JN_WAIT;
+        end else if (consume) begin" "fail:[1] [9]"
     red "M6 a parked demux takes input" dvd/ps_demux.sv \
-        "S_JN_WAIT:    in_ready = 1'b0;" "S_JN_WAIT:    in_ready = 1'b1;" "fail:[1] [3]"
+        "S_JN_WAIT:    in_ready = 1'b0;" "S_JN_WAIT:    in_ready = 1'b1;" "fail:[1] [3] [9]"
+    red "M8 a bare 0xB9 parks (the CD-i channel end)" dvd/ps_demux.sv \
+        "jn_hit <= jn_scr_ok && (\$signed(scr_step) < JN_BACK);" "jn_hit <= 1'b1;" "fail:[8]"
+    red "M9 a forward SCR step counts as a junction" dvd/ps_demux.sv \
+        "(\$signed(scr_step) < JN_BACK)" "(scr_step != 33'd0)" "fail:[8]"
+    red "M10 MPEG-2 packs decoded as MPEG-1" dvd/ps_demux.sv \
+        "wire [32:0] scr_now = (scr_b[31:28] == 4'b0010)" "wire [32:0] scr_now = (1'b1)" "fail:[9]"
     red "M7 flush_ctl drops the junction row" dvd/flush_ctl.sv \
         "             lin_junction)                                 seek_flush_cnt <= 7'd64;" \
         "             1'b0)                                         seek_flush_cnt <= 7'd64;" "fail:[12] [12b]"

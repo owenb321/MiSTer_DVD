@@ -37,7 +37,10 @@ free-running: `disp_lag` -2.5 s, `av_drift` -3.8 s (baseline -0.43) for the whol
 seek cleared it. **Fix:** on a LINEAR stream, `ps_demux` parks on `0xB9`; new
 `dvd/lin_junction.sv` waits for the audio drain AND an empty VBUF, fires flush_ctl's new
 `lin_junction` row (aud_flush + seek_flush, NOT load_flush) and the STD video hold, then
-releases the demux: the next stream starts like a cold load. **Also found:** started
+releases the demux: the next stream starts like a cold load. **Refuted on the rig, first
+build:** "a `0xB9` is a junction". CD-i ends each channel with one (the intro's still video
+at sector 4255, its audio on to 5015 on the same clock), so the first build flushed the
+intro's sound 0.5 s in. The trigger is now a `0xB9` followed by a pack whose SCR steps BACK. **Also found:** started
 straight into the movie stream, MP2 played at 48 kHz (41.7 frames/s against 38.3; the
 release could beat the engine's first rate report); the release now waits for
 `mp2_fs_ok`. The disc's `.cue` (`CDI/2352`) now mounts. **New tool:**

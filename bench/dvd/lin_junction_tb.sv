@@ -3,8 +3,8 @@
 // played out. The real ps_demux and the real controller, wired as emu wires them, on
 // a synthetic two-segment MPEG-1 system stream:
 //
-//   segment A: pack, video PES (7 x 0xAA), 00 00 01 B9
-//   segment B: pack, video PES (7 x 0xBB)
+//   segment A: pack (SCR 10 s), video PES (7 x 0xAA), 00 00 01 B9
+//   segment B: pack (SCR 0.2 s, a new time base), video PES (7 x 0xBB)
 //
 // Scored on what the DECODER receives (the video output) and on the controller's
 // pulses, never on a state name. Timers are shrunk by parameter (SETTLE 2^4, WD 2^8,
@@ -20,6 +20,9 @@
 //   [5] a decoder that never drains: the watchdog fires the flush anyway, counted
 //   [6] a pipe reset mid-park ends it with no junction
 //   [7] jn_en = 0 (DVD cell mode): no park, no filler -- the old demux, byte for byte
+//   [8] a 0xB9 whose next pack's SCR runs ON (a CD-i channel ending, the intro's
+//       video at sector 4255 while its audio plays on): no park, no filler
+//   [9] the same junction in the MPEG-2 pack/PES layout (SVCD, a flat .mpg)
 //
 // Run: bench/dvd/run_lin_junction.sh [--red]
 
@@ -39,20 +42,33 @@ module lin_junction_tb;
     logic [7:0] strm [0:MAXB-1];
     int nbytes = 0, fed = 0;
     task automatic put(input logic [7:0] b); strm[nbytes] = b; nbytes++; endtask
-    task automatic pack;       // MPEG-1 pack header, 12 bytes
+    bit mpeg2 = 0;             // pack/PES layout of the next build
+    task automatic pack(input logic [32:0] scr);
         put(8'h00); put(8'h00); put(8'h01); put(8'hBA);
-        put(8'h21); put(8'h00); put(8'h01); put(8'h00); put(8'h01); put(8'h80); put(8'h00); put(8'h01);
+        if (!mpeg2) begin      // MPEG-1: 12 bytes
+            put({4'b0010, scr[32:30], 1'b1}); put(scr[29:22]); put({scr[21:15], 1'b1});
+            put(scr[14:7]); put({scr[6:0], 1'b1});
+            put(8'h80); put(8'h00); put(8'h01);
+        end else begin         // MPEG-2: 14 bytes, no stuffing
+            put({2'b01, scr[32:30], 1'b1, scr[29:28]}); put(scr[27:20]);
+            put({scr[19:15], 1'b1, scr[14:13]}); put(scr[12:5]); put({scr[4:0], 1'b1, 2'b00});
+            put(8'h01); put(8'h89); put(8'hC3); put(8'hF8);
+        end
     endtask
-    task automatic vpes(input logic [7:0] fill);   // video PES: 0x0F (no PTS) + 7 bytes
-        put(8'h00); put(8'h00); put(8'h01); put(8'hE0); put(8'h00); put(8'h08); put(8'h0F);
+    task automatic vpes(input logic [7:0] fill);   // video PES, no PTS, + 7 bytes
+        put(8'h00); put(8'h00); put(8'h01); put(8'hE0);
+        if (!mpeg2) begin put(8'h00); put(8'h08); put(8'h0F); end
+        else        begin put(8'h00); put(8'h0A); put(8'h80); put(8'h00); put(8'h00); end
         repeat (7) put(fill);
     endtask
-    task automatic build;
+    task automatic build(input logic [32:0] scr_a, input logic [32:0] scr_b);
         nbytes = 0;
-        pack; vpes(8'hAA);
+        pack(scr_a); vpes(8'hAA);
         put(8'h00); put(8'h00); put(8'h01); put(8'hB9);
-        pack; vpes(8'hBB);
+        pack(scr_b); vpes(8'hBB);
     endtask
+    localparam logic [32:0] SCR_A = 33'd900000;   // 10 s
+    localparam logic [32:0] SCR_B = 33'd18000;    // 0.2 s: a new time base
 
     wire       in_ready;
     wire       in_valid = rst_n && (fed < nbytes);
@@ -113,7 +129,7 @@ module lin_junction_tb;
 
     int fed_at_park;
     initial begin
-        build;
+        build(SCR_A, SCR_B);
 
         // ---- [1] park ----
         jn_en <= 1; restart;
@@ -178,8 +194,32 @@ module lin_junction_tb;
         check(n_zero == 0, "[7]", $sformatf("%0d filler bytes with jn_en low", n_zero));
         check(n_junc == 0, "[7]", "junction with jn_en low");
 
+        // ---- [8] a 0xB9 whose next pack runs on: not a junction ----
+        build(SCR_A, SCR_A + 33'd1170);   // +13 ms, the CD-i intro's video channel end
+        jn_en <= 1; restart;
+        repeat (300) @(posedge clk);
+        check(n_junc == 0 && jn_wait === 1'b0, "[8]", "parked on a 0xB9 the SCR runs on across");
+        check(n_aa == 7 && n_bb == 7, "[8]", $sformatf("AA %0d BB %0d, want 7/7", n_aa, n_bb));
+        check(n_zero == 0, "[8]", $sformatf("%0d filler bytes on a continuing stream", n_zero));
+
+        // ---- [9] the MPEG-2 layout ----
+        // A pair chosen so the layout matters: a true step back of 1.81 s that an
+        // MPEG-1 reading of the same bytes sees as a jump FORWARD (no junction).
+        mpeg2 = 1;
+        build(33'd268586990, 33'd268424514);
+        restart;
+        for (int i = 0; i < 2000 && jn_wait !== 1'b1; i++) @(posedge clk);
+        repeat (10) @(posedge clk);
+        check(jn_wait === 1'b1 && n_bb == 0, "[9]", "an MPEG-2 junction did not park before B");
+        aud_drained <= 1; vbuf_empty <= 1;
+        for (int i = 0; i < 2000 && n_go == 0; i++) @(posedge clk);
+        repeat (60) @(posedge clk);
+        check(n_junc == 1 && n_bb == 7 && n_zero == 24, "[9]",
+              $sformatf("MPEG-2: junc %0d BB %0d zeros %0d, want 1/7/24", n_junc, n_bb, n_zero));
+        mpeg2 = 0;
+
         if (errs == 0) begin
-            $display("PASS: lin_junction_tb -- 7 arms");
+            $display("PASS: lin_junction_tb -- 9 arms");
             $finish;
         end
         $fatal(1, "lin_junction_tb: %0d failure(s)", errs);
