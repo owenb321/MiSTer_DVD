@@ -3136,15 +3136,30 @@ end
 // ⚠ The claim guard is "a real angle" (>= 1). SPRM3 resets to 1, so a disc that
 // never issues SetSTN AGLN would otherwise claim ownership of the default and
 // make the B6 button look dead until the first press releases it.
+// ⚠ The Subtitle write-back (spst_wb, below) moves vm_spstn too, and it must NOT
+// claim: vm_owns_sp is not only "which stream" (the same one) but also feeds
+// vm_owns_route, which puts the overlay in the MAPPED context. Since v0.10.0 every
+// Subtitle press re-claimed one cycle after releasing, so a button-chosen subtitle
+// was drawn mapped: 3/4 tall and nearest-line under Letterbox (the "rough" report,
+// 2026-11-11), 1.36x wide under Crop. spst_wb_mask marks the write in flight; the
+// change it lands as (vm_spstn == spst_wb_val) is ours, any other change is the
+// disc's. A disc SetSTN of exactly the value the user chose is also not claimed --
+// the same stream either way, and it stays the user's (raw) one.
+// Audio's write-back still re-claims, harmlessly: vm_owns_aud picks the track only.
 reg  vm_owns_aud, vm_owns_sp, vm_owns_angle;
 reg  [7:0] vm_astn_p, vm_spstn_p, vm_agln_p;
+reg  spst_wb_mask;
+wire spst_wb_landing = (spst_wb | spst_wb_mask) && (vm_spstn == spst_wb_val);
 always @(posedge clk_sys or negedge reset_n) begin
     if (!reset_n) begin
         vm_owns_aud <= 1'b0; vm_owns_sp <= 1'b0; vm_owns_angle <= 1'b0;
         vm_astn_p <= 8'd15;  vm_spstn_p <= 8'd0; vm_agln_p <= 8'd1;
+        spst_wb_mask <= 1'b0;
     end else begin
         vm_astn_p  <= vm_astn;   vm_spstn_p <= vm_spstn;
         vm_agln_p  <= vm_agln;
+        if (spst_wb)                      spst_wb_mask <= 1'b1;
+        else if (vm_spstn != vm_spstn_p || start_streaming) spst_wb_mask <= 1'b0;
         if (start_streaming) begin
             vm_owns_aud <= 1'b0; vm_owns_sp <= 1'b0; vm_owns_angle <= 1'b0;
         end else begin
@@ -3162,7 +3177,9 @@ always @(posedge clk_sys or negedge reset_n) begin
                 vm_owns_aud <= 1'b0;
             // subpicture: SetSTN display-on claims; a Subtitle STEP releases
             // (bit 5 clear: 62/63 = "none"/"forced" are not streams and never claim)
-            if (menus_on && vm_spstn != vm_spstn_p && vm_spstn[6] && !vm_spstn[5])
+            // (and never our own write-back landing: spst_wb_landing, above)
+            if (menus_on && vm_spstn != vm_spstn_p && vm_spstn[6] && !vm_spstn[5]
+                && !spst_wb_landing)
                 vm_owns_sp <= 1'b1;
             if (sub_step_w)
                 vm_owns_sp <= 1'b0;
@@ -3281,8 +3298,10 @@ assign     sub_on_eff = sub_on | (menus_on && vm_owns_sp && vm_spstn[6]);
 // and both a disc command reading it and a save state (docs/nav_engine.md §11) need
 // the stream playing, not the one the disc last set. Taken one cycle after the step,
 // from the EFFECTIVE selection (aud_log / sp_sel, after the step released the VM's
-// claim), never a predicted value. The write moves vm_astn/vm_spstn, which re-claims
-// the selection for the VM -- with the same value, so nothing audible changes.
+// claim), never a predicted value. The write moves vm_astn/vm_spstn. For AUDIO that
+// re-claims the selection for the VM with the same value, so nothing audible changes.
+// For the SUBTITLE it must not (spst_wb_landing, at vm_owns_sp): the claim also picks
+// the overlay context, and re-claiming drew the user's subtitle mapped (v0.10.0).
 // Subtitles OFF keep SPRM2's stream number and clear bit 6, as libdvdnav does: the
 // forced-subtitle fallback reads that stream (docs/subpicture.md).
 reg aud_step_q, sub_step_q;

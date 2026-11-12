@@ -124,7 +124,10 @@ def main():
     need(got == "{1'b0,sp_sel}+6'd1", '5. transport_hud .sub_no is %r' % got)
 
     # 6. the VM's SetSTN path is 5 bits and 62/63 never claim
-    need("vm_spstn[6]&&!vm_spstn[5])vm_owns_sp<=1'b1;" in E,
+    # (the claim's condition, whatever else it gates on: since 2026-11-11 it also
+    # excludes the Subtitle write-back landing -- tools/check_subp_ctx_wiring.py 9.)
+    cl = re.search(r"if\(([^;]*?vm_spstn!=vm_spstn_p[^;]*?)\)vm_owns_sp<=1'b1;", E)
+    need(cl is not None and "vm_spstn[6]" in cl.group(1) and "!vm_spstn[5]" in cl.group(1),
          '6. the vm_owns_sp claim must exclude SPRM2 62/63 (bit 5)')
     need("?vm_spstn[4:0]:sub_idx;" in E, '6. sp_sel must take vm_spstn[4:0]')
 

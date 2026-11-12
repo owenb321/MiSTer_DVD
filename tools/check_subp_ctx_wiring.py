@@ -18,9 +18,16 @@ out of the file:
   3. ...and keeps every disc-chosen context mapped: menu domain, sp_menu_early,
      vm_owns_route, force_43_subp.
 
+and the claim that decides vm_owns_route in the first place:
+
+  4. The user's Subtitle choice written back to SPRM2 (spst_wb) must not re-claim the
+     stream for the VM: vm_owns_sp feeds vm_owns_route, a mapped context term. From
+     v0.10.0 until 2026-11-11 it did, one cycle after every Subtitle press, so a
+     button-chosen subtitle drew mapped (3/4 tall under Letterbox, 1.36x wide under Crop).
+
     python3 tools/check_subp_ctx_wiring.py [emu.sv]    # exit 0 = wired right
     git show main:dvd/emu.sv > old.sv && \\
-        python3 tools/check_subp_ctx_wiring.py old.sv    # pre-fix: must exit 1 (1, 2)
+        python3 tools/check_subp_ctx_wiring.py old.sv    # pre-fix: must exit 1 (1, 2, 4)
 
 Comments are stripped first: emu.sv quotes old code in its comments.
 """
@@ -59,6 +66,10 @@ def stmt(src, lhs_regex):
     """The right-hand side of `wire ... NAME = ...;` or `assign NAME = ...;`, squashed."""
     m = re.search(r'(?:\bwire\b[^;=]*?|\bassign\s+)\b' + lhs_regex + r'\s*=\s*([^;]*);', src)
     return squash(m.group(1)) if m else None
+
+
+def tokens(expr):
+    return set(re.findall(r"[A-Za-z_][A-Za-z0-9_]*", expr or '')) - {'d0', 'b0', 'b1'}
 
 
 def or_terms(expr):
@@ -126,6 +137,20 @@ def main():
              '2. sp_ctx_mapped_w lacks (hl_btns_armed & ~sp_user_path): %s' % cm)
         for want in ('menus_on&&menu_active', 'sp_menu_early', 'vm_owns_route', 'force_43_subp'):
             need(want in terms, '3. sp_ctx_mapped_w lost the disc-chosen context %s' % want)
+
+    # 4. the Subtitle write-back must not re-claim the stream for the VM
+    claim = re.search(r'if\s*\(([^;]*?vm_spstn\s*!=\s*vm_spstn_p[^;]*?)\)\s*vm_owns_sp\s*<=\s*1\'b1', src)
+    need(claim is not None, '4. the vm_owns_sp claim (vm_spstn != vm_spstn_p ... vm_owns_sp <= 1) not found')
+    if claim:
+        need('!spst_wb_landing' in squash(claim.group(1)),
+             '4. the vm_owns_sp claim must exclude !spst_wb_landing (our own SPRM2 write-back '
+             're-claimed the stream: the user\'s subtitle drew MAPPED, v0.10.0): %s' % squash(claim.group(1)))
+    wl = stmt(src, r'spst_wb_landing')
+    need(wl is not None and tokens(wl) == {'spst_wb', 'spst_wb_mask', 'vm_spstn', 'spst_wb_val'}
+         and 'vm_spstn==spst_wb_val' in wl,
+         '4. spst_wb_landing must be (spst_wb | spst_wb_mask) && (vm_spstn == spst_wb_val): %s' % wl)
+    need(re.search(r'if\s*\(\s*spst_wb\s*\)\s*spst_wb_mask\s*<=\s*1\'b1', src) is not None,
+         '4. spst_wb_mask must be set by spst_wb')
 
     if bad:
         print('check_subp_ctx_wiring: FAIL (%s)' % path)
