@@ -22,12 +22,29 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Dynamic Range: AC-3 DRC Normal / Full / Night; DTS DYNF counted (issue #189, 2026-11-12)
 
-**State:** 🔧 sim-proven on `feature/drc-setting`. Fitted (`DVD_drc_20261113_0253`, SEED 7):
+**State:** ✅ HW capture A/B on `feature/drc-setting` (2026-11-13); ⏳ by ear. Fitted (`DVD_drc_20261113_0253`, SEED 7):
 **+67 ALM** (38,259 → 38,326, 91 %), M10K 520 → 520, DSP 87 → 87 vs `DVD_vcdrestart` (`main`).
-Timing PASS (clk_dec ≥ 90.8 MHz, clk_mem ≥ 99.8), and `clock_check` PASS. On the rig the build
-plays (AC-3 decoding, `dts_ok` 1, video live). ⏳ HIL capture A/B against `main`: the
-2026-11-12 attempt was void, because the capture card had no HDMI signal (black frame,
-−90 dBFS noise floor on every arm, control included). ⏳ By ear. **Ask (issue #189):** a set-top-style setting so quiet dialogue and loud
+Timing PASS (clk_dec ≥ 90.8 MHz, clk_mem ≥ 99.8), and `clock_check` PASS.
+
+**HIL capture A/B (2026-11-13).** Road Warrior (16:9), chapter 3, `Decode PCM`, 41 s per arm from
+the HDMI capture card, five arms in one run: `main` Normal (control), then the new build in
+Normal, Full, Night and Normal again. Captures aligned on the control (envelope, then to the
+sample), levels in 0.5 s windows (74, all above −60 dBFS):
+
+| Arm | RMS | Peak | Per-window vs new Normal |
+|---|---|---|---|
+| `main` Normal | −31.5 dBFS | −16.0 | mean −0.01 dB, max \|0.06\| |
+| new Normal | −31.5 | −16.0 | — (sample-aligned corr 0.99977 with `main`) |
+| new Normal, again | −31.5 | −16.1 | mean −0.00, max \|0.05\| (corr 0.99914 with `main`) |
+| new Full | −29.3 | −13.4 | +1.79 dB (sd 0.77) |
+| new Night | −33.6 | −18.7 | −1.78 dB (sd 0.78) |
+
+Normal = `main` to within the capture's own run-to-run residual (Normal vs Normal-again is no
+closer to `main` than the first run). Night − Normal against Normal − Full, window by window:
+**correlation 0.999, slope 1.001**, i.e. Night applies exactly twice the authored dB in every
+window. The 2026-11-12 attempt was void (capture card had no HDMI signal, −90 dBFS on every arm,
+control included); on the second the card's video still read black but its audio was live, which
+is all this test uses. **Ask (issue #189):** a set-top-style setting so quiet dialogue and loud
 effects can be brought closer together for late viewing.
 
 **What it does.** `P3O[62:61],Dynamic Range,Normal,Full,Night` (never-allocated bits, so no

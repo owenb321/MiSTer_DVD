@@ -712,8 +712,9 @@ pushing both branches.**
   is bit-identical (`run_ac3_ab.sh`). DTS DYNF is counted, not applied. Record: `status_log.md`
   "Dynamic Range".
 - [x] Fit: +67 ALM, +0 M10K, +0 DSP, timing PASS (SEED 7).
-- [ ] ⏳ HIL capture of a live-DRC AC-3 disc in all three modes against `main`. The first attempt was
-  void because the capture card had no HDMI signal. Then the maintainer's ear, then a PR.
+- [x] HIL capture A/B (2026-11-13, Road Warrior ch. 3): Normal = `main` (per-window max 0.06 dB);
+  Night − Normal tracks Normal − Full window by window (corr 0.999, slope 1.001).
+- [ ] ⏳ The maintainer's ear, then a PR.
 - [ ] Optional follow-ups: an independent PCM golden for Full/Night (a52dec `-r` / liba52's DRC
   callback), and our own compressor for DTS/LPCM/MP2 Night if users ask for it.
 
