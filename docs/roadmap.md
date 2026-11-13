@@ -711,8 +711,9 @@ pushing both branches.**
 - [x] RTL, models, gates (`run_drc_mode.sh --red`, `run_imdct_eng.sh --red`, `run_dts.sh` V20). Normal
   is bit-identical (`run_ac3_ab.sh`). DTS DYNF is counted, not applied. Record: `status_log.md`
   "Dynamic Range".
-- [ ] ⏳ Fit and ALM delta; HIL capture of a live-DRC AC-3 disc in all three modes against `main`; the
-  maintainer's ear. Then a PR.
+- [x] Fit: +67 ALM, +0 M10K, +0 DSP, timing PASS (SEED 7).
+- [ ] ⏳ HIL capture of a live-DRC AC-3 disc in all three modes against `main`. The first attempt was
+  void because the capture card had no HDMI signal. Then the maintainer's ear, then a PR.
 - [ ] Optional follow-ups: an independent PCM golden for Full/Night (a52dec `-r` / liba52's DRC
   callback), and our own compressor for DTS/LPCM/MP2 Night if users ask for it.
 

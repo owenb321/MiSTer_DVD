@@ -22,8 +22,12 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Dynamic Range: AC-3 DRC Normal / Full / Night; DTS DYNF counted (issue #189, 2026-11-12)
 
-**State:** 🔧 sim-proven on `feature/drc-setting`; ⏳ fit, ⏳ HIL capture A/B against `main`,
-⏳ by ear on the rig. **Ask (issue #189):** a set-top-style setting so quiet dialogue and loud
+**State:** 🔧 sim-proven on `feature/drc-setting`. Fitted (`DVD_drc_20261113_0253`, SEED 7):
+**+67 ALM** (38,259 → 38,326, 91 %), M10K 520 → 520, DSP 87 → 87 vs `DVD_vcdrestart` (`main`).
+Timing PASS (clk_dec ≥ 90.8 MHz, clk_mem ≥ 99.8), and `clock_check` PASS. On the rig the build
+plays (AC-3 decoding, `dts_ok` 1, video live). ⏳ HIL capture A/B against `main`: the
+2026-11-12 attempt was void, because the capture card had no HDMI signal (black frame,
+−90 dBFS noise floor on every arm, control included). ⏳ By ear. **Ask (issue #189):** a set-top-style setting so quiet dialogue and loud
 effects can be brought closer together for late viewing.
 
 **What it does.** `P3O[62:61],Dynamic Range,Normal,Full,Night` (never-allocated bits, so no
@@ -87,9 +91,12 @@ for.
 - `bench/ac3/` (the legacy `imdct_512`) has no mode. It is a reference model only.
 - The flags are sticky until the audio reset, which happens on a load or flush.
 
-**Next:** fit (ALM delta), then on the rig: an AC-3 disc with live DRC captured in all three
-modes against `main` (Normal = `main` bit for bit; Full higher crest factor; Night lower),
-then the maintainer's ear.
+**Next:** reconnect the rig's HDMI to the capture card, then re-run the A/B. Capture the same
+passage (*The Road Warrior* 16:9 VTS 1, chapter 3; the census ranks its dynrng among the most
+active) under `main`, then this build in Normal, Full and Night. Expect:
+- Normal equal to `main`, sample-aligned.
+- Per-window self-consistency: Night − Normal ≈ Normal − Full in dB, outside the capped blocks.
+Then the maintainer's ear.
 
 ---
 
