@@ -171,13 +171,16 @@ static void telem_read()
 				"\"pic_max\":%u,\"pic_n\":%u,\"pic_over\":%u,",
 				w[22], w[23], w[24]);
 		// the audio engine (behind the word-25 marker): dts_copied / dts_ok are the
-		// codebook copy's verdict (dts_ok 0 = DTS discarded), dts_sum its checksum
+		// codebook copy's verdict (dts_ok 0 = DTS discarded), dts_sum its checksum;
+		// dts_dynf / drc_capped are sticky flags (issue #189): a DTS frame set DYNF (its
+		// range coefficient is not applied), a Night DRC gain was capped
 		if (w[25] == DVD_TELEM_AUD_MAGIC && n > 0 && n < (int)sizeof(duty))
 			snprintf(duty + n, sizeof(duty) - n,
 				"\"dts_copied\":%u,\"dts_ok\":%u,\"dts_active\":%u,\"eng_last_err\":%u,"
-				"\"dts_sum\":\"%04x%04x\",\"eng_frames\":%u,\"eng_refused\":%u,",
+				"\"dts_sum\":\"%04x%04x\",\"eng_frames\":%u,\"eng_refused\":%u,"
+				"\"dts_dynf\":%u,\"drc_capped\":%u,",
 				w[26] & 1, (w[26] >> 1) & 1, (w[26] >> 2) & 1, (w[26] >> 8) & 31,
-				w[27], w[28], w[29], w[30]);
+				w[27], w[28], w[29], w[30], (w[26] >> 3) & 1, (w[26] >> 4) & 1);
 	}
 	// field parity (word 31): fb_heals = the field-parity corrector's feedback insertions
 	// (the ~0.5 s heal), strict_waits = frame-top slots the mixer's strict first-field

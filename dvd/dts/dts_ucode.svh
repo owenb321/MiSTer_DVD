@@ -2,14 +2,14 @@
 // The engine's sizes, both programs' entry points (DTS at 0, AC-3 after it, in
 // one ROM), and XQ's code-reader tables (packed: element i at [w*i +: w];
 // index abits - 1).
-localparam int UC_WORDS    = 1549;
+localparam int UC_WORDS    = 1552;
 localparam int CONST_WORDS = 997;
 localparam int HUFF_NODES  = 2647;
 localparam int HUFF_BOOKS  = 62;
 localparam [10:0] UC_DTS_RESET = 11'd0;
 localparam [10:0] UC_DTS_FRAME = 11'd1;
-localparam [10:0] UC_AC3_RESET = 11'd501;
-localparam [10:0] UC_AC3_FRAME = 11'd501;
+localparam [10:0] UC_AC3_RESET = 11'd504;
+localparam [10:0] UC_AC3_FRAME = 11'd504;
 localparam [5:0]  UC_ERRV      = 6'd63;      // error vectors: pc[10:5] == this
 // the first quantiser-index book of abits (book = QBOOK + selector)
 localparam [59:0] XQ_QBOOK  = 60'ha626d434a1c4040;
@@ -38,8 +38,8 @@ localparam [5:0]  V_CZERO   = 6'd23;
 localparam [5:0]  V_REMAT   = 6'd24;
 localparam [5:0]  V_IMDCT   = 6'd25;
 // MP2 (docs/mp2_engine.md): the entry points, its words in icoef, the op numbers
-localparam [10:0] UC_MP2_RESET = 11'd1309;
-localparam [10:0] UC_MP2_FRAME = 11'd1310;
+localparam [10:0] UC_MP2_RESET = 11'd1312;
+localparam [10:0] UC_MP2_FRAME = 11'd1313;
 localparam [7:0]  MP2_IC_C     = 8'd128;
 localparam [7:0]  MP2_IC_SCF   = 8'd160;
 localparam [5:0]  V_MDQ     = 6'd26;

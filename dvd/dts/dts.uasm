@@ -118,6 +118,10 @@ FRAME:
         bnei    r2, 0, ERESERVED
         get     r2, 1
         st      r2, F_DRC
+        beqi    r2, 0, H_NODYNF
+        li      r8, CNT_DYNF            ; DYNF: the range coefficient (SF_NODRC) is read and
+        vop     CNT                     ; not applied: counted, so a disc using it shows (#189)
+H_NODYNF:
         get     r2, 1
         st      r2, F_TS
         get     r2, 1

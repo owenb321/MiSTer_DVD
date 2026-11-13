@@ -61,7 +61,9 @@
 //     word 24 pic_over       -- ... that took longer than one frame period (wraps)
 //     word 25 AUD_MAGIC      -- says words 26..30 exist (the audio engine; docs/dts_decoder.md)
 //     word 26 dts_flags      -- [0] codebooks copied, [1] their checksum matched (tables_ok:
-//                               DTS decodes), [2] the engine runs DTS, [12:8] last refusal
+//                               DTS decodes), [2] the engine runs DTS, [3] a DTS frame set
+//                               DYNF (not applied), [4] a Night DRC gain was capped (both
+//                               sticky until the audio reset; issue #189), [12:8] last refusal
 //     word 27 cb_sum[31:16]  word 28 cb_sum[15:0] -- the copy's checksum (D4 rule 2)
 //     word 29 eng_frames     -- frames the engine decoded (AC-3 + DTS, wraps)
 //     word 30 eng_refused    -- frames it refused (wraps)

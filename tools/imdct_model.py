@@ -129,6 +129,28 @@ TERMS = {'drc': 2, 'pre': 4, OP_IFFT2: 8, OP_IFFT4: 32, OP_BZERO: 24, OP_BHALF: 
          OP_BFULL: 32, 'post': 16, 'post256': 32}
 
 
+
+# The DRC term's gain (dts_vec op 25; the OSD's Dynamic Range, issue #189). dynrng's
+# exponent e is signed in [7:5], its mantissa Y in [4:0]: gain (32 + Y) / 32 x 2^e.
+DRC_NORMAL, DRC_FULL, DRC_NIGHT = 0, 1, 2
+
+
+def drc_coef(dynrng, mode=DRC_NORMAL):
+    """-> (multiplier, right shift): D = floor(X x multiplier / 2^shift). Normal the
+    authored gain; Full unity (dynrng 0x00); Night the gain squared, one floor, capped
+    at 0x7F's x15.75 when e >= 2 (the square would be >= x16, past anything Normal can
+    reach). Mode 3 is Normal."""
+    y = dynrng & 31
+    e = (dynrng >> 5) & 7
+    e = e - 8 if e & 4 else e
+    if mode == DRC_FULL:
+        return 32, 5
+    if mode == DRC_NIGHT:
+        if e >= 2:
+            return 63, 2
+        return (32 + y) ** 2, 10 - 2 * e
+    return 32 + y, 5 - e
+
 class Cost:
     """Terms for one run: `one` (a one-pass multiplier), `split` (every sample product
     two terms: the static worst case), `dyn` (two terms only when the operand is wider
@@ -177,11 +199,9 @@ class Imdct512:
     def p_red(a, b):            # the --red mutation: round half up instead of floor
         return w34((a * b + (1 << 16)) >> 17)
 
-    def drc(self, c, dynrng):
-        mant = 32 + (dynrng & 31)
-        e = (dynrng >> 5) & 7
-        e = e - 8 if e & 4 else e
-        return w32((c * mant) >> (5 - e))
+    def drc(self, c, dynrng, mode=0):
+        mant, sh = drc_coef(dynrng, mode)
+        return w32((c * mant) >> sh)
 
     def ifft_post(self, ch, short, buf, p, c):
         """The IFFT, then POST, the window and the overlap, for channel ch from the
@@ -278,8 +298,9 @@ class Imdct512:
                 dl[2 * i], dl[2 * i + 1] = s_ci, s_dr
                 dl[126 - 2 * i], dl[127 - 2 * i] = s_di, s_cr
 
-    def block(self, coeff, nf, blksw, dynrng, acmod, cmix, surmix):
-        """coeff[ch][256] (Q1.23) for ch < nf -> pcm slots, exactly as imdct_512 leaves them."""
+    def block(self, coeff, nf, blksw, dynrng, acmod, cmix, surmix, drc_mode=DRC_NORMAL):
+        """coeff[ch][256] (Q1.23) for ch < nf -> pcm slots, exactly as imdct_512 leaves them
+        (drc_mode other than Normal: as the engine's op 25 does; imdct_512 has no mode)."""
         p, c = (self.p_red if os.environ.get('IMDCT_MODEL_RED') == '1' else self.p), self.cost
         for ch in range(nf):
             short = bool((blksw >> ch) & 1) if ch < 5 else False
@@ -296,8 +317,8 @@ class Imdct512:
                     a0, a1 = fo, (255 - fo) & 255
                     pr, pi = PRE1[i]
                 c.op(TERMS['drc'], [], 'drc')
-                dk = self.drc(coeff[ch][a0], dynrng)
-                d255k = self.drc(coeff[ch][a1], dynrng)
+                dk = self.drc(coeff[ch][a0], dynrng, drc_mode)
+                d255k = self.drc(coeff[ch][a1], dynrng, drc_mode)
                 c.op(TERMS['pre'], [d255k, dk, d255k, dk], 'pre')
                 buf[i] = (w32(p(d255k, pi) + p(dk, pr)), w32(p(d255k, pr) - p(dk, pi)))
             self.ifft_post(ch, short, buf, p, c)

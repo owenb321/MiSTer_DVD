@@ -23,7 +23,9 @@
 // Telemetry (16-bit counters, saturating): frames decoded; frames refused, with the
 // last refusal's code (dts.uasm E_*) and a sticky mask of every code seen; bits read
 // past a frame's end (as 0); overflowed block codes decoded leniently (D5); frames
-// whose embedded downmix coefficients were ignored (D3).
+// whose embedded downmix coefficients were ignored (D3); DTS frames whose header sets
+// DYNF (CNT 1: the range coefficient is read and not applied, issue #189). drc_capped
+// is sticky: an AC-3 block under Night (drc_mode 2) whose squared gain was capped.
 
 `default_nettype none
 
@@ -31,6 +33,7 @@ module dts_top (
     input  wire          clk,
     input  wire          rst_n,
     input  wire    [1:0] codec,              // 0 DTS, 1 AC-3, 2 MP2 (change only in reset)
+    input  wire    [1:0] drc_mode,           // AC-3 DRC: 0 Normal, 1 Full, 2 Night (dts_vec)
 
     input  wire   [15:0] fr_len,
     input  wire          fr_valid,
@@ -57,6 +60,8 @@ module dts_top (
     output logic  [15:0] overrun_bits,
     output logic  [15:0] lenient_codes,
     output logic  [15:0] dmix_ignored,
+    output logic  [15:0] dynf_frames,        // DTS: frames whose header set DYNF (CNT 1)
+    output logic         drc_capped,         // sticky: a Night block's gain was capped
     output logic         frame_end,          // pulse: a frame decoded to its end (FEND)
     output logic         refuse,             // pulse: a frame refused ...
     output logic   [4:0] refuse_code,        // ... with this code
@@ -110,7 +115,7 @@ module dts_top (
         .xq_code, .xq_valid, .xq_ready,
         .cb_req, .cb_sel, .cb_addr, .cb_valid, .cb_data,
         .pcm_l, .pcm_r, .pcm_valid, .pcm_ready,
-        .xq_addr, .abort(err_valid), .imdct_req, .imdct_go, .imdct_fin, .pcm_ra, .pcm_q, .coef_ra, .coef_q);
+        .xq_addr, .abort(err_valid), .imdct_req, .imdct_go, .imdct_fin, .pcm_ra, .pcm_q, .coef_ra, .coef_q, .drc_mode);
 
     // AC-3: IMDCT's arguments, the block's side information (ac3.uasm M_DONE), latched
     // on the op's start
@@ -139,13 +144,18 @@ module dts_top (
     assign refuse = err_valid;
     assign refuse_code = err_code;
 
-    // CNT's counter id is r8 (dts_isa.CNT_DMIX_IGNORED = 0)
+    // CNT's counter id is r8 (dts_isa.CNT_DMIX_IGNORED = 0, CNT_DYNF = 1)
     wire cnt_dmix = vop_start && (vop_op == 6'd8) && (vop_args[15:0] == 16'd0);
+    wire cnt_dynf = vop_start && (vop_op == 6'd8) && (vop_args[15:0] == 16'd1);
+    // dts_vec's Night cap (im_ncap): dynrng's exponent 2 or 3
+    wire drc_cap  = vop_start && (vop_op == 6'd25) && (drc_mode == 2'd2) &&
+                    (vop_args[23:22] == 2'b01);
 
     always_ff @(posedge clk) begin
         if (!rst_n) begin
             frames <= 16'd0; refused <= 16'd0; last_err <= 5'd0; err_seen <= 32'd0;
             overrun_bits <= 16'd0; lenient_codes <= 16'd0; dmix_ignored <= 16'd0;
+            dynf_frames <= 16'd0; drc_capped <= 1'b0;
         end else begin
             if (frame_done && frames != 16'hFFFF) frames <= frames + 16'd1;
             if (err_valid) begin
@@ -156,6 +166,8 @@ module dts_top (
             if (overrun_bit && overrun_bits != 16'hFFFF) overrun_bits <= overrun_bits + 16'd1;
             if (lenient && lenient_codes != 16'hFFFF) lenient_codes <= lenient_codes + 16'd1;
             if (cnt_dmix && dmix_ignored != 16'hFFFF) dmix_ignored <= dmix_ignored + 16'd1;
+            if (cnt_dynf && dynf_frames != 16'hFFFF) dynf_frames <= dynf_frames + 16'd1;
+            if (drc_cap) drc_capped <= 1'b1;
         end
     end
 

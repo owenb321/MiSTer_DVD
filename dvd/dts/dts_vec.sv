@@ -33,7 +33,10 @@
 //   op 24 REMAT  a0 flags, a1 end: 2/0 rematrix of bins [13, end), saturating; the
 //                active bands' bins, L and R read before either is written
 //   op 25 IMDCT  a0 blksw, a1 dynrng, a2 acmod, a4 cmixlev, a5 surmixlev: the block's
-//                transform, here (docs/imdct_engine.md). imdct_req waits for imdct_go
+//                transform, here (docs/imdct_engine.md). drc_mode (the OSD's Dynamic
+//                Range, latched at the op's start) sets the DRC term's gain: 0 Normal
+//                the authored dynrng, 1 Full unity, 2 Night its square, capped at
+//                dynrng 0x7F's x15.75 (the boost this datapath is proven for); 3 as 0. imdct_req waits for imdct_go
 //                (the caller's pcm_out has drained the last block); then the term program
 //                (dvd/dts/imdct_tprog.mem, tools/imdct_isa.py) runs DRC, PRE, the IFFT
 //                schedule and POST for every channel, folding 5.1 into PCM slots 0/1 in
@@ -120,7 +123,8 @@ module dts_vec (
     // X's read port while op 25 waits for imdct_go (benches score the coefficients
     // there; the core ties it off): {slot, bin}, one cycle
     input  wire   [10:0] coef_ra,
-    output logic  [24:0] coef_q
+    output logic  [24:0] coef_q,
+    input  wire    [1:0] drc_mode            // op 25's DRC gain: 0 Normal, 1 Full, 2 Night
 );
 
 `include "dvd/dts/dts_ucode.svh"
@@ -425,8 +429,32 @@ module dts_vec (
     wire  [2:0] im_acmod = a2[2:0];
     wire  [2:0] im_nf = (im_acmod == 3'd1) ? 3'd1 : (im_acmod == 3'd3 || im_acmod == 3'd4) ? 3'd3 :
                         (im_acmod == 3'd5 || im_acmod == 3'd6) ? 3'd4 : (im_acmod == 3'd7) ? 3'd5 : 3'd2;
-    wire  [5:0] im_mant = {1'b1, a1[4:0]};                   // 32 + dynrng[4:0]
-    wire  [3:0] im_drc_sh = 4'd5 - {a1[7], a1[7:5]};         // 5 - e, e signed in [7:5]
+    // DRC (issue #189): Normal D = (X (32 + Y)) >> (5 - e), Y = dynrng[4:0], e signed in
+    // [7:5]; Full the same with dynrng 0x00 (32 >> 5: X itself); Night the gain squared,
+    // (X (32 + Y)^2) >> (10 - 2e), one floor, capped at 0x7F's gain when e >= 2 (squared,
+    // >= x16: past what Normal can reach, so past what the ring and the IFFT were proven
+    // for). dts_top flags a capped block (telemetry).
+    logic [1:0] im_drc_md;                                     // drc_mode at the op's start
+    logic [11:0] im_sq;                                        // (32 + Y)^2
+    always_comb case (a1[4:0])
+        5'd0:  im_sq = 12'd1024; 5'd1:  im_sq = 12'd1089; 5'd2:  im_sq = 12'd1156; 5'd3:  im_sq = 12'd1225;
+        5'd4:  im_sq = 12'd1296; 5'd5:  im_sq = 12'd1369; 5'd6:  im_sq = 12'd1444; 5'd7:  im_sq = 12'd1521;
+        5'd8:  im_sq = 12'd1600; 5'd9:  im_sq = 12'd1681; 5'd10: im_sq = 12'd1764; 5'd11: im_sq = 12'd1849;
+        5'd12: im_sq = 12'd1936; 5'd13: im_sq = 12'd2025; 5'd14: im_sq = 12'd2116; 5'd15: im_sq = 12'd2209;
+        5'd16: im_sq = 12'd2304; 5'd17: im_sq = 12'd2401; 5'd18: im_sq = 12'd2500; 5'd19: im_sq = 12'd2601;
+        5'd20: im_sq = 12'd2704; 5'd21: im_sq = 12'd2809; 5'd22: im_sq = 12'd2916; 5'd23: im_sq = 12'd3025;
+        5'd24: im_sq = 12'd3136; 5'd25: im_sq = 12'd3249; 5'd26: im_sq = 12'd3364; 5'd27: im_sq = 12'd3481;
+        5'd28: im_sq = 12'd3600; 5'd29: im_sq = 12'd3721; 5'd30: im_sq = 12'd3844; default: im_sq = 12'd3969;
+    endcase
+    wire        im_night = (im_drc_md == 2'd2);
+    wire        im_ncap  = im_night && (a1[7:6] == 2'b01);     // e = 2 or 3
+    wire [11:0] im_mant = (im_drc_md == 2'd1) ? 12'd32 :
+                          im_ncap ? 12'd63 :                     // 0x7F: 63/32 x 8
+                          im_night ? im_sq : {6'd0, 1'b1, a1[4:0]};          // 32 + Y
+    wire  [4:0] im_drc_sh = (im_drc_md == 2'd1) ? 5'd5 :
+                            im_ncap ? 5'd2 :
+                            im_night ? 5'd10 - {a1[7], a1[7:5], 1'b0} :     // 10 - 2e
+                                       5'd5 - {a1[7], a1[7], a1[7:5]};        // 5 - e
     wire        im_has_c = (im_acmod == 3'd3) || (im_acmod == 3'd5) || (im_acmod == 3'd7);
     wire        im_has_s = im_acmod[2];
     wire        im_mono_s = (im_acmod == 3'd4) || (im_acmod == 3'd5);
@@ -600,7 +628,7 @@ module dts_vec (
             case (r_cst)
                 IM_C_WR:   i_kv <= {{9{r_wr[17]}}, r_wr};
                 IM_C_WI:   i_kv <= {{9{r_wi[17]}}, r_wi};
-                IM_C_MANT: i_kv <= {21'd0, im_mant};
+                IM_C_MANT: i_kv <= {15'd0, im_mant};
                 IM_C_CLEV: i_kv <= {9'd0, im_clev};
                 IM_C_SLEV: i_kv <= {9'd0, im_slev};
                 default:   i_kv <= 27'sd1;                  // an add: the sample itself
@@ -950,7 +978,7 @@ module dts_vec (
                     acc_clr = !i_mode[1]; acc_en = 1'b1;
                     psub = i_mode[0];
                     psh = i_prod;
-                    rsh = i_drc ? {2'd0, im_drc_sh} : 6'd0; trunc = 1'b1;
+                    rsh = i_drc ? {1'b0, im_drc_sh} : 6'd0; trunc = 1'b1;
                     rg_we = i_dstv; rg_wa = i_dst; w35 = i_w35;
                 end
             end
@@ -1067,7 +1095,7 @@ module dts_vec (
                         rb <= 8'd13; rph <= 2'd0;
                         if (args[31:16] > 16'd13) st <= V_RM; else st <= V_DONE;
                     end
-                    OP_IMDCT: st <= V_IM;
+                    OP_IMDCT: begin im_drc_md <= drc_mode; st <= V_IM; end
                     OP_MDQ: st <= V_MQ0;
                     OP_MSYN: begin side <= 1'b0; st <= V_MS0; end
                     OP_RCLR: begin lcnt <= 12'd2048; st <= V_LOOP; end

@@ -50,7 +50,7 @@ module ac3_top_tb;
     logic [1:0]  blk_cmix, blk_surmix;
 
     dts_top dut (
-        .clk, .rst_n, .codec(2'd1), .fr_len, .fr_valid, .fr_ready, .in_byte, .in_valid, .in_ready,
+        .clk, .rst_n, .codec(2'd1), .drc_mode(2'd0), .fr_len, .fr_valid, .fr_ready, .in_byte, .in_valid, .in_ready,
         .cb_req, .cb_sel, .cb_addr, .cb_valid(1'b0), .cb_data(64'd0),
         .pcm_l, .pcm_r, .pcm_valid, .pcm_ready(1'b1),
         .frames, .refused, .last_err, .err_seen, .overrun_bits, .lenient_codes,

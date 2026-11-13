@@ -35,7 +35,7 @@ module dts_top_tb;
     logic [63:0] cb_data;
     logic [15:0] pcm_l, pcm_r;
     logic        pcm_valid, pcm_ready;
-    logic [15:0] frames, refused, overrun_bits, lenient_codes, dmix_ignored;
+    logic [15:0] frames, refused, overrun_bits, lenient_codes, dmix_ignored, dynf_frames;
     logic [4:0]  last_err;
     logic [31:0] err_seen;
     logic        vop_start, vop_done, tr_valid;
@@ -47,11 +47,11 @@ module dts_top_tb;
     logic [23:0] tr_val;
 
     dts_top dut (
-        .clk, .rst_n, .codec, .mp2_fs, .fr_len, .fr_valid, .fr_ready, .in_byte, .in_valid, .in_ready,
+        .clk, .rst_n, .codec, .drc_mode(2'd0), .mp2_fs, .fr_len, .fr_valid, .fr_ready, .in_byte, .in_valid, .in_ready,
         .cb_req, .cb_sel, .cb_addr, .cb_valid, .cb_data,
         .pcm_l, .pcm_r, .pcm_valid, .pcm_ready,
         .frames, .refused, .last_err, .err_seen, .overrun_bits, .lenient_codes,
-        .dmix_ignored, .vop_start, .vop_op, .vop_done,
+        .dmix_ignored, .dynf_frames, .drc_capped(), .vop_start, .vop_op, .vop_done,
         .tr_valid, .tr_pc, .tr_kind, .tr_addr, .tr_val,
         // AC-3's IMDCT and PCM ports, tied off: codec 0 / 2 never reach op 25
         .imdct_req(), .imdct_go(1'b0), .imdct_fin(), .pcm_ra(9'd0), .pcm_q(),
@@ -65,7 +65,7 @@ module dts_top_tb;
     logic [133:0] vop_exp [];
     logic [63:0]  cb_ad [0:4095];
     logic [63:0]  cb_vq [0:4095];
-    int n_bytes, n_frames, n_ev, n_vops, n_pairs, n_err, n_ovr, n_len, n_dmix, n_fs;
+    int n_bytes, n_frames, n_ev, n_vops, n_pairs, n_err, n_ovr, n_len, n_dmix, n_fs, n_dynf;
     real pair_cyc;                       // cycles a stereo pair in real time
     int bi, fi, pi, vi, gap, fgap, ogap, busy, idle, last_prog, quiet;
     logic [5:0] cur_op;
@@ -89,9 +89,9 @@ module dts_top_tb;
         for (int i = 0; i < 9; i++) begin op_cyc[i] = 0; op_n[i] = 0; end
         fd = $fopen({stem, ".meta"}, "r");
         if (fd == 0) $fatal(1, "FAIL [setup] no %s.meta", stem);
-        n_fs = 1;
-        r = $fscanf(fd, "%d %d %d %d %d %d %d %d %d %d", n_bytes, n_frames, n_ev, n_vops,
-                    n_pairs, n_err, n_ovr, n_len, n_dmix, n_fs);
+        n_fs = 1; n_dynf = 0;
+        r = $fscanf(fd, "%d %d %d %d %d %d %d %d %d %d %d", n_bytes, n_frames, n_ev, n_vops,
+                    n_pairs, n_err, n_ovr, n_len, n_dmix, n_fs, n_dynf);
         pair_cyc = (codec == 2'd2 && n_fs == 0) ? 27.0e6 / 44100 :
                    (codec == 2'd2 && n_fs == 2) ? 27.0e6 / 32000 : 562.5;
         $fclose(fd);
@@ -282,6 +282,7 @@ module dts_top_tb;
                 if (overrun_bits != n_ovr) $fatal(1, "FAIL [count] %0d overrun bits, the golden %0d", overrun_bits, n_ovr);
                 if (lenient_codes != n_len) $fatal(1, "FAIL [count] %0d lenient codes, the golden %0d", lenient_codes, n_len);
                 if (dmix_ignored != n_dmix) $fatal(1, "FAIL [count] %0d ignored downmixes, the golden %0d", dmix_ignored, n_dmix);
+                if (dynf_frames !== n_dynf[15:0]) $fatal(1, "FAIL [count] %0d DYNF frames, the golden %0d", dynf_frames, n_dynf);
                 if (codec == 2'd2 && n_pairs > 0 && mp2_fs != n_fs[1:0])
                     $fatal(1, "FAIL [count] the exported rate %0d, the golden %0d", mp2_fs, n_fs);
                 $display("dts_top_tb: %0d bytes, %0d vector ops, %0d pairs, %0d frames, %0d refused, %0d codebook rows (latency %0d), %0d cycles; real time: worst frame %0.1f %%, mean %0.1f %%",
