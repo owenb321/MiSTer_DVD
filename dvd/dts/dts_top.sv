@@ -79,6 +79,7 @@ module dts_top (
     // MP2: the sampling-frequency index of the stream (MFS's a0, latched as each
     // frame's header is accepted: 0 44.1 kHz, 1 48, 2 32), for the output NCO
     output logic   [1:0] mp2_fs,
+    output logic         mp2_fs_ok,      // a header has written mp2_fs since reset
 
     // benches
     output logic         vop_start,
@@ -121,10 +122,18 @@ module dts_top (
         end
 
     // MP2: MFS's a0, the stream's sampling frequency (mp2.uasm issues it as each header
-    // is accepted, before the frame's PCM)
+    // is accepted, before the frame's PCM). mp2_fs_ok says a header has REPORTED the
+    // rate since reset, so the output gate can wait for it rather than start a stream
+    // at the 48 kHz reset value (issue #188). A reset (load, flush, codec switch)
+    // clears it, which is exactly when mp2_fs falls back to that value.
     always_ff @(posedge clk)
-        if (!rst_n) mp2_fs <= 2'd1;
-        else if (vop_start && vop_op == 6'd29) mp2_fs <= vop_args[1:0];
+        if (!rst_n) begin
+            mp2_fs    <= 2'd1;
+            mp2_fs_ok <= 1'b0;
+        end else if (vop_start && vop_op == 6'd29) begin
+            mp2_fs    <= vop_args[1:0];
+            mp2_fs_ok <= 1'b1;
+        end
 
     assign frame_end = frame_done;
     assign refuse = err_valid;

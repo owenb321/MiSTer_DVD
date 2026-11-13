@@ -20,6 +20,36 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ---
 
+## CD-i Digital Video disc 4-5 s out of sync: a linear stream's PTS restart (issue #188, 2026-11-12, MERGED PR #195)
+
+**State:** ✅ HW-confirmed on the rig (`DVD_vcdrestart_20261112_0549`: both HFRO discs in
+sync through the junction and after seeks; VCD, SVCD and DVD unchanged against `main`; the
+movie-only start 38.27 MP2 frames/s against the control's 41.70), MERGED PR #195;
+⏳ the reporter's Italian disc. Sim: `run_lin_junction.sh --red`, `flush_ctl_tb` [12],
+`check_lin_junction_wiring.py --red`, `main/tests` [8l]-[8n]. **Field report (issue #188):** a Philips/Paramount PAL "Video CD"
+of *Hunt for Red October* (Italian, 815 1023) plays with audio 4-5 s out of sync on HDMI,
+from the physical disc and the rip; a chapter skip does not clear it.
+**Root cause (measured on the rig with the English edition, v0.10.0's code):** the disc is
+CD-i Digital Video: a ~10 s still-picture intro with mono MP2, a program end code `0xB9`,
+then the movie whose **audio PTS restarts at 0** while video runs forward. The movie's first
+picture re-anchored the clock (late leg) with ~0.8 s of the intro's audio still queued, so
+the movie's audio head was late, held by the in-band re-time window, filled the ring,
+stalled the demux (video starved ~2.5 s), and the `arm_timer` fallback released it
+free-running: `disp_lag` -2.5 s, `av_drift` -3.8 s (baseline -0.43) for the whole movie. A
+seek cleared it. **Fix:** on a LINEAR stream, `ps_demux` parks on `0xB9`; new
+`dvd/lin_junction.sv` waits for the audio drain AND an empty VBUF, fires flush_ctl's new
+`lin_junction` row (aud_flush + seek_flush, NOT load_flush) and the STD video hold, then
+releases the demux: the next stream starts like a cold load. **Refuted on the rig, first
+build:** "a `0xB9` is a junction". CD-i ends each channel with one (the intro's still video
+at sector 4255, its audio on to 5015 on the same clock), so the first build flushed the
+intro's sound 0.5 s in. The trigger is now a `0xB9` followed by a pack whose SCR steps BACK. **Also found:** started
+straight into the movie stream, MP2 played at 48 kHz (41.7 frames/s against 38.3; the
+release could beat the engine's first rate report); the release now waits for
+`mp2_fs_ok`. The disc's `.cue` (`CDI/2352`) now mounts. **New tool:**
+`tools/vcd_timeline.py`, a header-only segment/PTS map of any VCD/SVCD/CD-i image.
+**Next:** the rig A/B against `main` (both HFRO discs, a seek after the junction, dinosaur
+and QG0012 unchanged), then a build to the reporter. Detail: `docs/vcd_svcd.md` §3b.
+
 ## Button-chosen subtitles drawn mapped since v0.10.0: the SPRM2 write-back re-claimed the stream (2026-11-11, MERGED PR #193)
 
 **State:** ✅ HW on the rig (`DVD_subvscale4`, 2026-11-12: Letterbox lines 15 → 20–21 rows,

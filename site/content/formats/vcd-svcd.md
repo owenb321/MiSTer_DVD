@@ -43,6 +43,17 @@ The [status line and seek bar](../playback/controls.md) follow the picture: beca
 SVCD picture is narrower than a DVD's, they are drawn to fit it, with the text at its native
 size rather than the double-height size a DVD gets. Everything they show is the same.
 
+## CD-i Digital Video discs
+
+Philips' early movie discs, labelled **"Compact Disc Digital Video"** (for example the
+Paramount titles of 1993–94), play the same way. They open with a short logo that has its
+own soundtrack, then start the film. The player finishes the logo first and then starts the
+film in sync, holding the logo's last picture for about a third of a second in between. The
+same happens wherever one MPEG stream ends and another begins, for example between the
+movie tracks of a disc played as one through its `.cue`.
+
+Their `.cue` sheets name the track **`CDI/2352`**, and they are accepted like a VCD's.
+
 ## Limitations
 
 VCD support is deliberately basic playback, the reason being: **it came

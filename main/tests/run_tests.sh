@@ -683,6 +683,10 @@ if [ "$RED" -eq 1 ]; then
         "s/dvd_cue_raw_prefix(dst + (size_t)i \* 2352, vlba + i);/;/" \
         cue-2336-no-prefix
     red_case dvd_cue.cpp dvd_cue_test.cpp \
+        "FAIL .*CDI/2352 mounts as a Video CD" \
+        's|{ "CDI/2352",   DVD_CUE_TT_MODE2, 2352 },|{ "CDI/2352",   DVD_CUE_TT_OTHER, 2352 },|' \
+        cue-cdi-not-served
+    red_case dvd_cue.cpp dvd_cue_test.cpp \
         "FAIL .*chunk.*padded LIST" \
         "s/pos += 8 + (uint64_t)sz + (sz \& 1);/pos += 8 + (uint64_t)sz;/" \
         cue-wave-chunk-unpadded

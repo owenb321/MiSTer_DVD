@@ -215,9 +215,11 @@ module vcd_chain_tb;
 
     // ---- audio PES PTS fixture (for the +SCHED STC preroll) ----
     logic [39:0] apts [0:255];
+    int stc_lead = -3000;   // STC start relative to the first audio PES PTS, 90 kHz ticks
 
     initial begin
         if ($test$plusargs("SCHED")) sched_mode = 1;
+        void'($value$plusargs("STC_LEAD=%d", stc_lead));
         $readmemh("bench/dvd/test_vobs/vcd_mid.golden.hex", vob);
         $readmemh("bench/dvd/test_mp2/vcdchain/pcm_golden.hex", golden);
         $readmemh("bench/dvd/test_vobs/vcd_mid.apts.hex", apts);
@@ -227,8 +229,12 @@ module vcd_chain_tb;
         while (nsamp < MAXS && !$isunknown(golden[nsamp])) nsamp++;
         if (nbytes == 0 || nsamp == 0)
             $fatal(1, "fixtures missing (run bench/dvd/run_vcd.sh)");
-        // STC preroll: ~33 ms below the first audio PES PTS
-        stc_r = apts[0][32:0] - 33'd3000;
+        // STC preroll: by default ~33 ms below the first audio PES PTS. +STC_LEAD
+        // starts it PAST that PTS instead, as when a stream's first audio is muxed
+        // ahead of its first picture (issue #188: the HFRO movie, +132 ms). ⚠ It does
+        // NOT reproduce #188's 48 kHz start: +STC_LEAD=11880 passes on the pre-fix RTL
+        // (docs/vcd_svcd.md §3b). A knob, not a gate.
+        stc_r = apts[0][32:0] + 33'(stc_lead);
         stc_init = 1;
         $display("chain fixture: %0d PS bytes, %0d golden samples, sched=%0d",
                  nbytes, nsamp, sched_mode);

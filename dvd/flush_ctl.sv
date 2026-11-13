@@ -25,8 +25,14 @@
  *     (the mid-play mount bug, fixed 2026-08-28 — a forward skew < ~15 s never
  *     re-anchors, av_sync FWD_REANCHOR_TICKS).
  * The deliberate exceptions are keep_vbuf menu->menu transitions (video tail plays
- * out, audio rides through — docs/dvd_menu_refinements.md §5d) and the audio-only
- * aud_resync (video is continuous, so only the audio side re-phases).
+ * out, audio rides through — docs/dvd_menu_refinements.md §5d), the audio-only
+ * aud_resync (video is continuous, so only the audio side re-phases), and the
+ * LINEAR JUNCTION (lin_junction, issue #188): aud_flush + seek_flush WITHOUT
+ * load_flush. It fires only once the old stream has finished PLAYING, with
+ * ps_demux parked on the next stream's first bytes (ps_demux jn_wait), so there
+ * is no buffered tail on either side to mis-phase, and the demux, its FIFO and
+ * the reader must keep the bytes they hold -- the load_flush scope is exactly
+ * what must not be reset. The trio's two failure modes both need a backlog.
  *
  * Kept in emu.sv (not moved): the edge-detect that produces mode_switch (today
  * il_switch only — a filmp_eff edge was attempted and REVERTED 2026-08-28, see the
@@ -59,6 +65,7 @@ module flush_ctl (
     // disc_rephase block below -- this is what stops a seamless-branch junction being
     // read as a content change.
     input  wire cell_seamless,
+    input  wire lin_junction,     // 1-cycle pulse: a drained linear-stream junction (emu, issue #188)
 
     output wire load_flush,       // ~64-cycle level -> pipe_rst_n scope (demux/av_sync/nav)
     output wire aud_flush,        // ~64-cycle level -> audio chain reset (with aud_resync)
@@ -194,8 +201,8 @@ reg [6:0] aud_flush_cnt = 7'd0;
 assign    aud_flush = aud_flush_cnt != 7'd0;
 always @(posedge clk) begin
     if (~rst_n)                                            aud_flush_cnt <= 7'd0;
-    else if (start_streaming || ((seek_ack || jump_ack) && ~keep_vbuf) || mode_switch)
-                                                           aud_flush_cnt <= 7'd64;   // mode_switch: full re-sync (see the mode_switch comment in emu.sv)
+    else if (start_streaming || ((seek_ack || jump_ack) && ~keep_vbuf) || mode_switch ||
+             lin_junction)                                 aud_flush_cnt <= 7'd64;   // mode_switch: full re-sync (see the mode_switch comment in emu.sv)
     else if (aud_flush)                                    aud_flush_cnt <= aud_flush_cnt - 7'd1;
 end
 assign aud_rst_n = rst_n & ~aud_flush & ~aud_resync;
@@ -234,8 +241,8 @@ reg [6:0] seek_flush_cnt = 7'd0;
 assign    seek_flush = seek_flush_cnt != 7'd0;
 always @(posedge clk) begin
     if (~rst_n)                                            seek_flush_cnt <= 7'd0;
-    else if (seek_flush_now || jump_flush || mode_switch || start_streaming)
-                                                           seek_flush_cnt <= 7'd64;   // seek / menu->title jump / raster-regime switch / file mount
+    else if (seek_flush_now || jump_flush || mode_switch || start_streaming ||
+             lin_junction)                                 seek_flush_cnt <= 7'd64;   // seek / menu->title jump / raster-regime switch / file mount
     else if (seek_flush)                                   seek_flush_cnt <= seek_flush_cnt - 7'd1;
 end
 
