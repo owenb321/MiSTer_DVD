@@ -706,6 +706,16 @@ save-states build, M10K 533 → 520, DSP 91 → 84, 98 % → 91 % ALM, timing PA
 against `main` (5.1, short blocks, stereo; `audio_check.py`), then the maintainer's call on
 pushing both branches.**
 
+### ⏳ Issue #189: Dynamic Range (AC-3 DRC Normal / Full / Night), on `feature/drc-setting`
+
+- [x] RTL, models, gates (`run_drc_mode.sh --red`, `run_imdct_eng.sh --red`, `run_dts.sh` V20). Normal
+  is bit-identical (`run_ac3_ab.sh`). DTS DYNF is counted, not applied. Record: `status_log.md`
+  "Dynamic Range".
+- [ ] ⏳ Fit and ALM delta; HIL capture of a live-DRC AC-3 disc in all three modes against `main`; the
+  maintainer's ear. Then a PR.
+- [ ] Optional follow-ups: an independent PCM golden for Full/Night (a52dec `-r` / liba52's DRC
+  callback), and our own compressor for DTS/LPCM/MP2 Night if users ask for it.
+
 ### ⏳ Standard Convert: PAL → NTSC by speed change (✅ MERGED PR #191) (`docs/standard_convert.md`)
 
 - [~] Clock, audio and the scaler path, PAL→NTSC (PR #191; To PAL on HDMI removed 2026-11-10: no display needs it): measured on the rig

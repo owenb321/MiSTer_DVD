@@ -20,6 +20,79 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ---
 
+## Dynamic Range: AC-3 DRC Normal / Full / Night; DTS DYNF counted (issue #189, 2026-11-12)
+
+**State:** 🔧 sim-proven on `feature/drc-setting`; ⏳ fit, ⏳ HIL capture A/B against `main`,
+⏳ by ear on the rig. **Ask (issue #189):** a set-top-style setting so quiet dialogue and loud
+effects can be brought closer together for late viewing.
+
+**What it does.** `P3O[62:61],Dynamic Range,Normal,Full,Night` (never-allocated bits, so no
+`v,N` bump). It scales the AC-3 DRC term in `dvd/dts/dts_vec.sv` op 25, where each block's
+`dynrng` gain `(32 + Y) / 32 × 2^e` is applied to the coefficients before PRE:
+- **Normal** (index 0) = the authored gain, the behaviour before the row. Bit-identical:
+  `run_ac3_ab.sh` ALL GREEN on every stream, and the term's mantissa/shift are unchanged.
+- **Full** = unity (as dynrng 0x00: `X × 32 >> 5`).
+- **Night** = the gain squared, i.e. twice the dB (ffmpeg's `drc_scale = 2`), computed exactly
+  as one floor: `X × (32 + Y)² >> (10 − 2e)`, the square a 32-entry table. **Capped at 0x7F's
+  ×15.75 (+24 dB) when e ≥ 2** (the square would be ≥ ×16).
+- Decode PCM only: DTS, LPCM and MP2 carry no `dynrng`, and Passthru leaves DRC to the receiver.
+- Mode 3 (unreachable from the OSD) behaves as Normal. The mode is latched at the op's start,
+  so an OSD change lands on a block boundary.
+
+**Decisions (with the maintainer, 2026-11-12).**
+- Night = `dynrng` squared, not `compr` (RF mode). It behaves the same on every disc and needs
+  no new record field. `compr` is RF mode's heavy profile, which assumes an output ~11 dB
+  hotter; it is still parsed and discarded (`ac3.uasm`).
+- DTS `DYNF`: **counted, not applied.** 0 of 147 library streams set it (`dts_decoder.md` §9).
+  `dts.uasm` issues `CNT 1` per frame whose header sets it. `dts_top.dynf_frames` counts it, and
+  `dvd_audio_decode` holds a sticky flag that goes out as telemetry word 26 bit 3 (`dts_dynf` in
+  Main's JSON). A disc that uses it is therefore visible, not silently ignored.
+- **The Night cap**, and why it is a cap and not a wider datapath. Normal can never exceed
+  ×15.75, so the ring's D words, PRE and the IFFT were proven only up to that gain (`--random`
+  full-scale 0x7F blocks). An uncapped square reaches ×248: still inside Q8.23, but nothing
+  proves the stages after it, and the blocks that ask for it are near-silence (below), where
+  +48 dB is hiss, not dialogue. The cap engages visibly: `dts_top.drc_capped` → sticky
+  telemetry word 26 bit 4 (`drc_capped`).
+
+**Library census** (`tools/dynrng_census.py`, 394 images spread over the library, 3 windows
+per title set, 3,204 AC-3 streams, 1.74 M blocks):
+- 21.7 % of blocks are unity.
+- By exponent: e = 0 (0 to +5.9 dB) 76.2 %, e = +1 14.3 %, e = −1 7.0 %, e = −2 0.5 %,
+  e = +2/+3 2.0 %.
+- Largest boost +23.95 dB (0x7F, on 18.7 k blocks); largest cut −12.6 dB.
+- Night's cap engages on 107 streams of 51 images (2 % of blocks).
+- The largest coefficient × gain is 0.375 of full scale under Normal and under uncapped Night
+  alike. The big boosts sit on near-silent blocks, so no stream would have clipped a
+  coefficient even uncapped.
+
+**What this means for Night.** Most authored DRC is a mild boost of quiet passages (e = 0),
+with cuts on only ~8 % of blocks. So Night mostly lifts quiet material by up to ~12 dB more
+than Normal and cuts loud moments by up to ~25 dB. That is the late-night behaviour asked
+for.
+
+**Gates.**
+- `bench/dvd/run_drc_mode.sh --red`:
+  - `imdct_isa [drc]`: every dynrng × mode against the gain formula.
+  - `run_imdct_eng.sh --red`: the live-DRC stream re-run in Full and Night, random blocks in
+    every mode, a coverage assert, and M12–M17. The bench inverts `drc_mode` after the start,
+    so the latch is scored.
+  - `check_drc_wiring.py`, with 11 wire arms.
+- `bench/dvd/run_dts.sh` V20: the DYNF count on `written_misc`, whose golden
+  (`dts_golden.py`) is checked against `dts_ref`'s own header parse.
+- `run_ac3_ab.sh`, `run_ac3.sh` (Normal unchanged).
+
+**Known limitations.**
+- No independent PCM golden for Full/Night. liba52/ffmpeg's float DRC would be one (a52dec has
+  `-r` for "no DRC"); today the claim rests on the gain formula plus bit-exact term arithmetic.
+- `bench/ac3/` (the legacy `imdct_512`) has no mode. It is a reference model only.
+- The flags are sticky until the audio reset, which happens on a load or flush.
+
+**Next:** fit (ALM delta), then on the rig: an AC-3 disc with live DRC captured in all three
+modes against `main` (Normal = `main` bit for bit; Full higher crest factor; Night lower),
+then the maintainer's ear.
+
+---
+
 ## CD-i Digital Video disc 4-5 s out of sync: a linear stream's PTS restart (issue #188, 2026-11-12, MERGED PR #195)
 
 **State:** ✅ HW-confirmed on the rig (`DVD_vcdrestart_20261112_0549`: both HFRO discs in
