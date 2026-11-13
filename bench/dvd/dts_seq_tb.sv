@@ -56,8 +56,8 @@ module dts_seq_tb;
     logic [7:0]  bytes [];
     logic [15:0] flen [];
     logic [49:0] exp [];                 // {kind 2, pc 11, addr 13, val 24}
-    int n_bytes, n_frames, n_ev, n_vops, n_pairs, n_err, n_ovr, n_len, n_dmix, n_items;
-    int bi, fi, ei, frames, errs, gap, fgap, busy, idle, last_ei, quiet, ovr, len, nlen, ncnt;
+    int n_bytes, n_frames, n_ev, n_vops, n_pairs, n_err, n_ovr, n_len, n_dmix, n_fs, n_dynf, n_items;
+    int bi, fi, ei, frames, errs, gap, fgap, busy, idle, last_ei, quiet, ovr, len, nlen, ncnt, ndynf;
 
     initial begin
         int fd, r;
@@ -69,8 +69,9 @@ module dts_seq_tb;
         codec = r[1:0];
         fd = $fopen({stem, ".meta"}, "r");
         if (fd == 0) $fatal(1, "FAIL [setup] no %s.meta", stem);
-        r = $fscanf(fd, "%d %d %d %d %d %d %d %d %d", n_bytes, n_frames, n_ev, n_vops, n_pairs,
-                    n_err, n_ovr, n_len, n_dmix);
+        n_dynf = 0;
+        r = $fscanf(fd, "%d %d %d %d %d %d %d %d %d %d %d", n_bytes, n_frames, n_ev, n_vops, n_pairs,
+                    n_err, n_ovr, n_len, n_dmix, n_fs, n_dynf);
         $fclose(fd);
         bytes = new[n_bytes];
         flen = new[n_frames];
@@ -181,7 +182,7 @@ module dts_seq_tb;
     logic [49:0] e;
     always @(posedge clk) begin
         if (!rst_n) begin
-            ei <= 0; frames <= 0; errs <= 0; ovr <= 0; nlen <= 0; ncnt <= 0;
+            ei <= 0; frames <= 0; errs <= 0; ovr <= 0; nlen <= 0; ncnt <= 0; ndynf <= 0;
         end else begin
             if (tr_valid) begin
                 if (ei >= n_ev)
@@ -197,7 +198,9 @@ module dts_seq_tb;
             if (err_valid) errs <= errs + 1;
             if (overrun_bit) ovr <= ovr + 1;
             if (lenient) nlen <= nlen + 1;
-            if (vop_start && vop_op == 6'd8) ncnt <= ncnt + 1;
+            // CNT's counter id is a0: 0 the ignored downmixes (MP2: its frames), 1 DYNF (#189)
+            if (vop_start && vop_op == 6'd8 && vop_args[15:0] == 16'd0) ncnt <= ncnt + 1;
+            if (vop_start && vop_op == 6'd8 && vop_args[15:0] == 16'd1) ndynf <= ndynf + 1;
         end
     end
 
@@ -222,6 +225,8 @@ module dts_seq_tb;
                     $fatal(1, "FAIL [count] %0d lenient block codes, the golden %0d", nlen, n_len);
                 if (ncnt != n_dmix)
                     $fatal(1, "FAIL [count] %0d CNT ops (dmix ignored), the golden %0d", ncnt, n_dmix);
+                if (ndynf != n_dynf)
+                    $fatal(1, "FAIL [count] %0d CNT ops (DYNF), the golden %0d", ndynf, n_dynf);
                 if (bi != n_bytes)
                     $fatal(1, "FAIL [count] %0d of %0d bytes taken", bi, n_bytes);
                 // every code / item emitted is taken: none dropped (a refusal keeps the
