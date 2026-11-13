@@ -238,7 +238,7 @@ against nine targeted RTL faults) under `bench/dvd/run_dpad_seek.sh`.
 ## 3b. CD-i Digital Video discs and stream junctions (issue #188, 2026-11-12)
 
 **Status: ✅ HW-confirmed on the rig (build `DVD_vcdrestart_20261112_0549`, SCR trigger),
-branch `feature/vcd-pts-restart`, not merged; ⏳ the reporter's Italian disc.** HFRO disc 1
+✅ MERGED PR #195; ⏳ the reporter's Italian disc.** HFRO disc 1
 and disc 2: the intro plays in full (all 383 MP2 frames), one junction at ~19.3 s, the movie
 in sync (`av_drift` -12..+90 ms, `disp_lag` ~-20 ms, control: -3.8 s / -2.5 s); seeks both
 ways keep sync. Unchanged against the control: dinosaur (PAL VCD), QG0012 (NTSC VCD), an

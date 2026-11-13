@@ -20,11 +20,11 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ---
 
-## CD-i Digital Video disc 4-5 s out of sync: a linear stream's PTS restart (issue #188, 2026-11-12, branch `feature/vcd-pts-restart`)
+## CD-i Digital Video disc 4-5 s out of sync: a linear stream's PTS restart (issue #188, 2026-11-12, MERGED PR #195)
 
 **State:** ✅ HW-confirmed on the rig (`DVD_vcdrestart_20261112_0549`: both HFRO discs in
 sync through the junction and after seeks; VCD, SVCD and DVD unchanged against `main`; the
-movie-only start 38.27 MP2 frames/s against the control's 41.70), branch not merged;
+movie-only start 38.27 MP2 frames/s against the control's 41.70), MERGED PR #195;
 ⏳ the reporter's Italian disc. Sim: `run_lin_junction.sh --red`, `flush_ctl_tb` [12],
 `check_lin_junction_wiring.py --red`, `main/tests` [8l]-[8n]. **Field report (issue #188):** a Philips/Paramount PAL "Video CD"
 of *Hunt for Red October* (Italian, 815 1023) plays with audio 4-5 s out of sync on HDMI,
