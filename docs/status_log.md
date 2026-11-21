@@ -20,6 +20,46 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ---
 
+## Passthru field report: Audio Off, MiSTer volume, a stale stock Main (issues #196, #197, #198, 2026-11-21)
+
+**State:** 🔧 sim/static-proven on `feature/passthru-audio`; ⏳ fit, HIL (Audio Off in Passthru
+on optical and HDMI, the ADV7513 released while Off, SPRM15 unchanged; the Main smoke).
+**Field report (Discord):** *"Audio: Off doesn't work, audio keeps playing, also after reset.
+Global and core audio options in the MiSTer menu don't have any effect on volume.
+fb_terminal=2 gives an error when launching the core. Sometimes 'Sink does not list...'"*
+
+One cause behind the first three: **the user is in Audio Out = Passthru**. The popup proves it:
+`Sink does not list AC-3/DTS` (`dvd_hdmi_audio.cpp`) fires only with `status[6]` set and
+`content_is_bitstream()`. "Sometimes" is not DTS-only: `scan_sads()` accepts AC-3 OR DTS as a
+single session-wide `sink_ok`, so the popup comes up once per transition into a DD/DTS
+track (LPCM/MP2 tracks and menus are PCM). A sink that lists AC-3 but not DTS gets
+`sink_ok = 1` and is sent DTS it cannot decode. That is a separate gap, not filed.
+
+- **#197, Audio Off.** `status[5]` fed only `aud_dec_en`, and the bitstream bypasses the decoder.
+  Fixed by folding Off into `pass_mode` (`pass_sel & aud_on`), so an Off session in Passthru
+  is the Decode+Off path, which is already silent (`dvd_audio_decode` drives `audio_l/r <= 0`
+  while `!enable`). `player_regs` keeps the raw selection (`pass_sel`), so SPRM15 does not
+  change stream choice. `af_bs_session` is gated on `pass_mode` so Main releases the chip:
+  the verdict is updated only under `split_en` and was stale once it fell. The same
+  staleness already existed for **Standard Convert engaging mid-play** (pre-existing, fixed
+  by the same term). An Off/On edge is the Decode↔Passthru mid-play switch, which is an
+  existing path. Detail: `hdmi_bitstream.md` §7.
+- **#196, volume.** Not a bug: `vol_att` is applied in `audio_out`, before the bitstream
+  mux. In Passthru it does not reach optical at all, LPCM/MP2 included, because the wrapper
+  owns that pin for the session. ⚠ The manual (`controls.md` Volume) said the opposite, that
+  MiSTer's volume "is the only one that can affect a bitstream". Corrected, plus a "Volume
+  and Audio Off" section and the three `HDMI Audio` popups, which were never listed.
+- **#198, the Main base.** `MAIN_MISTER_REF` 7317947 → `fed03e5`, the last commit before
+  upstream's core-dispatch refactor. Step 32 re-anchored. Detail and why not the tip:
+  `physical_disc.md` "The stock Main base".
+
+**Gates:** `tools/check_audio_off_wiring.py --red` (6 arms, 10 mutations each failing exactly
+its arm; fails 6 ways on `main`'s `emu.sv`), in `run_hdmi_bitstream.sh`;
+`check_player_regs_wiring.py --red` (+ "SPRM15 follows Audio Off");
+`check_std_convert_wiring.py`, `run_std_rate.sh --red`, `run_passthru_pcm.sh` green;
+`main/tests/run_tests.sh --red` green; ARM build clean against `fed03e5`.
+**Next step:** fit + HIL.
+
 ## CD-i Digital Video disc 4-5 s out of sync: a linear stream's PTS restart (issue #188, 2026-11-12, MERGED PR #195)
 
 **State:** ✅ HW-confirmed on the rig (`DVD_vcdrestart_20261112_0549`: both HFRO discs in

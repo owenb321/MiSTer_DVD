@@ -690,6 +690,23 @@ preamble table before anything else.
 - ~~**MP2 and LPCM tracks are silent in Passthru**~~. *Superseded 2026-09-10 (PR #79,
   HW-confirmed): LPCM and MP2 are decoded and sent as PCM in Passthru. See
   `docs/iec61937.md` status.*
+- **MiSTer's volume / mute / boost cannot touch a bitstream, and in Passthru it does not
+  reach optical at all** (issue #196). `vol_att` lives in the framework's `audio_out`, and
+  both bitstream paths are muxed in after it (`sys_top.v`: `spdif_out = spdif_pass_en ?
+  spdif_pass : spdif`; `HDMI_* = hdmi_bs_ok ? hdmi_bs_* : i2s_*_pcm`). `SPDIF_PASS_EN` is
+  `pass_mode & ~|bs_hold`, with no content term, so for the whole Passthru session optical is
+  `iec61937_wrap`, whose PCM mode takes `dec_audio_l/r` straight from the decoder: LPCM and MP2
+  over optical ignore the volume too. HDMI and analog follow it for PCM content (ack released
+  → framework I2S; analog via `audio_out`). Documented in the manual's passthrough page. A fix
+  would apply `vol_att` to the wrapper's PCM input, which needs the attenuation shipped to the
+  core (stock has no such path). Not planned.
+- **Audio Off is folded into `pass_mode`** (issue #197): `pass_mode = pass_sel & aud_on`, so
+  Off in Passthru is Off in Decode (zeros on every leg, Main releases the chip). `pass_sel`
+  feeds `player_regs` only, so SPRM15 does not follow the Audio toggle. `af_bs_session` is
+  `rt_bs_session & pass_mode`: aud_route updates `bs_session` only under `split_en`, so the
+  ungated bit went stale whenever `pass_mode` fell (Audio Off, or Standard Convert engaging
+  mid-play) and Main kept the ADV7513 in non-PCM mode with a PCM session on the wire.
+  Gate: `tools/check_audio_off_wiring.py --red` (in `run_hdmi_bitstream.sh`).
 - **Simultaneous decoded-PCM-on-HDMI + bitstream-on-S/PDIF is deferred.** It
   needs two consumers of the single `audio_ring` read side. Measured cost of the
   clean fix (a second ring) is **34 M10K** against 47 free — RAM 92% → 97.6% on
