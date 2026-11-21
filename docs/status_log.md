@@ -27,10 +27,12 @@ PASS, 38,239 ALM / 520 M10K / 87 DSP (control 38,259 / 520 / 87). **HIL A/B on t
 (T2, Disc Menus Off, Passthru, `dvd_hdmi_bitstream=2`, the new Main on both arms):
 `/tmp/dvd_hdmi_audio.log` on the control (`DVD_vcdrestart_20261112_0549`) shows NO state
 change at Audio Off (`bs_session=1`, chip left `std-I2S+CSreg`). On the fix, Audio Off gives
-`bs_session=0` → `adv7513: PCM I2S`, and Audio On re-engages it. ⏳ Audio content: the
-capture card had no HDMI signal that day (black frame, all legs −88 dBFS including decoded
-PCM with Audio On), so silence on the wire is not measured, only the chip handoff; optical
-is not measured at all. SPRM15 read 0x5800 On and Off, but that cannot fail on the rig
+`bs_session=0` → `adv7513: PCM I2S`, and Audio On re-engages it. ⏳ Audio content: not
+measured. The Hagibis card is fed by the RetroTINK-6X on its YPbPr input, i.e. the ANALOG
+output, and the rig was on `vga_mode=svideo`: a black frame, every leg −88 dBFS, decoded PCM
+with Audio On included. That path is the wrong instrument here in any case, because the
+analog DAC never carries a bitstream, so HDMI and optical silence need a receiver. Only the
+chip handoff is measured. SPRM15 read 0x5800 On and Off, but that cannot fail on the rig
 (`dts_ok` = 1 masks the pass bit), so the static gate is the evidence.
 **Field report (Discord):** *"Audio: Off doesn't work, audio keeps playing, also after reset.
 Global and core audio options in the MiSTer menu don't have any effect on volume.
