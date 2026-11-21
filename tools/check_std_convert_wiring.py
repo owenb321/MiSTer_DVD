@@ -147,7 +147,7 @@ def main():
     has('val_sync', "pal_val_s1 <= pal_valid_dec;", 'the verdict-valid flag crosses into clk_sys')
 
     # Audio.
-    has('pass', "wire pass_mode = status[6] & ~cdda_mode_w & ~std_conv_active & ~std_conv_wait;",
+    has('pass', "wire pass_sel = status[6] & ~cdda_mode_w & ~std_conv_active & ~std_conv_wait;",
         'a speed change cannot be passed through, nor may a session start before the verdict')
     has('pass_wait', "assign std_conv_wait = std_conv_on & ~pal_val_s2;",
         'passthrough rising in the post-mount gap delays audio by up to 210 ms')

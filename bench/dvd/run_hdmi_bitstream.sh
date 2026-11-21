@@ -34,6 +34,14 @@ run iec61937_wrap dvd/spdif_pass.sv dvd/hdmi_bs_i2s.sv sys/i2s.v dvd/iec61937_wr
 echo "=== spdif/hdmi bs_hold wiring"
 python3 tools/check_spdif_bs_hold_wiring.py || fail=1
 
+# Audio Off reaches every bitstream leg (issue #197); its own RED arms run under --red.
+echo "=== audio off wiring"
+if [ "${1:-}" = "--red" ]; then
+    python3 tools/check_audio_off_wiring.py --red || fail=1
+else
+    python3 tools/check_audio_off_wiring.py || fail=1
+fi
+
 
 # ---------------------------------------------------------------------------
 # RED arm. The bench INSTANTIATES iec61937_wrap, so it cannot mutate the module

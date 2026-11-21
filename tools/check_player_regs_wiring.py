@@ -24,7 +24,8 @@ What is checked:
   * player_regs .aa_sel is aa_osd_sel;
   * player_regs .aa_live is a plain net that appears in BOTH the
     analog_letterbox and analog_crop assigns (the Letterbox/Crop gate);
-  * .pass_mode is pass_mode and .dts_ok is cb_tables_ok;
+  * .pass_mode is pass_sel (the Passthru selection, not Audio On/Off: issue #197)
+    and .dts_ok is cb_tables_ok;
   * player_regs .sprm14/.sprm15/.sprm20 and dvd_vm .cfg_sprm14/15/20 are the
     same three nets, each wire [15:0];
   * .rmask_all_prohibited is a net carried by dvd_telem's .sched_flags.
@@ -154,8 +155,9 @@ def check(raw):
                            "would describe a different display from the raster" % (live, a))
 
     # SPRM15 inputs
-    if port_net(pr, 'pass_mode') != 'pass_mode':
-        bad.append("player_regs .pass_mode is '%s' -- must be pass_mode" % port_net(pr, 'pass_mode'))
+    if port_net(pr, 'pass_mode') != 'pass_sel':
+        bad.append("player_regs .pass_mode is '%s' -- must be pass_sel (SPRM15 must not "
+                   "follow Audio On/Off, issue #197)" % port_net(pr, 'pass_mode'))
     if port_net(pr, 'dts_ok') != 'cb_tables_ok':
         bad.append("player_regs .dts_ok is '%s' -- must be cb_tables_ok (DTS decodes only "
                    "when its codebooks loaded)" % port_net(pr, 'dts_ok'))
@@ -185,7 +187,8 @@ MUTATIONS = [
     ('aa_sel from status', r'\.aa_sel\s*\(\s*aa_osd_sel\s*\)', '.aa_sel (status[4:3])'),
     ('aa_live on another gate', r'\.aa_live\s*\(\s*aa_live\s*\)', '.aa_live (fields_eff)'),
     ('dts_ok tied high', r'\.dts_ok\s*\(\s*cb_tables_ok\s*\)', ".dts_ok (1'b1)"),
-    ('pass_mode dropped', r'\.pass_mode\s*\(\s*pass_mode\s*\)\s*,', ".pass_mode (1'b0),"),
+    ('pass_mode dropped', r'\.pass_mode\s*\(\s*pass_sel\s*\)\s*,', ".pass_mode (1'b0),"),
+    ('SPRM15 follows Audio Off', r'\.pass_mode\s*\(\s*pass_sel\s*\)\s*,', ".pass_mode (pass_mode),"),
     ('reader mask open', r'\.vmg_rmask\s*\(\s*vmg_rmask_w\s*\)', '.vmg_rmask ()'),
     ('VM SPRM20 constant', r'\.cfg_sprm20\s*\(\s*pr_sprm20\s*\)', ".cfg_sprm20 (16'h0001)"),
     ('VM SPRM14/15 swapped', r'\.cfg_sprm14\s*\(\s*pr_sprm14\s*\)', '.cfg_sprm14 (pr_sprm15)'),
