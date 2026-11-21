@@ -67,8 +67,10 @@ also what parses `MiSTer.ini` then. A stock ini option newer than `MAIN_MISTER_R
 nothing inside the DVD core: field report, `fb_terminal=2` "gives an error when launching
 the core" (the base was `7317947`, 2026-07-13; the option is Main_MiSTer PR #1337,
 2026-10-05). On that base the value parses as a plain truthy 1, so the VGA nag that PR
-suppresses for `fb_terminal=2` + `vga_scaler=0` + `direct_video=0` is shown. That is the
-likely "error", but the reporter's exact text and ini were not given.
+suppresses for `fb_terminal=2` + `vga_scaler=0` + `direct_video=0` can be shown. More
+directly, the old `cfg.cpp` declares `FB_TERMINAL` UINT8 0..1, so it clamps the 2 and raises
+`cfg_error("FB_TERMINAL: '2' out of range")`, which is reported as an INI-error popup on
+load. That is the likely "error". The reporter's exact text and ini were not given.
 
 **Pin now `fed03e5` (2026-11-14).** It picks up `fb_terminal=2`, `osd_rotate=3`,
 `dpad_threshold`, `screenshot_info` and `sanity_check`, and 188 commits of general fixes,
@@ -88,8 +90,12 @@ ini-facing change past the pin.
 
 **Verified:** `apply_integration.py` clean on `fed03e5`, `check_ir_remap.py --require-stock`
 OK on that tree, the ARM build clean in the pinned image, `main/tests/run_tests.sh --red`
-green. ⏳ HIL smoke on the rig (physical disc + CSS, HDMI bitstream, MGL launch, IR remote,
-save states, `fb_terminal=2` with `vga_scaler=0`).
+green. **HIL on the rig (2026-11-21):** MGL launch, playback, telemetry, `vmsnap`, the
+HDMI bitstream engage/release, and `sstate_stress.py` (T2, 12 ops, seed 198: 2 loads, 0
+fail, 0 warn). ⏳ Physical disc + CSS and the IR remote not run. `fb_terminal=2` is not
+observable by the harness (the OSD popup and Main's console are invisible to it). On the
+old base it is `cfg_error("FB_TERMINAL: '2' out of range")`, UINT8 0..1, clamped to 1:
+very likely the reporter's error.
 
 ## Region / CSS edge cases handled (from the fork's dvd_css)
 

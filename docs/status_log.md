@@ -22,8 +22,16 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Passthru field report: Audio Off, MiSTer volume, a stale stock Main (issues #196, #197, #198, 2026-11-21)
 
-**State:** 🔧 sim/static-proven on `feature/passthru-audio`; ⏳ fit, HIL (Audio Off in Passthru
-on optical and HDMI, the ADV7513 released while Off, SPRM15 unchanged; the Main smoke).
+**State:** 🔧 on `feature/passthru-audio`. Fit `DVD_passthruaudio_20261121_1532` SEED 7, timing
+PASS, 38,239 ALM / 520 M10K / 87 DSP (control 38,259 / 520 / 87). **HIL A/B on the rig**
+(T2, Disc Menus Off, Passthru, `dvd_hdmi_bitstream=2`, the new Main on both arms):
+`/tmp/dvd_hdmi_audio.log` on the control (`DVD_vcdrestart_20261112_0549`) shows NO state
+change at Audio Off (`bs_session=1`, chip left `std-I2S+CSreg`). On the fix, Audio Off gives
+`bs_session=0` → `adv7513: PCM I2S`, and Audio On re-engages it. ⏳ Audio content: the
+capture card had no HDMI signal that day (black frame, all legs −88 dBFS including decoded
+PCM with Audio On), so silence on the wire is not measured, only the chip handoff; optical
+is not measured at all. SPRM15 read 0x5800 On and Off, but that cannot fail on the rig
+(`dts_ok` = 1 masks the pass bit), so the static gate is the evidence.
 **Field report (Discord):** *"Audio: Off doesn't work, audio keeps playing, also after reset.
 Global and core audio options in the MiSTer menu don't have any effect on volume.
 fb_terminal=2 gives an error when launching the core. Sometimes 'Sink does not list...'"*
@@ -51,14 +59,19 @@ track (LPCM/MP2 tracks and menus are PCM). A sink that lists AC-3 but not DTS ge
   and Audio Off" section and the three `HDMI Audio` popups, which were never listed.
 - **#198, the Main base.** `MAIN_MISTER_REF` 7317947 → `fed03e5`, the last commit before
   upstream's core-dispatch refactor. Step 32 re-anchored. Detail and why not the tip:
-  `physical_disc.md` "The stock Main base".
+  `physical_disc.md` "The stock Main base". The reporter's "error" is very likely the old
+  base's `cfg_error("FB_TERMINAL: '2' out of range")` (UINT8 0..1 there; the value is clamped
+  to 1 and an "INI Error" popup comes up when the core loads). On `fed03e5` the range is
+  0..2. Not observable by the harness, since the popup is the OSD and stdout goes to
+  `/dev/console`.
 
 **Gates:** `tools/check_audio_off_wiring.py --red` (6 arms, 10 mutations each failing exactly
 its arm; fails 6 ways on `main`'s `emu.sv`), in `run_hdmi_bitstream.sh`;
 `check_player_regs_wiring.py --red` (+ "SPRM15 follows Audio Off");
 `check_std_convert_wiring.py`, `run_std_rate.sh --red`, `run_passthru_pcm.sh` green;
 `main/tests/run_tests.sh --red` green; ARM build clean against `fed03e5`.
-**Next step:** fit + HIL.
+**Next step:** an audible check with a receiver (optical + HDMI) and a capture card that
+has a signal; a reporter confirmation.
 
 ## CD-i Digital Video disc 4-5 s out of sync: a linear stream's PTS restart (issue #188, 2026-11-12, MERGED PR #195)
 
