@@ -169,6 +169,20 @@ it does not clip. The setting is remembered per core.
 Boost applies to decoded audio only. In `Audio Out = Passthru` the core sends an untouched
 bitstream and your receiver's volume owns the level.
 
+### MiSTer's volume or mute does nothing
+
+**`Audio Out` is on `Passthru`.** A Dolby Digital or DTS bitstream is decoded by the
+receiver, so MiSTer's volume, mute and boost cannot change it: use the receiver's volume.
+Over optical, Passthru ignores MiSTer's volume for every track, LPCM and MP2 included. See
+[Volume and Audio Off](../audio/passthrough.md#volume-and-audio-off). If you have no
+receiver, switch to **Decode PCM**, where every output follows MiSTer's volume.
+
+### Audio keeps playing with `Audio` set to Off
+
+Update the core. In v0.10.0 and earlier, `Audio` = Off only stopped the core's own decoder, so in
+`Audio Out` = Passthru a Dolby Digital or DTS bitstream kept playing through the receiver.
+Off now silences passthrough too.
+
 ### Silent on every track
 
 - **`Audio Out` is on `Passthru`** and your display cannot decode bitstreams. Dolby
@@ -299,7 +313,9 @@ failure and is a runtime toggle for that reason.
 emit a bitstream over HDMI — see [What you need](../getting-started/what-you-need.md).
 
 If the custom Main *is* installed and HDMI is still silent, the core is probably not
-engaging because your receiver's EDID does not advertise AC-3/DTS. Receivers reached over
+engaging because your receiver's EDID does not advertise AC-3/DTS. In that case the
+`HDMI Audio` popup reads `Sink does not list AC-3/DTS` when a Dolby Digital or DTS track
+starts. Receivers reached over
 **ARC** frequently misreport this. Force it in `MiSTer.ini`:
 
 ```ini

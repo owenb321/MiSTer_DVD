@@ -482,9 +482,12 @@ returns to the idle screen once the disc is out.
 
 **B20 / B21 (Vol Up / Vol Down)** change **MiSTer's own** volume, the same one the OSD's
 volume row sets. That is deliberate: it is a single control that covers HDMI, the analog
-output *and* S/PDIF together, and it is the only one that can affect a bitstream being
-passed through to a receiver. A press burst is applied in full, so tapping four times
+output *and* S/PDIF together. A press burst is applied in full, so tapping four times
 moves four steps.
+
+It cannot change a Dolby Digital or DTS bitstream in `Audio Out` = Passthru, because the
+receiver decodes that, so use the receiver's volume. Optical in Passthru does not follow it
+either, for any track — see [Volume and Audio Off](../audio/passthrough.md#volume-and-audio-off).
 
 On a keyboard these are ++equal++ and ++minus++, or ++num-plus++ and ++num-minus++ on the
 keypad if you have one — either pair does the same thing, and no ++shift++ is needed for
