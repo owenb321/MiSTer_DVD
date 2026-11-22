@@ -24,7 +24,8 @@ What is checked:
   * player_regs .aa_sel is aa_osd_sel;
   * player_regs .aa_live is a plain net that appears in BOTH the
     analog_letterbox and analog_crop assigns (the Letterbox/Crop gate);
-  * .pass_mode is pass_sel (the Passthru selection, not Audio On/Off: issue #197)
+  * .pass_mode is pass_dts = pass_sel & ~hdmi_no_dts (the Passthru selection, not
+    Audio On/Off: issue #197; not when the HDMI sink lists AC-3 only: issue #201)
     and .dts_ok is cb_tables_ok;
   * player_regs .sprm14/.sprm15/.sprm20 and dvd_vm .cfg_sprm14/15/20 are the
     same three nets, each wire [15:0];
@@ -102,6 +103,11 @@ def assign_rhs(src, name):
     return None if not m else m.group(1)
 
 
+def wire_rhs(src, name):
+    m = re.search(r'\bwire\s+' + re.escape(name) + r'\s*=\s*(.*?);', src, re.S)
+    return None if not m else m.group(1)
+
+
 def tokens(expr):
     return set(re.findall(r'[A-Za-z_]\w*', expr or ''))
 
@@ -155,9 +161,15 @@ def check(raw):
                            "would describe a different display from the raster" % (live, a))
 
     # SPRM15 inputs
-    if port_net(pr, 'pass_mode') != 'pass_sel':
-        bad.append("player_regs .pass_mode is '%s' -- must be pass_sel (SPRM15 must not "
-                   "follow Audio On/Off, issue #197)" % port_net(pr, 'pass_mode'))
+    # pass_dts = pass_sel & ~hdmi_no_dts: the Passthru SELECTION (not Audio On/Off,
+    # issue #197), less the AC-3-only-sink case where aud_route decodes DTS (#201).
+    if port_net(pr, 'pass_mode') != 'pass_dts':
+        bad.append("player_regs .pass_mode is '%s' -- must be pass_dts (SPRM15 must not "
+                   "follow Audio On/Off, issue #197, nor claim DTS passthrough to an "
+                   "AC-3-only sink, issue #201)" % port_net(pr, 'pass_mode'))
+    pd = wire_rhs(src, 'pass_dts')
+    if pd is None or tokens(pd) != {'pass_sel', 'hdmi_no_dts'} or '~' not in pd:
+        bad.append("pass_dts is '%s' -- must be pass_sel & ~hdmi_no_dts" % pd)
     if port_net(pr, 'dts_ok') != 'cb_tables_ok':
         bad.append("player_regs .dts_ok is '%s' -- must be cb_tables_ok (DTS decodes only "
                    "when its codebooks loaded)" % port_net(pr, 'dts_ok'))
@@ -187,8 +199,10 @@ MUTATIONS = [
     ('aa_sel from status', r'\.aa_sel\s*\(\s*aa_osd_sel\s*\)', '.aa_sel (status[4:3])'),
     ('aa_live on another gate', r'\.aa_live\s*\(\s*aa_live\s*\)', '.aa_live (fields_eff)'),
     ('dts_ok tied high', r'\.dts_ok\s*\(\s*cb_tables_ok\s*\)', ".dts_ok (1'b1)"),
-    ('pass_mode dropped', r'\.pass_mode\s*\(\s*pass_sel\s*\)\s*,', ".pass_mode (1'b0),"),
-    ('SPRM15 follows Audio Off', r'\.pass_mode\s*\(\s*pass_sel\s*\)\s*,', ".pass_mode (pass_mode),"),
+    ('pass_mode dropped', r'\.pass_mode\s*\(\s*pass_dts\s*\)\s*,', ".pass_mode (1'b0),"),
+    ('SPRM15 follows Audio Off', r'\.pass_mode\s*\(\s*pass_dts\s*\)\s*,', ".pass_mode (pass_mode),"),
+    ('SPRM15 ignores an AC-3-only sink', r'\.pass_mode\s*\(\s*pass_dts\s*\)\s*,', ".pass_mode (pass_sel),"),
+    ('pass_dts not gated', r'(wire\s+pass_dts\s*=\s*)pass_sel\s*&\s*~hdmi_no_dts', r'\g<1>pass_sel'),
     ('reader mask open', r'\.vmg_rmask\s*\(\s*vmg_rmask_w\s*\)', '.vmg_rmask ()'),
     ('VM SPRM20 constant', r'\.cfg_sprm20\s*\(\s*pr_sprm20\s*\)', ".cfg_sprm20 (16'h0001)"),
     ('VM SPRM14/15 swapped', r'\.cfg_sprm14\s*\(\s*pr_sprm14\s*\)', '.cfg_sprm14 (pr_sprm15)'),

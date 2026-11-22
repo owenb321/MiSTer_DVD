@@ -42,6 +42,22 @@ else
     python3 tools/check_audio_off_wiring.py || fail=1
 fi
 
+# HDMI passthrough on I2S-DAC / MCP23009 boards (SuperStation One): sys_top split.
+echo "=== hdmi bs dac wiring"
+if [ "${1:-}" = "--red" ]; then
+    python3 tools/check_hdmi_bs_dac_wiring.py --red || fail=1
+else
+    python3 tools/check_hdmi_bs_dac_wiring.py || fail=1
+fi
+
+# DTS on an AC-3-only HDMI sink (issue #201): cfg[15] -> aud_route .dts_dec.
+echo "=== dts sink wiring"
+if [ "${1:-}" = "--red" ]; then
+    python3 tools/check_dts_sink_wiring.py --red || fail=1
+else
+    python3 tools/check_dts_sink_wiring.py || fail=1
+fi
+
 # The HIL capture checker's own verdicts (docs/hdmi_bitstream.md "Bit-exact capture"):
 # every case must give its verdict, so a broken checker cannot pass a capture.
 echo "=== iec61937_check selftest"

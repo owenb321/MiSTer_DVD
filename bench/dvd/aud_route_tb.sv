@@ -23,11 +23,13 @@ module aud_route_tb;
     logic        ring_ready = 0;
     logic        hard_rst_n = 0;
     logic        sess_clr = 0;
+    logic        dts_dec = 0;    // issue #201; tied, never left Z
     logic        dec_owns, wrap_owns, pcm_session, bs_session;
 
     aud_route dut (
         .clk(clk), .rst_n(rst_n),
         .hard_rst_n(hard_rst_n), .sess_clr(sess_clr), .split_en(split_en),
+        .dts_dec(dts_dec),
         .frame_valid(frame_valid), .frame_type(frame_type), .frame_len(frame_len),
         .ring_ready(ring_ready),
         .dec_owns(dec_owns), .wrap_owns(wrap_owns), .pcm_session(pcm_session),
@@ -214,14 +216,40 @@ module aud_route_tb;
             $display("  FAIL: bs_session set in Decode mode"); errors = errors + 1; end
         $display("TEST 6: bs_session: boot 0, AC-3 1, survives a seek, LPCM 0, eject 0, Decode 0");
 
+        // ---- TEST 7: an AC-3-only HDMI sink (issue #201) --------------------
+        // dts_dec: DTS goes to the decoder and is a PCM session, so Main releases
+        // the ADV7513; AC-3 still bitstreams. Same provenance checker as TEST 1.
+        split_en = 1; dts_dec = 1;
+        dec_frames = 0; wrap_frames = 0; dec_bytes = 0; wrap_bytes = 0;
+        add(1, 40); add(1, 24);
+        drain_all(200000);
+        if (dec_frames != 2 || wrap_frames != 0 || dec_bytes != 64) begin
+            $display("  FAIL: dts_dec: DTS frames not decoded (dec %0d/%0d B, wrap %0d)",
+                     dec_frames, dec_bytes, wrap_frames);
+            errors = errors + 1; end
+        if (pcm_session !== 1'b1 || bs_session !== 1'b0) begin
+            $display("  FAIL: dts_dec: a decoded DTS track still claims the HDMI link (pcm %b bs %b)",
+                     pcm_session, bs_session);
+            errors = errors + 1; end
+        add(0, 32); drain_all(200000);
+        if (wrap_frames != 1 || bs_session !== 1'b1) begin
+            $display("  FAIL: dts_dec: AC-3 stopped bitstreaming"); errors = errors + 1; end
+        // ...and with the flag clear DTS bitstreams again (the discriminating arm:
+        // without it, a DTS-always-decoded mutant passes the two checks above).
+        dts_dec = 0;
+        add(1, 16); drain_all(200000);
+        if (wrap_frames != 2 || bs_session !== 1'b1) begin
+            $display("  FAIL: dts_dec clear: DTS not bitstreamed"); errors = errors + 1; end
+        $display("TEST 7: AC-3-only sink: DTS decoded as PCM, AC-3 bitstreamed; clear = bitstream");
+
         if (errors == 0) $display("\naud_route: ALL TESTS PASSED");
-        else             $display("\naud_route: %0d FAILURES", errors);
+        else             $fatal(1, "\naud_route: %0d FAILURES", errors);
         $finish;
     end
 
     initial begin
         #500_000_000;
-        $display("aud_route: TIMEOUT"); $finish;
+        $fatal(1, "aud_route: TIMEOUT");
     end
 
 endmodule

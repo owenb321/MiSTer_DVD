@@ -202,6 +202,26 @@ if [ "$RED" -eq 1 ]; then
         "acked (old core still engages)" \
         "s/core_fmt_v2      = (fmt >> 15) \& 1;/core_fmt_v2      = 1;/" assumes-fmt-version
 
+    # Issue #201: the pre-fix rule -- one sink_ok for both codecs, never cfg[15].
+    red_case dvd_hdmi_audio.cpp dvd_hdmi_audio_test.cpp \
+        "no_dts: AC-3 only, auto" \
+        "s/want = (f \& SINK_AC3) \&\& !(f \& SINK_DTS);/want = 0;/" nodts-never-set
+
+    # cfg[15] on AC-3 alone: a sink that lists DTS too would lose its DTS bitstream.
+    red_case dvd_hdmi_audio.cpp dvd_hdmi_audio_test.cpp \
+        "no_dts: AC-3 + DTS, auto" \
+        "s/want = (f \& SINK_AC3) \&\& !(f \& SINK_DTS);/want = (f \& SINK_AC3);/" nodts-ignores-dts-sad
+
+    # Force mode must keep forcing both codecs (dvd_hdmi_bitstream=2).
+    red_case dvd_hdmi_audio.cpp dvd_hdmi_audio_test.cpp \
+        "no_dts: AC-3 only, force" \
+        "s/if (declared \&\& is_dvd() \&\& mode == 0)/if (declared \&\& is_dvd())/" nodts-in-force-mode
+
+    # Set but never pushed: the core keeps the old cfg word.
+    red_case dvd_hdmi_audio.cpp dvd_hdmi_audio_test.cpp \
+        "...and pushed to the core" \
+        "s/\tuser_io_send_buttons(1);        \/\/ pushes cfg\[\], incl. bit 15, to the core//" nodts-not-pushed
+
     # ---- dvd_css: a plain .iso behind the read-ahead ---------------------------
     # The behaviour before this feature: no libdvdcss means the direct path, no ring.
     red_case dvd_css.cpp dvd_css_test.cpp \

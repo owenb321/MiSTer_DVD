@@ -104,6 +104,20 @@ if [ "$RED" -eq 1 ]; then
     #    whose audio leaves as PCM.
     red_case bs-session-in-decode-mode "bs_session set in Decode mode" \
         "s/else if (take \&\& split_en) bs_session <= is_bitstream;/else if (take) bs_session <= is_bitstream;/"
+
+    # 9. dts_dec ignored: DTS still bitstreams to a sink that lists only AC-3
+    #    (issue #201, the shipped behaviour).
+    red_case dts-dec-ignored "DTS frames not decoded" \
+        "s/((frame_type == 2'd1) \&\& !dts_dec)/(frame_type == 2'd1)/"
+
+    # 10. dts_dec over-reaches: AC-3 is decoded too, so a 5.1 AC-3 track drops
+    #     to stereo on a sink that can take it.
+    red_case dts-dec-takes-ac3 "AC-3 stopped bitstreaming" \
+        "s/(frame_type == 2'd0) || ((frame_type == 2'd1) \&\& !dts_dec)/(!dts_dec \&\& (frame_type == 2'd0)) || ((frame_type == 2'd1) \&\& !dts_dec)/"
+
+    # 11. DTS is decoded whatever the sink says.
+    red_case dts-always-decoded "dts_dec clear: DTS not bitstreamed" \
+        "s/((frame_type == 2'd1) \&\& !dts_dec)/1'b0/"
 fi
 
 if [ "$fail" -ne 0 ]; then echo; echo "SUITE FAILED"; exit 1; fi

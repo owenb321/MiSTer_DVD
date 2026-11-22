@@ -125,7 +125,9 @@ The core decodes the DTS **core** stream, which is what DVD-Video carries: 48 kH
 768 or 1536 kbit/s. Extensions layered on top of it — DTS-ES 6.1 and 96/24 among them —
 are ignored, and the core underneath plays normally. Those extensions exist for a
 receiver to use, so for full 5.1 or 6.1, switch `Audio Out` to
-[`Passthru`](passthrough.md) and send the bitstream to an AV receiver.
+[`Passthru`](passthrough.md) and send the bitstream to an AV receiver. In Passthru, an
+HDMI display that lists Dolby Digital but not DTS gets DTS decoded to stereo here instead
+([details](passthrough.md#a-display-that-takes-dolby-digital-but-not-dts)).
 
 A DTS frame the core cannot decode is skipped rather than played as noise.
 

@@ -149,8 +149,11 @@ def check(raw):
                              "its session guards), without Audio On/Off" % ps))
 
     # [4] SPRM15 follows the selection, never Audio On/Off.
+    # Through pass_dts (= pass_sel & ~hdmi_no_dts, issue #201): still the selection.
     pr = port_net(instantiation_body(src, 'player_regs'), 'pass_mode')
-    if pr != 'pass_sel':
+    if pr == 'pass_dts':
+        pr = one(wire_rhs(src, 'pass_dts'), 'pass_dts', '4', bad)
+    if pr is None or 'pass_sel' not in tokens(pr) or tokens(pr) & {'pass_mode', 'aud_on'}:
         bad.append(('4', "player_regs .pass_mode is '%s' -- must be pass_sel: SPRM15 would "
                          "change when Audio is toggled" % pr))
 
@@ -182,7 +185,8 @@ MUTATIONS = [
      '.enable (~cb_busy)', {'2'}),
     ('M3 the pre-fix pass_mode', r'(wire\s+pass_mode\s*=\s*)pass_sel\s*&\s*aud_on', r'\g<1>pass_sel', {'3'}),
     ('M4 pass_sel picks up Audio', r'(wire\s+pass_sel\s*=\s*status\[6\])', r'\g<1> & aud_on', {'3'}),
-    ('M5 SPRM15 follows Audio Off', r'\.pass_mode\s*\(\s*pass_sel\s*\)', '.pass_mode (pass_mode)', {'4'}),
+    ('M5 SPRM15 follows Audio Off', r'\.pass_mode\s*\(\s*pass_dts\s*\)', '.pass_mode (pass_mode)', {'4'}),
+    ('M5b pass_dts follows Audio Off', r'(wire\s+pass_dts\s*=\s*)pass_sel', r'\g<1>pass_mode', {'4'}),
     ('M6 af_bs_session ungated', r'\.af_bs_session\s*\(\s*rt_bs_session\s*&\s*pass_mode\s*\)',
      '.af_bs_session (rt_bs_session)', {'5'}),
     ('M7 optical leg on the selection', r'(assign\s+SPDIF_PASS_EN\s*=\s*)pass_mode', r'\g<1>pass_sel', {'6'}),

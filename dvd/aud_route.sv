@@ -4,7 +4,8 @@
 //  In Passthru the wire must always carry something the sink can use, so the
 //  codec decides the path per frame: AC-3 and DTS are bitstreamed by
 //  iec61937_wrap, while LPCM and MP2 are decoded by dvd_audio_decode and sent
-//  as ordinary PCM. Both consumers therefore have to read the SAME ring, and
+//  as ordinary PCM. DTS joins the decoded side while dts_dec is set: the HDMI
+//  sink lists AC-3 but not DTS (issue #201). Both consumers therefore have to read the SAME ring, and
 //  `dvd/audio_ring.sv` has exactly one byte pointer, one descriptor pointer and
 //  no internal arbitration — so something has to hand frames between them.
 //
@@ -58,6 +59,16 @@ module aud_route (
     // which is the pre-existing behaviour, bit for bit.
     input  logic       split_en,
 
+    // 1 = the HDMI sink lists AC-3 but not DTS (cfg[15], set by MiSTer_DVDcss from
+    // the EDID; issue #201). A DTS frame then goes to the decoder like LPCM, so it
+    // leaves as stereo PCM instead of a burst the sink cannot decode. AC-3 keeps
+    // bitstreaming. It moves the CODEC'S class, so pcm_session and bs_session
+    // follow on their own: Main releases the ADV7513 for a DTS track, and optical
+    // carries the PCM too (one ring consumer per frame; the user's decision,
+    // docs/hdmi_bitstream.md §8). Sampled at each grant, so a hotplug that flips it
+    // mid-track takes effect at a frame boundary, never inside a payload.
+    input  logic       dts_dec,
+
     // audio_ring head (read-only; the arbiter never pops anything itself)
     input  logic       frame_valid,
     input  logic [1:0] frame_type,     // 0=AC3 1=DTS 2=LPCM 3=MP2/unknown
@@ -89,7 +100,8 @@ module aud_route (
     // decoder is right either way, since mp2_decode simply never syncs on junk.
     // ⚠ A plain wire, not a function: CLAUDE.md records five `function automatic`
     // helpers that Quartus 17 miscompiled SILENTLY (sim bit-exact, silicon mute).
-    wire is_bitstream = (frame_type == 2'd0) || (frame_type == 2'd1);
+    // DTS only while the sink can take it (dts_dec, issue #201).
+    wire is_bitstream = (frame_type == 2'd0) || ((frame_type == 2'd1) && !dts_dec);
 
     typedef enum logic [0:0] { S_IDLE, S_BUSY } state_t;
     state_t          st;

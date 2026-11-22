@@ -225,6 +225,12 @@ u = insert_after(u, 'if (vga_fb) map |= CONF_VGA_FB;',
     '\tif (dvd_hdmi_audio_ack()) map |= CONF_DVD_HDMI_BS;   // dvd:hdmibs\n',
     14, '// dvd:hdmibs')
 
+# 61. cfg[15]: the HDMI sink lists AC-3 but not DTS, so the core decodes DTS to PCM
+# (issue #201). Anchored on step 14's own line so the two stay together.
+u = insert_after(u, 'if (dvd_hdmi_audio_ack()) map |= CONF_DVD_HDMI_BS;   // dvd:hdmibs',
+    '\tif (dvd_hdmi_audio_no_dts()) map |= CONF_DVD_HDMI_NODTS;   // dvd:nodts\n',
+    61, '// dvd:nodts')
+
 # 15. capability declaration off the OX arm. The core marks Audio Out as OX6 so
 # Main learns the build HAS the HDMI tap; a core without it never declares, and
 # we never reconfigure the chip for a core that cannot drive it.
@@ -243,6 +249,11 @@ h = read(h_path)
 h = insert_after(h, '#define CONF_DIRECT_VIDEO2      0b0010000000000000',
     '#define CONF_DVD_HDMI_BS        0b0100000000000000\n',
     16, 'CONF_DVD_HDMI_BS')
+# 62. cfg[] bit 15 -- the LAST free bit (issue #201). Another Main->core flag needs
+# another channel (a status bit, or an SPI command).
+h = insert_after(h, '#define CONF_DVD_HDMI_BS        0b0100000000000000',
+    '#define CONF_DVD_HDMI_NODTS     0b1000000000000000   // dvd:nodts\n',
+    62, 'CONF_DVD_HDMI_NODTS')
 write(h_path, h)
 print("[integration] user_io.h patched (hdmi bitstream)")
 
