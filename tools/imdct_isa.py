@@ -33,6 +33,8 @@ Usage:
     tools/imdct_isa.py check [--frames N] [STREAM.ac3 ...]   bit-exact vs imdct_model,
                                                                every block; cycles
     tools/imdct_isa.py check --random N                       random and extreme blocks
+    (every check also runs [drc]: drc_coef's integer gain against the dB formula, every
+    dynrng in every Dynamic Range mode -- the one claim the two models share code for)
 """
 import argparse
 import os
@@ -467,13 +469,10 @@ def resolve_cst(sym, c, blk):
 class Block:
     """One channel's transform, run from the term ROM (ROM, DIR) only."""
 
-    def __init__(self, eng, coeff, ch, short, dynrng, cls, clev, slev):
+    def __init__(self, eng, coeff, ch, short, dynrng, cls, clev, slev, drc_mode=IM.DRC_NORMAL):
         self.e, self.coeff, self.ch, self.short = eng, coeff, ch, short
         self.cls, self.clev, self.slev = cls, clev, slev
-        mant = 32 + (dynrng & 31)
-        ex = (dynrng >> 5) & 7
-        ex = ex - 8 if ex & 4 else ex
-        self.mant, self.drc_sh = mant, 5 - ex
+        self.mant, self.drc_sh = IM.drc_coef(dynrng, drc_mode)
 
     def run_kind(self, kind, c):
         e = self.e
@@ -528,12 +527,12 @@ BLOCK_FILL = 2       # op start -> the first term issues (fetch, resolve)
 BLOCK_DRAIN = 3      # the last term issues -> its write lands -> done
 
 
-def run_block(eng, coeff, nf, blksw, dynrng, acmod, cmix, surmix):
+def run_block(eng, coeff, nf, blksw, dynrng, acmod, cmix, surmix, drc_mode=IM.DRC_NORMAL):
     cls, clev, slev = fold_classes(acmod, nf, cmix, surmix)
     eng.barrier(BLOCK_FILL)
     for ch in range(nf):
         short = bool((blksw >> ch) & 1) if ch < 5 else False
-        Block(eng, coeff[ch], ch, short, dynrng, cls[ch], clev, slev).transform()
+        Block(eng, coeff[ch], ch, short, dynrng, cls[ch], clev, slev, drc_mode).transform()
     eng.barrier(BLOCK_DRAIN)
     eng.valid |= set(range(nf))
 
@@ -608,12 +607,12 @@ def rand_block(rng, kind):
     acmod = {1: 1, 2: rng.choice([0, 2]), 3: rng.choice([3, 4]), 4: rng.choice([5, 6]), 5: 7}[nf]
     if kind == 'full':
         coeff = [[rng.choice([-(1 << 23), (1 << 23) - 1]) for _ in range(256)] for _ in range(nf)]
-        dyn = rng.choice([0x7F, 0x5F, 0x00, 0xFF])
+        dyn = rng.choice([0x7F, 0x5F, 0x3F, 0x00, 0xFF, 0x80])
     else:
         coeff = [[rng.randint(-(1 << 23), (1 << 23) - 1) for _ in range(256)] for _ in range(nf)]
         dyn = rng.randint(0, 255)
     return dict(nf=nf, acmod=acmod, coeff=coeff, blksw=rng.randint(0, 31), dynrng=dyn,
-                cmix=rng.randint(0, 3), surmix=rng.randint(0, 3))
+                cmix=rng.randint(0, 3), surmix=rng.randint(0, 3), drc_mode=rng.randint(0, 3))
 
 
 def check_random(n, seed=1):
@@ -624,8 +623,10 @@ def check_random(n, seed=1):
         eng, im = Engine(), IM.Imdct512()          # a fresh pair: acmod changes per block
         for rep in range(3):                        # three blocks: the delay line carries
             b = rand_block(rng, 'full' if k % 2 else 'rand')
-            run_block(eng, b['coeff'], b['nf'], b['blksw'], b['dynrng'], b['acmod'], b['cmix'], b['surmix'])
-            im.block(b['coeff'], b['nf'], b['blksw'], b['dynrng'], b['acmod'], b['cmix'], b['surmix'])
+            run_block(eng, b['coeff'], b['nf'], b['blksw'], b['dynrng'], b['acmod'], b['cmix'], b['surmix'],
+                      b['drc_mode'])
+            im.block(b['coeff'], b['nf'], b['blksw'], b['dynrng'], b['acmod'], b['cmix'], b['surmix'],
+                     b['drc_mode'])
             d = compare(eng, im, b['nf'], b['acmod'])
             if d:
                 bad += 1
@@ -721,6 +722,21 @@ def red(nframes):
 RED_STREAMS = {}
 
 
+def check_drc():
+    """drc_coef against the gain the modes are DEFINED as, in floats (every value is a
+    dyadic rational, so exact): Normal (32 + Y) / 32 x 2^e, Full 1, Night that squared
+    but at most 0x7F's 63/32 x 8; mode 3 as Normal. -> the number of mismatches."""
+    bad = 0
+    for d in range(256):
+        e = (d >> 5) - 8 if d & 0x80 else d >> 5
+        g = (32 + (d & 31)) / 32 * 2.0 ** e
+        want = {0: g, 1: 1.0, 2: min(g * g, 63 / 32 * 8), 3: g}
+        for mode, w in want.items():
+            m, sh = IM.drc_coef(d, mode)
+            bad += (m / 2 ** sh != w) or not (0 <= sh <= 31) or not (0 < m < 4096)
+    return bad
+
+
 def check_unit(n, seed=2):
     """IFFT + POST from an injected work buffer and delay line: any 32-bit words, with
     clusters at the rails (BHALF's pre-sums then need 33 bits). The stream and random
@@ -763,10 +779,11 @@ def _w35(v):
     return v & ((1 << 35) - 1)
 
 
-def write_vectors(out, streams=(), frames=2, nrand=0, nunit=0, seed=3):
+def write_vectors(out, streams=(), frames=2, nrand=0, nunit=0, seed=3, drc_streams=()):
     """One continuous run for bench/dvd/imdct_eng_tb.sv, from a junk ring:
       ring0.mem   2048 x 35  the ring before the first item
-      items.txt   per item: N nf blksw dynrng acmod cmix surmix cycles  (a block)
+      items.txt   per item: N nf blksw dynrng acmod cmix surmix mode cycles  (a block;
+                            mode the Dynamic Range setting, drc_mode)
                             U short cycles                              (ISKIP: IFFT +
                             POST of channel 0 on an injected buffer and delay line)
       coeff.mem   per N item, nf x 256 Q1.23 words (slot = channel)
@@ -781,10 +798,17 @@ def write_vectors(out, streams=(), frames=2, nrand=0, nunit=0, seed=3):
         for hdr, bl in IM.decode_blocks(p, frames):
             for b in bl:
                 items.append(('N', b['coeff'], IM.nfchans(hdr['acmod']), b['blksw'], b['dynrng'],
-                              hdr['acmod'], hdr['cmixlev'], hdr['surmixlev']))
+                              hdr['acmod'], hdr['cmixlev'], hdr['surmixlev'], IM.DRC_NORMAL))
+    for p in drc_streams:                           # live DRC again, in Full and Night
+        for mode in (IM.DRC_FULL, IM.DRC_NIGHT):
+            for hdr, bl in IM.decode_blocks(p, frames):
+                for b in bl:
+                    items.append(('N', b['coeff'], IM.nfchans(hdr['acmod']), b['blksw'], b['dynrng'],
+                                  hdr['acmod'], hdr['cmixlev'], hdr['surmixlev'], mode))
     for k in range(nrand):
         b = rand_block(rng, 'full' if k % 2 else 'rand')
-        items.append(('N', b['coeff'], b['nf'], b['blksw'], b['dynrng'], b['acmod'], b['cmix'], b['surmix']))
+        items.append(('N', b['coeff'], b['nf'], b['blksw'], b['dynrng'], b['acmod'], b['cmix'], b['surmix'],
+                      b['drc_mode']))
     for k in range(nunit):
         top = (1 << 31) - 1
         mode = k % 3
@@ -805,11 +829,11 @@ def write_vectors(out, streams=(), frames=2, nrand=0, nunit=0, seed=3):
     for it in items:
         c0 = block_cycles(eng)
         if it[0] == 'N':
-            _, coeff, nf, blksw, dyn, acmod, cmix, sur = it
-            run_block(eng, coeff, nf, blksw, dyn, acmod, cmix, sur)
+            _, coeff, nf, blksw, dyn, acmod, cmix, sur, mode = it
+            run_block(eng, coeff, nf, blksw, dyn, acmod, cmix, sur, mode)
             for ch in range(nf):
                 fc.writelines(f'{v & 0xFFFFFF:06x}\n' for v in coeff[ch])
-            fi.write(f'N {nf} {blksw} {dyn} {acmod} {cmix} {sur} {block_cycles(eng) - c0}\n')
+            fi.write(f'N {nf} {blksw} {dyn} {acmod} {cmix} {sur} {mode} {block_cycles(eng) - c0}\n')
         else:
             _, short, buf, dl = it
             for n, v in enumerate(buf):
@@ -904,6 +928,10 @@ def main():
         print(f'imdct_isa vec: {n} items -> {a.out} (widest sample {wide} bits)')
         return 0
     fails = 0
+    bad = check_drc()
+    print(f'[drc]  {"PASS" if not bad else "FAIL"} drc_coef: 256 dynrng x 4 modes against the gain formula, '
+          f'{bad} bad')
+    fails += bad != 0
     if a.mutate:
         MUTS[a.mutate][0]()
         globals().update(zip(('ROM', 'DIR'), build_rom()))   # a template mutation reaches the ROM

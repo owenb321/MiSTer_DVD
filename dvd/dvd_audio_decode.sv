@@ -65,6 +65,7 @@ module dvd_audio_decode #(
     input  logic        clk,             // clk_sys
     input  logic        rst_n,
     input  logic        enable,          // O5 "Audio" toggle (default On)
+    input  logic  [1:0] drc_mode,        // O[62:61] "Dynamic Range": AC-3 DRC 0 Normal, 1 Full, 2 Night
     input  logic        pause,           // gamepad transport: freeze audio (hold, silence)
     // dvd/flush_ctl.sv's aud_resync mirrored (aud_resync_o): rst_n (=aud_rst_n) is
     // asserted for this GENTLE cause (an audio-track switch -- content keeps playing,
@@ -258,7 +259,12 @@ module dvd_audio_decode #(
     output logic [15:0] dbg_eng_frames,
     output logic [15:0] dbg_eng_refused,
     output logic  [4:0] dbg_eng_last_err,
-    output logic        dbg_dts_active
+    output logic        dbg_dts_active,
+    // sticky since rst (issue #189): a DTS frame set DYNF (its range coefficient is not
+    // applied); an AC-3 block's Night gain was capped. The engine's own counts clear at
+    // each of its resets, so they are held here.
+    output logic        dbg_dts_dynf,
+    output logic        dbg_drc_capped
 );
 
     localparam logic [1:0] T_AC3 = 2'd0, T_DTS = 2'd1, T_LPCM = 2'd2, T_MP2 = 2'd3;
@@ -853,6 +859,16 @@ module dvd_audio_decode #(
         end
     end
 
+    logic [15:0] eng_n_dynf;
+    logic        eng_drc_capped;
+    always_ff @(posedge clk) begin
+        if (rst) begin dbg_dts_dynf <= 1'b0; dbg_drc_capped <= 1'b0; end
+        else begin
+            if (eng_n_dynf != 16'd0) dbg_dts_dynf <= 1'b1;
+            if (eng_drc_capped) dbg_drc_capped <= 1'b1;
+        end
+    end
+
     audio_engine ac3_engine_inst (
         .clk         (clk),
         .rst         (ac3_core_rst),
@@ -879,6 +895,9 @@ module dvd_audio_decode #(
         .mp2_fs      (mp2_fs),
         .mp2_fs_ok   (mp2_fs_ok),
         .n_ignored   (),
+        .drc_mode    (drc_mode),
+        .n_dynf      (eng_n_dynf),
+        .drc_capped  (eng_drc_capped),
         .cb_req      (cb_req),
         .cb_sel      (cb_sel),
         .cb_addr     (cb_addr),

@@ -45,6 +45,7 @@ module audio_engine (
     input  wire         clk,
     input  wire         rst,
     input  wire   [1:0] codec_req,           // 1 AC-3, 0 DTS, 2 MP2: the program to run
+    input  wire   [1:0] drc_mode,            // AC-3 DRC (OSD Dynamic Range): 0 Normal, 1 Full, 2 Night
     output logic        codec_busy,          // a change of program is pending: hold
                                              // the descriptor
 
@@ -71,6 +72,8 @@ module audio_engine (
     output logic  [1:0] mp2_fs,              // MP2: the stream's rate (0 44.1, 1 48, 2 32 kHz)
     output logic        mp2_fs_ok,           // a header has reported mp2_fs since reset
     output logic [15:0] n_ignored,           // CNT 0: DTS downmixes ignored, MP2 frames
+    output logic [15:0] n_dynf,              // CNT 1: DTS frames setting DYNF (not applied)
+    output logic        drc_capped,          // sticky: a Night block's gain was capped
                                              // longer than their header
     input  wire         dts_ready,
     output logic        cb_req,
@@ -124,12 +127,13 @@ module audio_engine (
     assign fr_ready = e_fr_ready && !codec_busy;
 
     dts_top u_eng (
-        .clk, .rst_n(e_rst_n), .codec(eng_codec), .mp2_fs, .mp2_fs_ok,
+        .clk, .rst_n(e_rst_n), .codec(eng_codec), .drc_mode, .mp2_fs, .mp2_fs_ok,
         .fr_len, .fr_valid(e_fr_valid), .fr_ready(e_fr_ready), .in_byte, .in_valid, .in_ready,
         .cb_req, .cb_sel, .cb_addr, .cb_valid, .cb_data,
         .pcm_l(dts_l), .pcm_r(dts_r), .pcm_valid(dts_valid), .pcm_ready(dts_ready),
         .frames(e_frames), .refused(e_refused), .last_err(e_last_err), .err_seen(err_seen),
         .overrun_bits(e_ovr), .lenient_codes(), .dmix_ignored(n_ignored),
+        .dynf_frames(n_dynf), .drc_capped,
         .frame_end(e_fend), .refuse(e_ref), .refuse_code(e_rcode),
         .imdct_req, .imdct_go(im_go), .imdct_fin(im_fin),
         .pcm_ra({pcm_rd_addr[8], pcm_rd_addr[7:0]}), .pcm_q(pcm_rd_data),

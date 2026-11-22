@@ -81,7 +81,7 @@ module mp2_ab_tb;
         if (in_valid && in_ready) bi <= bi + 1;
     end
     dts_top u_new (
-        .clk, .rst_n, .codec(2'd2), .fr_len, .fr_valid, .fr_ready, .in_byte, .in_valid,
+        .clk, .rst_n, .codec(2'd2), .drc_mode(2'd0), .fr_len, .fr_valid, .fr_ready, .in_byte, .in_valid,
         .in_ready, .cb_req(), .cb_sel(), .cb_addr(), .cb_valid(1'b0), .cb_data(64'd0),
         .pcm_l(e_l), .pcm_r(e_r), .pcm_valid(e_valid), .pcm_ready(1'b1),
         .frames(e_frames), .refused(e_refused), .last_err(), .err_seen(), .overrun_bits(),

@@ -7,9 +7,10 @@
 #            bit-identical to imdct_512's model: tools/imdct_isa.py check)
 #   [cycles] every item's go -> imdct_fin equals the emulator's cycles, which
 #            tools/test_ac3_isa.py's budget charges (worst AC-3 frame 58.8 %)
-#   items: one frame of 5.1, 3/0, 2/1, 3/1, 2/2, dual mono, mono and a DRC stream; random
-#   and full-scale blocks (every acmod, short and long); injected-buffer ISKIP items, the
-#   only way to reach 33-bit pre-sums.
+#   items: one frame of 5.1, 3/0, 2/1, 3/1, 2/2, dual mono, mono and a DRC stream (that
+#   one again under Dynamic Range Full and Night, issue #189); random and full-scale
+#   blocks (every acmod, short and long, every drc_mode; full-scale under Night's cap);
+#   injected-buffer ISKIP items, the only way to reach 33-bit pre-sums.
 #   Mutations (dvd/dts/dts_vec.sv), each must fail the arm it names:
 #     M1  a product is added, never subtracted                         -> ring
 #     M2  no stall on a ring word still being written                  -> ring
@@ -22,6 +23,13 @@
 #     M9  ISKIP starts on a stale schedule entry                       -> ring
 #     M10 a term's write goes to its sample's address                  -> ring
 #     M11 a stall on every write in flight (values right, slower)      -> cycles
+#   Dynamic Range (drc_mode; tools/imdct_isa.py [drc] proves the gains themselves):
+#     M12 Night not squared (the authored gain, as Normal)             -> ring
+#     M13 Full does not bypass (the authored gain)                     -> ring
+#     M14 Night's cap missing (the square past x15.75)                 -> ring
+#     M15 Night's shift one short (10 - 2e - 1)                        -> ring
+#     M16 drc_mode not latched at the op's start (the live input)      -> ring
+#     M17 mode 3 as Night instead of Normal                            -> ring
 #
 # Usage: bench/dvd/run_imdct_eng.sh [--red]     (exit 0 = ALL GREEN)
 set -uo pipefail
@@ -36,9 +44,22 @@ sys.path.insert(0, 'tools')
 import imdct_isa as I, imdct_model as IM
 keys = ('noise_5p1', 'acmod3_', 'acmod4_', 'acmod5_', 'acmod6_', 'dualmono', 'bbb_mono', 'bbb_short_5p1', '10_2026')
 S = [p for p in IM.gate_streams() if any(k in os.path.basename(p) for k in keys) and os.path.exists(p)]
-n, wide = I.write_vectors(sys.argv[1], S, 1, 16, 8)
-print(f'vectors: {n} items from {len(S)} streams + 16 random + 8 ISKIP, widest sample {wide} bits')
+D = [p for p in S if '10_2026' in os.path.basename(p)]
+assert D, 'the live-DRC stream (10_2026) is missing: Full and Night would go untested'
+n, wide = I.write_vectors(sys.argv[1], S, 1, 16, 8, drc_streams=D)
+print(f'vectors: {n} items from {len(S)} streams (+{len(D)} in Full and Night) + 16 random + 8 ISKIP, '
+      f'widest sample {wide} bits')
 assert wide > 32, 'no item reached a 33-bit sample: the ISKIP items are vacuous'
+# Dynamic Range coverage: every mode, and Night both capped (e >= 2) and squared
+cov = set()
+for l in open(os.path.join(sys.argv[1], 'items.txt')):
+    f = l.split()
+    if f[0] == 'N':
+        dyn, mode = int(f[3]), int(f[7])
+        e = (dyn >> 5) - 8 if dyn & 0x80 else dyn >> 5
+        cov.add(('night_cap' if e >= 2 else 'night_sq') if mode == 2 else mode)
+miss = {0, 1, 3, 'night_cap', 'night_sq'} - cov
+assert not miss, f'no item covers drc case(s) {miss}: their mutations would be vacuous'
 EOF
 
 run() {   # <dts_vec.sv> -> the bench's last line
@@ -77,11 +98,17 @@ EOF
     mut M6 ring "f_a1 <= !f_short ? 8'd255 - fo_q : fo_nx[6] ? 8'd255 - fo_q : 8'd254 - fo_q;" \
                 "f_a1 <= 8'd255 - fo_q;"
     mut M7 ring "im_cls = im_has_c ? 3'd2 : 3'd1;   // R" "im_cls = 3'd1;   // R"
-    mut M8 ring "wire  [3:0] im_drc_sh = 4'd5 - {a1[7], a1[7:5]};" "wire  [3:0] im_drc_sh = 4'd6 - {a1[7], a1[7:5]};"
+    mut M8 ring "5'd5 - {a1[7], a1[7], a1[7:5]};        // 5 - e" "5'd6 - {a1[7], a1[7], a1[7:5]};"
     mut M9 ring "if (st == V_IM) sched_ra = a0[0] ? 9'd157 : 9'd0;" "if (st == V_IM) sched_ra = 9'd1;"
     mut M10 ring "i_dst <= ra_q[1];" "i_dst <= ra_q[0];"
     mut M11 cycles "((i_v && i_dstv && i_dst == im_ra) || (x_rg_we && x_rg_wa == im_ra));" \
                    "((i_v && i_dstv && i_dst == im_ra) || x_rg_we);"
+    mut M12 ring "wire        im_night = (im_drc_md == 2'd2);" "wire        im_night = 1'b0;"
+    mut M13 ring "wire [11:0] im_mant = (im_drc_md == 2'd1) ? 12'd32 :" "wire [11:0] im_mant = 1'b0 ? 12'd32 :"
+    mut M14 ring "wire        im_ncap  = im_night && (a1[7:6] == 2'b01);" "wire        im_ncap  = 1'b0;"
+    mut M15 ring "im_night ? 5'd10 - {a1[7], a1[7:5], 1'b0} :" "im_night ? 5'd9 - {a1[7], a1[7:5], 1'b0} :"
+    mut M16 ring "OP_IMDCT: begin im_drc_md <= drc_mode; st <= V_IM; end" "OP_IMDCT: begin st <= V_IM; end"
+    mut M17 ring "wire        im_night = (im_drc_md == 2'd2);" "wire        im_night = im_drc_md[1];"
 fi
 
 [ $rc = 0 ] && echo "run_imdct_eng: ALL GREEN" || echo "run_imdct_eng: FAILURES"

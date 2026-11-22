@@ -75,6 +75,105 @@ its arm; fails 6 ways on `main`'s `emu.sv`), in `run_hdmi_bitstream.sh`;
 **Next step:** an audible check with a receiver (optical + HDMI) and a capture card that
 has a signal; a reporter confirmation.
 
+---
+
+## Dynamic Range: AC-3 DRC Normal / Full / Night; DTS DYNF counted (issue #189, 2026-11-12)
+
+**State:** ✅ MERGED PR #199. ✅ HW capture A/B (2026-11-13); ✅ by ear (2026-11-21, the maintainer, Road Warrior ch. 3: no gap or click when switching modes live; the modes are close to each other on this disc, but Night noticeably lifts the quiet sections). Fitted (`DVD_drc_20261113_0253`, SEED 7):
+**+67 ALM** (38,259 → 38,326, 91 %), M10K 520 → 520, DSP 87 → 87 vs `DVD_vcdrestart` (`main`).
+Timing PASS (clk_dec ≥ 90.8 MHz, clk_mem ≥ 99.8), and `clock_check` PASS.
+
+**HIL capture A/B (2026-11-13).** Road Warrior (16:9), chapter 3, `Decode PCM`, 41 s per arm from
+the HDMI capture card, five arms in one run: `main` Normal (control), then the new build in
+Normal, Full, Night and Normal again. Captures aligned on the control (envelope, then to the
+sample), levels in 0.5 s windows (74, all above −60 dBFS):
+
+| Arm | RMS | Peak | Per-window vs new Normal |
+|---|---|---|---|
+| `main` Normal | −31.5 dBFS | −16.0 | mean −0.01 dB, max \|0.06\| |
+| new Normal | −31.5 | −16.0 | — (sample-aligned corr 0.99977 with `main`) |
+| new Normal, again | −31.5 | −16.1 | mean −0.00, max \|0.05\| (corr 0.99914 with `main`) |
+| new Full | −29.3 | −13.4 | +1.79 dB (sd 0.77) |
+| new Night | −33.6 | −18.7 | −1.78 dB (sd 0.78) |
+
+Normal = `main` to within the capture's own run-to-run residual (Normal vs Normal-again is no
+closer to `main` than the first run). Night − Normal against Normal − Full, window by window:
+**correlation 0.999, slope 1.001**, i.e. Night applies exactly twice the authored dB in every
+window. The 2026-11-12 attempt was void (capture card had no HDMI signal, −90 dBFS on every arm,
+control included); on the second the card's video still read black but its audio was live, which
+is all this test uses. **Ask (issue #189):** a set-top-style setting so quiet dialogue and loud
+effects can be brought closer together for late viewing.
+
+**What it does.** `P3O[62:61],Dynamic Range,Normal,Full,Night` (never-allocated bits, so no
+`v,N` bump). It scales the AC-3 DRC term in `dvd/dts/dts_vec.sv` op 25, where each block's
+`dynrng` gain `(32 + Y) / 32 × 2^e` is applied to the coefficients before PRE:
+- **Normal** (index 0) = the authored gain, the behaviour before the row. Bit-identical:
+  `run_ac3_ab.sh` ALL GREEN on every stream, and the term's mantissa/shift are unchanged.
+- **Full** = unity (as dynrng 0x00: `X × 32 >> 5`).
+- **Night** = the gain squared, i.e. twice the dB (ffmpeg's `drc_scale = 2`), computed exactly
+  as one floor: `X × (32 + Y)² >> (10 − 2e)`, the square a 32-entry table. **Capped at 0x7F's
+  ×15.75 (+24 dB) when e ≥ 2** (the square would be ≥ ×16).
+- Decode PCM only: DTS, LPCM and MP2 carry no `dynrng`, and Passthru leaves DRC to the receiver.
+- Mode 3 (unreachable from the OSD) behaves as Normal. The mode is latched at the op's start,
+  so an OSD change lands on a block boundary.
+
+**Decisions (with the maintainer, 2026-11-12).**
+- Night = `dynrng` squared, not `compr` (RF mode). It behaves the same on every disc and needs
+  no new record field. `compr` is RF mode's heavy profile, which assumes an output ~11 dB
+  hotter; it is still parsed and discarded (`ac3.uasm`).
+- DTS `DYNF`: **counted, not applied.** 0 of 147 library streams set it (`dts_decoder.md` §9).
+  `dts.uasm` issues `CNT 1` per frame whose header sets it. `dts_top.dynf_frames` counts it, and
+  `dvd_audio_decode` holds a sticky flag that goes out as telemetry word 26 bit 3 (`dts_dynf` in
+  Main's JSON). A disc that uses it is therefore visible, not silently ignored.
+- **The Night cap**, and why it is a cap and not a wider datapath. Normal can never exceed
+  ×15.75, so the ring's D words, PRE and the IFFT were proven only up to that gain (`--random`
+  full-scale 0x7F blocks). An uncapped square reaches ×248: still inside Q8.23, but nothing
+  proves the stages after it, and the blocks that ask for it are near-silence (below), where
+  +48 dB is hiss, not dialogue. The cap engages visibly: `dts_top.drc_capped` → sticky
+  telemetry word 26 bit 4 (`drc_capped`).
+
+**Library census** (`tools/dynrng_census.py`, 394 images spread over the library, 3 windows
+per title set, 3,204 AC-3 streams, 1.74 M blocks):
+- 21.7 % of blocks are unity.
+- By exponent: e = 0 (0 to +5.9 dB) 76.2 %, e = +1 14.3 %, e = −1 7.0 %, e = −2 0.5 %,
+  e = +2/+3 2.0 %.
+- Largest boost +23.95 dB (0x7F, on 18.7 k blocks); largest cut −12.6 dB.
+- Night's cap engages on 107 streams of 51 images (2 % of blocks).
+- The largest coefficient × gain is 0.375 of full scale under Normal and under uncapped Night
+  alike. The big boosts sit on near-silent blocks, so no stream would have clipped a
+  coefficient even uncapped.
+
+**What this means for Night.** Most authored DRC is a mild boost of quiet passages (e = 0),
+with cuts on only ~8 % of blocks. So Night mostly lifts quiet material by up to ~12 dB more
+than Normal and cuts loud moments by up to ~25 dB. That is the late-night behaviour asked
+for.
+
+**Gates.**
+- `bench/dvd/run_drc_mode.sh --red`:
+  - `imdct_isa [drc]`: every dynrng × mode against the gain formula.
+  - `run_imdct_eng.sh --red`: the live-DRC stream re-run in Full and Night, random blocks in
+    every mode, a coverage assert, and M12–M17. The bench inverts `drc_mode` after the start,
+    so the latch is scored.
+  - `check_drc_wiring.py`, with 11 wire arms.
+- `bench/dvd/run_dts.sh` V20: the DYNF count on `written_misc`, whose golden
+  (`dts_golden.py`) is checked against `dts_ref`'s own header parse.
+- `run_ac3_ab.sh`, `run_ac3.sh` (Normal unchanged).
+
+**Known limitations.**
+- No independent PCM golden for Full/Night. liba52/ffmpeg's float DRC would be one (a52dec has
+  `-r` for "no DRC"); today the claim rests on the gain formula plus bit-exact term arithmetic.
+- `bench/ac3/` (the legacy `imdct_512`) has no mode. It is a reference model only.
+- The flags are sticky until the audio reset, which happens on a load or flush.
+
+**Next:** reconnect the rig's HDMI to the capture card, then re-run the A/B. Capture the same
+passage (*The Road Warrior* 16:9 VTS 1, chapter 3; the census ranks its dynrng among the most
+active) under `main`, then this build in Normal, Full and Night. Expect:
+- Normal equal to `main`, sample-aligned.
+- Per-window self-consistency: Night − Normal ≈ Normal − Full in dB, outside the capped blocks.
+Then the maintainer's ear.
+
+---
+
 ## CD-i Digital Video disc 4-5 s out of sync: a linear stream's PTS restart (issue #188, 2026-11-12, MERGED PR #195)
 
 **State:** ✅ HW-confirmed on the rig (`DVD_vcdrestart_20261112_0549`: both HFRO discs in

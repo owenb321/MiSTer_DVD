@@ -13,7 +13,8 @@ written from an emulator that disagrees. Then this writes what the benches score
                   after the op) -- bench/dvd/run_dts.sh
     STEM.pcm      "llll rrrr" hex, one stereo pair a line
     STEM.meta     "bytes frames events vops pairs refusals overrun-bits lenient-codes
-                  dmix-ignored"
+                  dmix-ignored fs dynf" (fs 1, 48 kHz, MP2's field; dynf the frames
+                  whose header sets DYNF, CNT 1, issue #189)"
 
     tools/dts_golden.py STREAM.dts --out STEM [--skip N] [--frames N] [--refuse K]
                         [--truncate K:N]
@@ -134,6 +135,19 @@ def main(argv=None):
             return 5
     # a refused frame's partial PCM is checked by the frames after it: the model and
     # the emulator must leave the same state, or the next frame differs (above)
+    # CNT 1 (issue #189) counts the frames whose header sets DYNF: against the reference
+    # parser's own reading of the bit, so a microcode that stops counting fails here and
+    # never becomes the golden the RTL is scored against
+    want_dynf = 0
+    for k, fr in enumerate(sel):
+        try:
+            want_dynf += k not in expect and R.parse_frame_header(R.BitReader(fr))['drc_present']
+        except R.DtsError:
+            pass
+    if m.counters.get(I.CNT_DYNF, 0) != want_dynf:
+        print(f'dts_golden: the emulator counted {m.counters.get(I.CNT_DYNF, 0)} DYNF frames, '
+              f'the headers set {want_dynf}')
+        return 5
 
     stem = a.out
     os.makedirs(os.path.dirname(os.path.abspath(stem)), exist_ok=True)
@@ -151,7 +165,8 @@ def main(argv=None):
     nerr = sum(m.errors.values())
     with open(stem + '.meta', 'w') as f:
         f.write(f'{len(data)} {len(sel)} {len(m.trace)} {len(vops)} {len(m.pcm[0])} {nerr} '
-                f'{m.overrun} {m.lenient} {m.counters.get(I.CNT_DMIX_IGNORED, 0)}\n')
+                f'{m.overrun} {m.lenient} {m.counters.get(I.CNT_DMIX_IGNORED, 0)} 1 '
+                f'{m.counters.get(I.CNT_DYNF, 0)}\n')
     fc = m.frame_cycles
     print(f'dts_golden: {os.path.basename(a.stream)} frames {a.skip}..{a.skip + len(sel) - 1}: '
           f'{len(data)} bytes, {len(m.trace)} events, {len(vops)} vector ops, '

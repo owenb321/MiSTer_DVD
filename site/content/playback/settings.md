@@ -66,6 +66,7 @@ for showing widescreen content on a 4:3 display.
 |---|---|---|
 | **Audio** | **On** / Off | Master audio enable. Off silences every output, a [passed-through](../audio/passthrough.md) bitstream included. |
 | **Audio Out** | **Decode PCM** / Passthru (SPDIF+HDMI) | Decode PCM decodes in fabric and sends stereo. Passthru sends the undecoded bitstream to an AV receiver — see [Bitstream passthrough](../audio/passthrough.md). In Passthru, MiSTer's own volume cannot change a Dolby Digital or DTS bitstream: [use the receiver's volume](../audio/passthrough.md#volume-and-audio-off). |
+| **Dynamic Range** | **Normal** / Full / Night | How far Dolby Digital soundtracks are compressed: Night brings quiet dialogue and loud effects closer together for late viewing, Full turns compression off. See [Dynamic Range](#dynamic-range). |
 | **SPDIF Byte Order** | **Normal** / Swap | Applies to *both* bitstream outputs despite the name. If a receiver names the format but plays static, toggle this. |
 | **A/V Offset** | **0 ms** / −200 / −100 / −50 / +50 / +100 / +150 / +200 | Lip-sync trim. |
 
@@ -90,6 +91,26 @@ mid-title does nothing until the next seek, chapter jump or reload.
 
 If lip sync is wrong in a way this does not fix, that is a bug rather than a setting;
 [Troubleshooting](../reference/troubleshooting.md) has the cases that are known.
+
+### Dynamic Range
+
+Default **Normal**. A Dolby Digital soundtrack carries, block by block, the compression its
+mastering engineer chose: a gentle cut for the loudest moments and a lift for the quietest.
+This setting decides how much of it is applied.
+
+- **Normal** applies it exactly as authored. This is what the core always did, and what most
+  set-top players do.
+- **Full** ignores it and plays the full dynamic range of the mix: the loudest peaks and the
+  quietest passages as they were recorded. Good for a home-cinema system turned up.
+- **Night** applies it twice over, so the quiet parts come up and the loud parts come down
+  further. Speech stays understandable at a low volume without explosions waking the house.
+  The boost is limited to what the format itself allows (about +24 dB), so near-silent
+  passages are not turned into hiss.
+
+It changes Dolby Digital only, and only with **Audio Out** at **Decode PCM**. DTS, LPCM and
+MPEG audio carry no compression data of this kind, so they play the same at every setting.
+In **Passthru** your receiver does its own compression, usually under a "night mode" or
+"DRC" setting of its own. The change takes effect immediately.
 
 ## Subtitles & CC page
 

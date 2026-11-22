@@ -486,8 +486,10 @@ in telemetry, never wrong audio.
   are ignored but counted.
 - ⏳ The DDR3 address for the codebooks, and `ram2` on `clk_sys` (D4).
 - ⏳ AMODE 10–15 (user-defined, 6–8 channels): refuse or map (§5).
-- ⏳ Dynamic range compression (`DYNF`): ignore, or apply under an OSD option (an option
-  would need `playback/settings.md`, which the docs parity check enforces).
+- ✅ Dynamic range compression (`DYNF`), decided 2026-11-12 (issue #189): ignored but
+  **counted**. `dts.uasm` issues `CNT 1` per frame whose header sets it, so telemetry word 26
+  bit 3 shows a disc that uses it. The OSD's Dynamic Range acts on AC-3 only. Applying the
+  coefficient stays open until a disc that sets it turns up. `status_log.md` "Dynamic Range".
 - ⏳ The core's CRC (`CPF`): check and refuse, or ignore as `mp2_decode` does. No library
   stream sets it (§9).
 - ✅ D5: overflowed block codes are decoded leniently and counted (decided).

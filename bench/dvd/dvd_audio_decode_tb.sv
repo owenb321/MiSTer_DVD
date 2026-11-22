@@ -66,7 +66,7 @@ module dvd_audio_decode_tb;
 
     // ARM_TIMEOUT_W shrunk 26 -> 13 (8192 clk) so the fallback release is testable.
     dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000), .ARM_TIMEOUT_W(13)) dut ( .cb_cp_mode(1'b0), .cb_lpcm_step(1'b0), .cb_mp2_step(1'b0), .cb_lpcm_q(), .cb_mp2_q(), .cb_req(), .cb_sel(), .cb_addr(), .cb_valid(1'b0), .cb_data(64'd0), .dts_tables_ok(1'b0),
-        .clk(clk), .rst_n(rst_n), .enable(1'b1), .pause(1'b0),
+        .clk(clk), .rst_n(rst_n), .enable(1'b1), .drc_mode(2'd0), .pause(1'b0),
         .aud_soft_switch(aud_soft_switch),
         .ring_byte(ring_byte), .ring_valid(ring_valid), .ring_ready(ring_ready),
         .frame_valid(frame_valid), .frame_len(frame_len), .frame_type(frame_type),

@@ -41,6 +41,7 @@
 #   V17 an ignored downmix is not counted                 (Cinderella)  -> [count]
 #   V18 ADPCM reads coefficient row pvq / 2               (T2)          -> [vop]
 #   V19 RCLR clears nothing (the ring starts as garbage)  (D1)          -> [vop]
+#   V20 a DYNF frame is not counted (issue #189)         (written_misc) -> [count]
 set -u
 cd "$(dirname "$0")/../.."
 ROOT=$(pwd)
@@ -184,6 +185,7 @@ PYEOF
   mut V16 $T "OP_XCLR: begin lcnt <= 12'd1280; st <= V_LOOP; end" "OP_XCLR: begin lcnt <= 12'd1024; st <= V_LOOP; end" '\[vop\]' &
   wait
   mut V17 disc_dmix_cinderella3 "if (cnt_dmix && dmix_ignored != 16'hFFFF)" "if (1'b0)" '\[count\]' &
+  mut V20 written_misc "if (cnt_dynf && dynf_frames != 16'hFFFF)" "if (1'b0)" '\[count\]' &
   mut V18 $T "cb_addr <= args[43:32];" "cb_addr <= {1'b0, args[43:33]};" '\[vop\]' &
   mut V19 D1 "direct = 1'b1; rg_we = 1'b1; rg_wa = k_d[10:0];" "direct = 1'b1; rg_we = 1'b0; rg_wa = k_d[10:0];" '\[vop\]' &
   wait
