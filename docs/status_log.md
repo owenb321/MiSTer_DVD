@@ -30,7 +30,9 @@ track silent on the control, plays on the fix (decoded, chip released to PCM). *
 → AV receiver** (lists DTS): AC-3 and DTS both bitstreamed and decoded by the receiver, so
 the fix leaves DTS alone there. **Found on the way:** rig .201, a **SuperStation One**,
 cannot bitstream over HDMI to anything, back to the Aug 31 build that passed on the same
-receiver. .236, a DE10-Nano, can. Hardware-specific and not yet explained; `hdmi_bitstream.md` §8 has the bisect. **Design and decisions:** `docs/hdmi_bitstream.md` §8.
+receiver. .236, a DE10-Nano, can. Same transmitter chip, identical audio registers;
+the SuperStation's TOSLINK passthrough decodes fine. So the board's I2S path to the
+transmitter is not bit-exact. The manual tells SuperStation owners to use TOSLINK; `hdmi_bitstream.md` §8 has the bisect. **Design and decisions:** `docs/hdmi_bitstream.md` §8.
 
 The Main kept one `sink_ok` for "AC-3 or DTS", so a TV that names AC-3 only was sent DTS
 bursts: most likely silence, with no message. The Main now keeps per-codec EDID flags. In

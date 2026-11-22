@@ -864,8 +864,21 @@ On .201, PCM to the receiver plays, the ADV7513 reads back `0x0C=0x44 0x12=0xA0
 code is fine and the cause is specific to .201. **Rig .201 is a SuperStation One**, a
 single-board MiSTer-compatible console. Rig .236 is a DE10-Nano. Nothing published names the
 SuperStation's HDMI transmitter or how its audio is wired. It answers at the ADV7513's I2C
-address and plays PCM. Open: diff its full register dump (chip ID `0xF5`/`0xF6` included)
-against .236's, which is saved, and try optical passthrough on its own TOSLINK output. The DTS-decode result on .201 still stands, since it is PCM. The
+address and plays PCM. **Settled 2026-11-22:**
+- Its transmitter is the same chip, ID `0x7511` rev `0x13`. A full 256-register dump taken
+  mid-bitstream at `video_mode=8` matches .236's in every audio and configuration register:
+  N/CTS, `0x0A`-`0x16` (I2S select, CS source, the `0x12[7]` non-PCM flag, 48 kHz) and the
+  audio infoframe. The only differences are status and interrupt bytes: `0x97` 00/80,
+  `0x9E` 18/17, `0xA0` 01/00, `0xC5` 10/90, `0xC8` 02/42 (.236/.201).
+- **Its TOSLINK passthrough decodes fine on the same receiver** (maintainer, by ear). That
+  output is the FPGA's own S/PDIF pin and does not go through the HDMI chip.
+
+So the core's bursts are right and the transmitter is told the right thing. What reaches the
+transmitter's I2S input on that board is not bit-exact. PCM hides an LSB-level error and a
+61937 sync word does not, so the receiver never locks ("decoder off"). This is
+hardware-specific. The manual (passthrough, troubleshooting, compatibility) tells
+SuperStation owners to use TOSLINK. A fabric-side fix, such as an I2S timing or edge
+change, would need a capture path on that board to prove it and is not planned. The DTS-decode result on .201 still stands, since it is PCM. The
 TV AC-3 result does not: it says nothing about TVs until it is repeated from a working rig.
 
 **HW, rig .236 → the receiver (`dev-dtssink`, *Ultimate T2*):** `no_dts=0`; AC-3 track:

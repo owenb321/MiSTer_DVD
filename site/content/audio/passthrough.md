@@ -23,6 +23,14 @@ exactly what the DE10-Nano's single wired audio line to the HDMI transmitter car
 **5.1 over HDMI needs no add-on board at all** — just the custom Main and a receiver that
 advertises AC-3/DTS support in its EDID.
 
+!!! warning "SuperStation One: use optical for passthrough"
+    On a **SuperStation One**, a Dolby Digital or DTS bitstream sent over HDMI does not
+    decode: the receiver shows "decoder off" and stays silent. The console's HDMI audio
+    path carries PCM correctly but does not pass a bitstream intact. Its **TOSLINK output
+    passes both formats fine**, so connect that to the receiver. PCM over HDMI, including
+    `Decode PCM` and LPCM or MP2 tracks in Passthru, works normally. Passthrough over HDMI
+    is tested on a DE10-Nano.
+
 !!! warning "HDMI bitstream needs `MiSTer_DVDcss`"
     Optical S/PDIF passthrough works on the bare `.rbf`. **Over HDMI it does not** — see
     [What you need](../getting-started/what-you-need.md). Nothing else about passthrough
