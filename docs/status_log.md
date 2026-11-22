@@ -28,9 +28,9 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 **HW A/B by ear on rig .201** (Insignia NS24D310NA21, EDID AC-3 without DTS; *A.I.*): DTS
 track silent on the control, plays on the fix (decoded, chip released to PCM). **Rig .236
 → AV receiver** (lists DTS): AC-3 and DTS both bitstreamed and decoded by the receiver, so
-the fix leaves DTS alone there. **Found on the way:** rig .201 cannot bitstream over
-HDMI to anything, back to the Aug 31 build that passed on the same receiver. .236 can.
-It is rig-specific and unexplained; `hdmi_bitstream.md` §8 has the bisect. **Design and decisions:** `docs/hdmi_bitstream.md` §8.
+the fix leaves DTS alone there. **Found on the way:** rig .201, a **SuperStation One**,
+cannot bitstream over HDMI to anything, back to the Aug 31 build that passed on the same
+receiver. .236, a DE10-Nano, can. Hardware-specific and not yet explained; `hdmi_bitstream.md` §8 has the bisect. **Design and decisions:** `docs/hdmi_bitstream.md` §8.
 
 The Main kept one `sink_ok` for "AC-3 or DTS", so a TV that names AC-3 only was sent DTS
 bursts: most likely silence, with no message. The Main now keeps per-codec EDID flags. In
