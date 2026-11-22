@@ -39,6 +39,7 @@ static int      cfg_audio_state    = 0;   // last hdmi_config_set_audio() argume
 // in step by hand -- a hand-kept copy records what the test believes rather than
 // what the module did, and the ordering assertion is the whole point here.
 int dvd_hdmi_audio_ack(void);
+int dvd_hdmi_audio_no_dts(void);
 
 static void note(const char *s)
 {
@@ -50,7 +51,16 @@ static FakeCfg cfg;
 
 static int  is_dvd(void)                       { return fake_is_dvd; }
 static int  user_io_status_get(const char *)   { return fake_passthru; }
-static void user_io_send_buttons(int)          { note(dvd_hdmi_audio_ack() ? "ack=1" : "ack=0"); }
+// A cfg push carries BOTH bits now (cfg[14] ack, cfg[15] no-DTS, issue #201), so
+// trace only an ack TRANSITION: a push made for bit 15 must not read as a stray
+// "ack=0" in the ordering assertions. Bit-15 pushes are counted on their own.
+static int last_pushed_ack = 0, nodts_pushes = 0, pushed_nodts = 0;
+static void user_io_send_buttons(int)
+{
+    int a = dvd_hdmi_audio_ack(), d = dvd_hdmi_audio_no_dts();
+    if (a != last_pushed_ack) { last_pushed_ack = a; note(a ? "ack=1" : "ack=0"); }
+    if (d != pushed_nodts)    { pushed_nodts = d; nodts_pushes++; }
+}
 static int  video_hdmi_config_generation(void) { return fake_gen; }
 static void hdmi_config_set_audio(int bs)      { cfg_audio_state = bs;
                                                  note(bs ? "chip=nonpcm" : "chip=pcm"); }
@@ -318,6 +328,65 @@ int main(void)
     reset_world();
     fake_passthru = 0; fake_afmt = 0;
     settle();
+
+    // -----------------------------------------------------------------------
+    // Issue #201: a sink that names AC-3 but not DTS. The core is told (cfg[15])
+    // to decode DTS to PCM; every other sink, and every non-auto ini mode, leaves
+    // it clear. The fixture EDID's single SAD is rewritten per row.
+    // -----------------------------------------------------------------------
+    printf("[14] cfg[15] decision table (sink codecs x ini mode)\n");
+    struct { const char *what; int sads; int mode; int declared_; int want; } rows[] = {
+        // sads: bit0 = AC-3 SAD at 48 kHz, bit1 = DTS SAD at 48 kHz, bit2 = DTS w/o 48k
+        { "AC-3 only, auto",                1, 0, 1, 1 },
+        { "AC-3 + DTS, auto",               3, 0, 1, 0 },
+        { "DTS only, auto",                 2, 0, 1, 0 },
+        { "no compressed SAD, auto",        0, 0, 1, 0 },
+        { "AC-3 + DTS without 48 kHz",      5, 0, 1, 1 },
+        { "AC-3 only, force (=2)",          1, 2, 1, 0 },
+        { "AC-3 only, off (=1)",            1, 1, 1, 0 },
+        { "AC-3 only, core not declared",   1, 0, 0, 0 },
+    };
+    for (unsigned r = 0; r < sizeof(rows) / sizeof(rows[0]); r++) {
+        memset(fake_edid + 132, 0, 12);
+        int n = 0;
+        if (rows[r].sads & 1) { fake_edid[133 + 3*n] = (2 << 3); fake_edid[134 + 3*n] = 0x04; n++; }
+        if (rows[r].sads & 2) { fake_edid[133 + 3*n] = (7 << 3); fake_edid[134 + 3*n] = 0x04; n++; }
+        if (rows[r].sads & 4) { fake_edid[133 + 3*n] = (7 << 3); fake_edid[134 + 3*n] = 0x02; n++; }
+        fake_edid[132] = (1 << 5) | (n ? 3 * n : 3);
+        fake_edid[130] = 4 + 1 + (n ? 3 * n : 3);        // dtd offset just past the block
+        fake_edid_ver++;
+        cfg.dvd_hdmi_bitstream = rows[r].mode;
+        declared = rows[r].declared_;
+        fake_passthru = 1; fake_afmt = 0xC001;          // v2 | v4 | passthru, idle
+        settle();
+        char what[96]; snprintf(what, sizeof(what), "no_dts: %s", rows[r].what);
+        check(what, dvd_hdmi_audio_no_dts(), rows[r].want);
+        check("  ...and pushed to the core", pushed_nodts, rows[r].want);
+    }
+    cfg.dvd_hdmi_bitstream = 0; declared = 1;
+
+    printf("[15] AC-3-only sink: AC-3 engages, the core's decoded DTS releases\n");
+    memset(fake_edid + 132, 0, 12);
+    fake_edid[130] = 0x08; fake_edid[132] = (1 << 5) | 3;
+    fake_edid[133] = (2 << 3); fake_edid[134] = 0x04;
+    fake_edid_ver++;
+    reset_world();
+    fake_afmt = 0xE005;                 // v2|v4|nodts|passthru|bitstream (AC-3)
+    settle();
+    check("acked on AC-3", dvd_hdmi_audio_ack(), 1);
+    fake_afmt = 0xE003;                 // DTS decoded by the core: a PCM session
+    settle();
+    check("released on decoded DTS", dvd_hdmi_audio_ack(), 0);
+    check("chip back in PCM", cfg_audio_state, 0);
+    // The bit is a property of the sink, not of the track: no push per switch.
+    int pushes = nodts_pushes;
+    for (int i = 0; i < 4; i++) { fake_afmt = (i & 1) ? 0xE003 : 0xE005; settle(); }
+    check("no cfg[15] change across track switches", nodts_pushes - pushes, 0);
+    // ...and leaving the DVD core clears it.
+    fake_is_dvd = 0; settle();
+    check("no_dts cleared off the DVD core", dvd_hdmi_audio_no_dts(), 0);
+    fake_is_dvd = 1; settle();
+    fake_passthru = 0; fake_afmt = 0; settle();
 
     if (errors) { printf("dvd_hdmi_audio_test: FAILURES\n"); return 1; }
     printf("dvd_hdmi_audio_test: ALL GREEN\n");
