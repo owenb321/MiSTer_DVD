@@ -92,7 +92,16 @@ ini-facing change past the pin.
 OK on that tree, the ARM build clean in the pinned image, `main/tests/run_tests.sh --red`
 green. **HIL on the rig (2026-11-21):** MGL launch, playback, telemetry, `vmsnap`, the
 HDMI bitstream engage/release, and `sstate_stress.py` (T2, 12 ops, seed 198: 2 loads, 0
-fail, 0 warn). ⏳ Physical disc + CSS and the IR remote not run. `fb_terminal=2` is not
+fail, 0 warn). ✅ **Physical disc + CSS** on the rig's USB drive (Dell DW316, no region
+set), retail *The Force Awakens*:
+- The core loaded with no image and the disc auto-mounted.
+- CSS: 19 VOBs and 12 title keys, from the key cache.
+- The title VOB streamed with a clean picture (the opening crawl).
+- 20 s of telemetry: 0 lates, 0 drops, `disp_lag` 0, `av_drift` +18 ms; HDMI audio −47 dBFS.
+- Eject opened the tray. It also logged the known second `(image)` eject event, which is
+  pre-existing; see "Drive compatibility".
+
+⏳ The IR remote was not run (skipped by the maintainer's decision). `fb_terminal=2` is not
 observable by the harness (the OSD popup and Main's console are invisible to it). On the
 old base it is `cfg_error("FB_TERMINAL: '2' out of range")`, UINT8 0..1, clamped to 1:
 very likely the reporter's error.

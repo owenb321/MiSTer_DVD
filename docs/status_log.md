@@ -27,12 +27,10 @@ PASS, 38,239 ALM / 520 M10K / 87 DSP (control 38,259 / 520 / 87). **HIL A/B on t
 (T2, Disc Menus Off, Passthru, `dvd_hdmi_bitstream=2`, the new Main on both arms):
 `/tmp/dvd_hdmi_audio.log` on the control (`DVD_vcdrestart_20261112_0549`) shows NO state
 change at Audio Off (`bs_session=1`, chip left `std-I2S+CSreg`). On the fix, Audio Off gives
-`bs_session=0` → `adv7513: PCM I2S`, and Audio On re-engages it. ⏳ Audio content: not
-measured. The Hagibis card is fed by the RetroTINK-6X on its YPbPr input, i.e. the ANALOG
-output, and the rig was on `vga_mode=svideo`: a black frame, every leg −88 dBFS, decoded PCM
-with Audio On included. That path is the wrong instrument here in any case, because the
-analog DAC never carries a bitstream, so HDMI and optical silence need a receiver. Only the
-chip handoff is measured. SPRM15 read 0x5800 On and Off, but that cannot fail on the rig
+`bs_session=0` → `adv7513: PCM I2S`, and Audio On re-engages it. The first capture attempt
+was void: the card was then fed by the RetroTINK on YPbPr (the analog output, which never
+carries a bitstream). The output itself was measured later, see "Audio Off measured on the
+wire" below. SPRM15 read 0x5800 On and Off, but that cannot fail on the rig
 (`dts_ok` = 1 masks the pass bit), so the static gate is the evidence.
 **Field report (Discord):** *"Audio: Off doesn't work, audio keeps playing, also after reset.
 Global and core audio options in the MiSTer menu don't have any effect on volume.
@@ -65,7 +63,9 @@ track (LPCM/MP2 tracks and menus are PCM). A sink that lists AC-3 but not DTS ge
   base's `cfg_error("FB_TERMINAL: '2' out of range")` (UINT8 0..1 there; the value is clamped
   to 1 and an "INI Error" popup comes up when the core loads). On `fed03e5` the range is
   0..2. Not observable by the harness, since the popup is the OSD and stdout goes to
-  `/dev/console`.
+  `/dev/console`. ✅ Physical disc + CSS on the new Main (retail *The Force Awakens*, USB
+  drive): auto-mount, title keys, a clean picture, 0 lates / 0 drops, eject opens the tray
+  (`physical_disc.md` "The stock Main base"). The IR remote was not run.
 
 **Gates:** `tools/check_audio_off_wiring.py --red` (6 arms, 10 mutations each failing exactly
 its arm; fails 6 ways on `main`'s `emu.sv`), in `run_hdmi_bitstream.sh`;
