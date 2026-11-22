@@ -20,9 +20,35 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ---
 
+## DTS on an HDMI sink that lists AC-3 only: decoded to PCM (issue #201, 2026-11-22)
+
+**State:** 🔧 on `feature/dts-sink-fallback` (`dev-dtssink`), sim- and unit-green; ⏳ fit,
+⏳ HIL. **Design and decisions:** `docs/hdmi_bitstream.md` §8.
+
+The Main kept one `sink_ok` for "AC-3 or DTS", so a TV that names AC-3 only was sent DTS
+bursts: most likely silence, with no message. The Main now keeps per-codec EDID flags. In
+auto mode, for a sink that names AC-3 and not DTS, it sets `cfg[15]` (the last free cfg
+bit). The core's `aud_route` (`dts_dec`) then gives DTS frames to the in-fabric decoder,
+so a DTS track is a PCM session and the ADV7513 is released. AC-3 still bitstreams.
+**Optical gets the PCM too**, by user decision: one ring consumer per frame, and the
+second-consumer fix is the deferred item in §7. `dvd_hdmi_bitstream=2` keeps today's
+behaviour. SPRM15's DTS bit follows (`pass_dts`), and the DTS `AUDIO UNSUPPORTED` notice
+can fire in Passthru on such a sink. The 0x7B word's bits 14/13 report that the core
+reads `cfg[15]` and the value it holds (logged by the Main).
+
+**Gates:** `run_passthru_pcm.sh --red` (TEST 7 + 3 arms), `run_telem.sh`,
+`check_dts_sink_wiring.py --red` (in `run_hdmi_bitstream.sh`), the player-regs and
+audio-off checkers (`pass_dts`), `main/tests/run_tests.sh --red` ([14]/[15] + 4 arms).
+**Known limits:** no AC-3 fallback for a DTS-only sink (no cfg bit left; none seen);
+an older Main never sets `cfg[15]`, and an older core ignores it. Both behave as before.
+**Next:** fit, then HIL on an AC-3-only EDID: `iec61937_check.py --expect pcm` on a DTS
+track, AC-3 bursts on an AC-3 track, and a `main` control arm.
+
+---
+
 ## Passthru field report: Audio Off, MiSTer volume, a stale stock Main (issues #196, #197, #198, 2026-11-21)
 
-**State:** 🔧 on `feature/passthru-audio`. Fit `DVD_passthruaudio_20261121_1532` SEED 7, timing
+**State:** ✅ MERGED (PR #200); ⏳ the reporter's confirmation. Fit `DVD_passthruaudio_20261121_1532` SEED 7, timing
 PASS, 38,239 ALM / 520 M10K / 87 DSP (control 38,259 / 520 / 87). After merging `main`
 (Dynamic Range, PR #199): `DVD_passthruaudio_20261122_0041` SEED 7, timing PASS (clk_dec
 94.52 / 91.25 MHz, clk_mem 100.56 / 102.54 MHz), 38,279 ALM / 520 / 87 (`main` with Dynamic

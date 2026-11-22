@@ -783,3 +783,61 @@ HDMI card): the bit-exact frame match and the byte order.
   clean fix (a second ring) is **34 M10K** against 47 free — RAM 92% → 97.6% on
   a design that has needed fit rescue twice. An 8 KB clone (~8 M10K) is the
   cheaper lever if it ever becomes a priority.
+  Issue #201 hit this edge (§8): on an AC-3-only sink, DTS goes to PCM on both legs.
+
+## 8. A sink that lists AC-3 but not DTS (issue #201, 2026-11-22)
+
+**Problem.** `scan_sads()` used to set one `sink_ok` if the EDID named AC-3 **or** DTS at
+48 kHz, and the core then bitstreamed every DD/DTS track. Many TVs name AC-3 only, so
+a DTS track was sent as a burst the sink cannot decode. That most likely means silence,
+with no message: `Sink does not list AC-3/DTS` fires only when **neither** codec is listed.
+Found while working on #196/#197. No user had reported it.
+
+**Fix: DTS falls back to the in-fabric decoder.**
+
+- **Main** (`main/support/dvd/dvd_hdmi_audio.cpp`): `scan_sads()` returns
+  `SINK_AC3 | SINK_DTS`. `update_no_dts()` sets `no_dts` when the ini mode is auto (0),
+  the core has declared OX6, it is the DVD core, and the sink names AC-3 but not DTS.
+  `user_io_send_buttons()` ORs it into **`cfg[15]`** (integration steps 61/62,
+  `CONF_DVD_HDMI_NODTS`). The bit follows the sink, not the track, so it is pushed only
+  when the EDID or the mode changes.
+- **Core**: `sys/hps_io.sv` exports `ini_hdmi_no_dts = cfg[15]` → `hdmi_no_dts` →
+  `aud_route .dts_dec`. Under `dts_dec` a DTS frame is not `is_bitstream`, so it is granted
+  to `dvd_audio_decode` like LPCM. `pcm_session` and `bs_session` follow from the routing
+  alone: Main sees a PCM session and releases the ADV7513, and AC-3 keeps engaging it as
+  before. Because it is sampled at each grant, an EDID change mid-track (hotplug) takes
+  effect at a frame boundary.
+- **SPRM15**: `player_regs .pass_mode` is now `pass_dts = pass_sel & ~hdmi_no_dts`. On
+  such a sink the DTS bit rests on `cb_tables_ok` alone, so a core whose codebook copy
+  failed tells the disc it cannot play DTS.
+- **`AUDIO UNSUPPORTED`** for DTS (codebooks failed) can now fire in Passthru when
+  `hdmi_no_dts` is set, because the decoder is the one playing it there.
+- **0x7B word**: bit 14 = this core reads `cfg[15]`, bit 13 = the value it holds. The Main
+  only logs these (`/tmp/dvd_hdmi_audio.log`: `no_dts=` and `core_nodts=v4/value`).
+
+**Decisions.**
+
+- **Optical gets PCM too (user decision, 2026-11-22).** One ring consumer per frame, so
+  a DTS frame goes to either the wrapper (both legs get a bitstream) or the decoder (both
+  get PCM). Keeping optical on DTS while HDMI gets PCM is the "two ring consumers" item
+  deferred in §7, at a cost of 8–34 M10K. The accepted cost: someone with HDMI to an
+  AC-3-only TV and optical to a DTS receiver now gets stereo PCM on DTS tracks.
+  `dvd_hdmi_bitstream=2` restores the old behaviour for them, and the manual says so.
+- **Force (=2) and off (=1) leave `cfg[15]` clear.** Force exists because sinks
+  misreport. Off never engages HDMI, so optical keeps the DTS bitstream as before.
+- **No AC-3 fallback for a sink that names DTS only.** `cfg[15]` was the last free cfg
+  bit, and no such sink has been seen. The Main logs the flags, so a report would show it.
+- **No new on-screen notice.** A decoded DTS track is the feature working, not a failure
+  to explain. It is the same rule as the removed engage notice (§5).
+
+**Gates.** `bench/dvd/run_passthru_pcm.sh --red` (`aud_route_tb` TEST 7; RED
+`dts-dec-ignored`, `dts-dec-takes-ac3`, `dts-always-decoded`); `bench/dvd/run_telem.sh`
+(0x7B bits 13/14); `tools/check_dts_sink_wiring.py --red` (in `run_hdmi_bitstream.sh`);
+`tools/check_player_regs_wiring.py --red` and `tools/check_audio_off_wiring.py --red`
+(both follow `pass_dts`); `main/tests/run_tests.sh --red` ([14] the 8-row decision table,
+[15] AC-3 engages and decoded DTS releases, with no `cfg[15]` push per track; RED
+`nodts-never-set`, `nodts-ignores-dts-sad`, `nodts-in-force-mode`, `nodts-not-pushed`).
+
+**HW check.** An AC-3-only sink can be built from an edited EDID, or the rig's own EDID if
+it lacks DTS. With a DTS track, `tools/iec61937_check.py --expect pcm` should show no
+bursts, and an AC-3 track should show AC-3 bursts.
