@@ -477,9 +477,10 @@ directions **asymmetrically**:
 - **Releasing:** drop the ack FIRST so the core stops emitting, restore the PCM
   registers 50 ms later.
 
-Also guarded: `SW[0]`/`mcp_en` route the HDMI audio signals to the analog
+~~Also guarded: `SW[0]`/`mcp_en` route the HDMI audio signals to the analog
 board's audio pins, where an I2S DAC would render a bitstream as noise. The mux
-falls back to PCM in that case.
+falls back to PCM in that case.~~ **Superseded by §9:** that guard made HDMI passthrough
+silent on every MCP23009 board. The I2S DAC now reads the PCM serializer directly.
 
 **Old Main + new core** → no ack → today's behaviour exactly.
 **New Main + old core** → no `OX6` declaration → Main never reconfigures the chip.
@@ -888,3 +889,31 @@ alone on a sink that lists it.
 The rigs' other sinks, for the record: rig 236's Hagibis card and a "MATRIX 4*4" switch,
 and an AOC Q27G3XMN monitor, list LPCM only. A Samsung TV (`SAM 0d42`) lists AC-3 + DTS.
 An Insignia NS-50E440NA14 behind (apparently) an AVR lists everything up to TrueHD/DTS-HD.
+
+## 9. MCP23009 boards: HDMI passthrough was switched off (SuperStation One, 2026-11-22)
+
+**Found** after §8's bisect showed rig .201, a SuperStation One, never bitstreams over HDMI
+while its TOSLINK does. The ADV7513 setup was identical to the DE10-Nano's. The cause is
+in `sys/sys_top.v`:
+
+```verilog
+wire hdmi_bs_ok = hdmi_bs_en & ~(SW[0] | mcp_en);      // before
+```
+
+On a board whose analog jack is an I2S DAC (`SW[0]`, or an MCP23009 I/O-expander board:
+`mcp_en`), stock MiSTer drives the DAC from `HDMI_SCLK/I2S/LRCLK` (`AUDIO_L/R/SPDIF`). So
+the HDMI bitstream work refused to put a bitstream on the HDMI pins there (§4's old
+guard), because it would have reached the DAC as noise. The Main still set the ADV7513
+to non-PCM, so the receiver got muted PCM flagged as non-PCM: "decoder off". The
+SuperStation's S/PDIF is the MCP route (`SDCD_SPDIF`), which is why optical worked.
+
+**Fix:** the DAC pins take the PCM serializer's own signals (`i2s_*_pcm`) instead of
+`HDMI_*`, and `hdmi_bs_ok = hdmi_bs_en`. With no bitstream, `HDMI_*` *are* `i2s_*_pcm`,
+so every board is bit-for-bit stock. While a bitstream plays, the DAC gets the PCM path,
+which the core holds at zero (`pcm_mute` includes `hdmi_bs_ack`): the analog jack is
+silent, as it is on a DE10-Nano with an analog board. Gate:
+`tools/check_hdmi_bs_dac_wiring.py --red`.
+
+**Still open:** the HW confirmation on the SuperStation (receiver locks), the DE10-Nano
+regression check (.236), and the SuperStation's analog jack staying silent rather than
+noisy during passthrough.

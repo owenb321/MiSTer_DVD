@@ -1609,6 +1609,9 @@ end
 
 /////////////////////////  Audio output  ////////////////////////////////
 
+// DVD-FORK: declared here, ahead of the AUDIO_* assigns that now read them.
+wire i2s_bclk_pcm, i2s_lrclk_pcm, i2s_data_pcm;
+
 // DVD-FORK: IEC 61937 bitstream passthrough. When the core asserts
 // spdif_pass_en, its own biphase-encoded (non-PCM) stream `spdif_pass`
 // replaces the framework's PCM `spdif` on the S/PDIF pins; otherwise the
@@ -1621,9 +1624,14 @@ assign SDCD_SPDIF = (mcp_en & ~spdif_out) ? 1'b0 : 1'bZ;
 `ifndef MISTER_DUAL_SDRAM
 	wire analog_l, analog_r;
 
-	assign AUDIO_SPDIF = av_dis ? 1'bZ : (SW[0] | mcp_en) ? HDMI_LRCLK : spdif_out;
-	assign AUDIO_R     = av_dis ? 1'bZ : (SW[0] | mcp_en) ? HDMI_I2S   : analog_r;
-	assign AUDIO_L     = av_dis ? 1'bZ : (SW[0] | mcp_en) ? HDMI_SCLK  : analog_l;
+	// DVD-FORK FIX (SuperStation One HDMI bitstream, docs/hdmi_bitstream.md §9): an I2S
+	// DAC board (SW[0], or an MCP23009 board: mcp_en) takes the PCM serializer's own
+	// signals, not the HDMI pins. Stock wires HDMI_* here, which is the same thing until
+	// the HDMI pins carry a bitstream. That used to be refused outright on these boards
+	// (hdmi_bs_ok below), so HDMI passthrough on an MCP board was silent: "decoder off".
+	assign AUDIO_SPDIF = av_dis ? 1'bZ : (SW[0] | mcp_en) ? i2s_lrclk_pcm : spdif_out;
+	assign AUDIO_R     = av_dis ? 1'bZ : (SW[0] | mcp_en) ? i2s_data_pcm  : analog_r;
+	assign AUDIO_L     = av_dis ? 1'bZ : (SW[0] | mcp_en) ? i2s_bclk_pcm  : analog_l;
 `endif
 
 // DVD-FORK: IEC 61937 bitstream over HDMI. When the core asserts hdmi_bs_en it
@@ -1634,13 +1642,15 @@ assign SDCD_SPDIF = (mcp_en & ~spdif_out) ? 1'b0 : 1'bZ;
 // untouched (clk_audio = 512.Fs either way), and with hdmi_bs_en low every one of
 // these is bit-for-bit the stock PCM path.
 //
-// The SW[0]/mcp_en guard matters: those route HDMI_I2S/SCLK/LRCLK to the analog
-// board's audio pins (see the AUDIO_* assigns above), where an I2S DAC would turn
-// a bitstream into full-scale noise.
+// ⚠ There USED to be a SW[0]/mcp_en guard here (hdmi_bs_en & ~(SW[0] | mcp_en)),
+// because those boards' I2S DAC was fed from HDMI_I2S/SCLK/LRCLK and would have
+// turned a bitstream into full-scale noise. It made HDMI passthrough silent on every
+// MCP23009 board (the SuperStation One: "decoder off", 2026-11-22). The DAC now takes
+// the PCM serializer's signals directly (the AUDIO_* assigns above), so the HDMI pins
+// can carry a bitstream on every board while the DAC keeps PCM (muted by the core's
+// pcm_mute for as long as the ack is up). Gate: tools/check_hdmi_bs_dac_wiring.py.
 wire hdmi_bs_sck, hdmi_bs_ws, hdmi_bs_sd, hdmi_bs_en;
-wire hdmi_bs_ok = hdmi_bs_en & ~(SW[0] | mcp_en);
-
-wire i2s_bclk_pcm, i2s_lrclk_pcm, i2s_data_pcm;
+wire hdmi_bs_ok = hdmi_bs_en;
 assign HDMI_SCLK  = hdmi_bs_ok ? hdmi_bs_sck : i2s_bclk_pcm;
 assign HDMI_LRCLK = hdmi_bs_ok ? hdmi_bs_ws  : i2s_lrclk_pcm;
 assign HDMI_I2S   = hdmi_bs_ok ? hdmi_bs_sd  : i2s_data_pcm;
