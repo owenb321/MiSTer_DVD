@@ -72,10 +72,13 @@ its arm; fails 6 ways on `main`'s `emu.sv`), in `run_hdmi_bitstream.sh`;
 `check_player_regs_wiring.py --red` (+ "SPRM15 follows Audio Off");
 `check_std_convert_wiring.py`, `run_std_rate.sh --red`, `run_passthru_pcm.sh` green;
 `main/tests/run_tests.sh --red` green; ARM build clean against `fed03e5`.
-**Next step:** a bit-exact capture instead of a receiver. Run
-`tools/iec61937_check.py` (`docs/hdmi_bitstream.md` "Bit-exact capture") on HDMI
-straight into the card with `dvd_hdmi_bitstream=2`, at Audio On (`--expect bitstream`) and
-Audio Off (`--expect silent`), and at two MiSTer volumes. Then a reporter confirmation.
+✅ **Audio Off measured on the wire (2026-11-21):** HDMI went straight into rig 236's
+capture card, analysed with `tools/iec61937_check.py`. The control (`DVD_vcdrestart`)
+kept sending 212 AC-3 bursts per 8 s at Audio Off; the fix sent exact digital silence
+(`docs/hdmi_bitstream.md` "First rig capture"). The card alters every sample, so it can't
+check frames bit for bit.
+**Next step:** a bit-transparent capture path (a bit-perfect USB S/PDIF input) for the
+frame match and #196's volume claim; then a reporter confirmation.
 
 ---
 

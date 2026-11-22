@@ -716,9 +716,35 @@ bit-exact.
   vector `bench/ac3/vectors/bbb_short_5p1.ac3` (11/11) and T2's DTS slice
   `bench/dvd/test_vobs/dts_t2_4k.hex` (4/4).
 
-⏳ **Not yet run:** the `--iso` reference path against a real image (the ISO library was
-not reachable from the workstation it was written on) and the first capture from the
-rig.
+**★ First rig capture (2026-11-21): rig 236's USB HDMI card (MacroSilicon) is NOT
+bit-transparent.** Setup: HDMI straight into the card, `dvd_hdmi_bitstream=2`, raw
+`hw:CARD=Hagibis` (PipeWire's source suspended). What came back:
+- Every burst arrives on its exact period (3072 words for AC-3), but no sample is right:
+  `F872 4E1F` arrives as `F881 4D82`, and Pa reads anywhere from −1919 to −76 from one
+  burst to the next.
+- About 1 burst gap in 50 is 3070 words, so the card also drops a pair now and then
+  while re-clocking to its own 48 kHz.
+- The card's ALSA mixer has no gain control, so this can't be fixed from the host.
+
+The checker therefore also recognises **burst-shaped runs**: non-zero runs starting on a
+codec's burst period after a zero gap. It reports them as "the capture path alters
+samples", and counts them as bursts for `--expect silent` / `pcm`. So this card can't
+check frames, but it does answer whether a bitstream is on the wire at all.
+
+| T2, Passthru, 8 s per leg | control `DVD_vcdrestart` (`main`) | fix `DVD_passthruaudio` |
+|---|---|---|
+| Audio On | 212 AC-3-period bursts | 212 AC-3-period bursts |
+| **Audio Off** (`--expect silent`) | **FAIL: 212 bursts still going** | **PASS: 0 non-zero words** |
+| Audio On again | 212 bursts | 212 bursts |
+| Decode PCM (`--expect pcm`) | PASS | PASS |
+
+That is issue #197 measured at the output itself, with a control that fails. The chip-log
+A/B in `docs/status_log.md` showed the same thing one step earlier, at the ADV7513's mode.
+
+⏳ **Still needs a transparent path:** the bit-exact frame match, the byte order, and #196
+(a gain applied to a bitstream is indistinguishable from this card's own alteration).
+Use a USB S/PDIF input known to be bit-perfect for optical, or another HDMI card.
+⏳ The `--iso` reference path is also not yet run against a real image.
 
 ---
 

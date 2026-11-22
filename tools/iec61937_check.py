@@ -204,6 +204,33 @@ def find_bursts(words):
     return out
 
 
+BURST_PERIODS = {3072: 'ac3', 1024: 'dts-512', 2048: 'dts-1024', 4096: 'dts-2048'}   # words
+
+
+def burst_shaped(words, min_zeros=40):
+    """Bursts the capture path ALTERED: non-zero runs, each after a zero gap, starting at
+    a codec's burst period. A filtering / re-clocking card (rig 236's USB HDMI card,
+    2026-11-21) keeps that cadence while changing every sample value, so Pa/Pb never
+    match. -> (count, period name) or (0, None)."""
+    starts, zrun = [], 0
+    for k, x in enumerate(words):
+        if x == 0:
+            zrun += 1
+        else:
+            if zrun >= min_zeros:
+                starts.append(k)
+            zrun = 0
+    gaps = {}
+    for a, b in zip(starts, starts[1:]):
+        for p in BURST_PERIODS:
+            if abs(b - a - p) <= 4:              # a re-clocking card drops a pair now and then
+                gaps[p] = gaps.get(p, 0) + 1
+    if not gaps:
+        return 0, None
+    p, n = max(gaps.items(), key=lambda kv: kv[1])
+    return (n, BURST_PERIODS[p]) if n >= 8 and n >= len(starts) // 2 else (0, None)
+
+
 def unswap(b):
     return b''.join(bytes((b[k + 1], b[k])) for k in range(0, len(b) - 1, 2)) + \
         (b[-1:] if len(b) & 1 else b'')
@@ -217,6 +244,7 @@ def analyse(words, rate, ref_frames, codec_hint=None):
          'byte_order': None, 'frames': 0, 'matched': 0, 'not_on_disc': 0,
          'order_breaks': 0, 'nonzero_words': sum(1 for w in words if w),
          'first_burst_s': None, 'last_burst_s': None, 'bad': []}
+    r['altered_bursts'], r['altered_type'] = (0, None) if bursts else burst_shaped(words)
     if bursts:
         r['first_burst_s'] = round(bursts[0][0] / 2 / rate, 3)
         r['last_burst_s'] = round(bursts[-1][0] / 2 / rate, 3)
@@ -260,9 +288,12 @@ def analyse(words, rate, ref_frames, codec_hint=None):
 
 
 def verdict(r, expect, min_frames, have_ref):
+    altered = (f"{r['altered_bursts']} burst-shaped runs at the {r['altered_type']} period, but no "
+               'Pa/Pb: the capture path alters samples (not bit-transparent)') \
+        if r.get('altered_bursts') else None
     if expect == 'bitstream':
         if r['frames'] == 0:
-            return False, 'no codec bursts in the capture'
+            return False, altered or 'no codec bursts in the capture'
         if r['byte_order'] != 'normal':
             return False, f"payload byte order {r['byte_order']} (SPDIF Byte Order = Swap?)"
         if have_ref and r['not_on_disc']:
@@ -274,12 +305,16 @@ def verdict(r, expect, min_frames, have_ref):
     if expect == 'pcm':
         if r['bursts']:
             return False, f"{r['bursts']} IEC 61937 bursts in what should be PCM"
+        if altered:
+            return False, altered
         if r['nonzero_words'] == 0:
             return False, 'digitally silent: no PCM to speak of'
         return True, 'PCM, no bursts'
     if expect == 'silent':
         if r['bursts']:
             return False, f"{r['bursts']} IEC 61937 bursts still going"
+        if altered:
+            return False, altered
         if r['nonzero_words']:
             return False, f"{r['nonzero_words']} non-zero words"
         return True, 'digital silence, no bursts'
@@ -376,6 +411,16 @@ def selftest():
     run('zeros_as_pcm', None, None, 'pcm', False, raw=[0] * 9600)
     ref = _synth_frames('ac3', 10, 1)
     run('bursts_as_silent', ref, ref, 'silent', False)
+    # what rig 236's USB HDMI card does: every non-zero sample nudged, a pair dropped now and then
+    p = os.path.join(tmp, 'clean.wav')
+    _synth_capture(p, _synth_frames('ac3', 20, 3), 'ac3')
+    words = read_words(p)[0]
+    alt = [0 if x == 0 else (x + 7) & 0xFFFF for x in words]
+    del alt[3072 * 6 + 3000:3072 * 6 + 3002]
+    for expect in ('bitstream', 'pcm', 'silent'):
+        r = run(f'altered_as_{expect}', None, ref, expect, False, raw=alt)
+        if not r['altered_bursts']:
+            fails.append('altered not seen'); print('  [BAD] altered bursts not detected')
     if fails:
         print(f'SELFTEST FAIL: {fails}')
         return 1
@@ -430,6 +475,9 @@ def main():
         print(f"bursts    {r['bursts']}  {r['types']}  byte order {r['byte_order']}")
         if r['bursts']:
             print(f"          first at {r['first_burst_s']} s, last at {r['last_burst_s']} s")
+        elif r['altered_bursts']:
+            print(f"altered   {r['altered_bursts']} burst-shaped runs at the {r['altered_type']} "
+                  'period: the capture path is not bit-transparent')
         if ref is not None:
             print(f"reference {len(ref)} frames")
             print(f"frames    {r['frames']}: {r['matched']} the disc's, {r['not_on_disc']} not, "
