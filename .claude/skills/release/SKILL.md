@@ -22,7 +22,8 @@ from the PRs merged since the last release.
   `` `CORE_VERSION` `BUILD_DATE` ``.
   `build_release.sh` refuses a `dev-` string on a publishable `--release` build and refuses
   a bare semver on a dev build, so the invariant is mechanical rather than remembered.
-- **Release tag = `v<semver>`** (e.g. `v0.4.0`); title = `v<semver> — <headline>`.
+- **Release tag = `v<semver>`** (e.g. `v0.4.0`); title = `v<semver>`, optionally
+  `v<semver> — <headline>` (see "The notes format").
   (This replaces the older `v<version>-<yyyymmdd>` tag format — pure semver now.)
 - **Zip = `MiSTer_DVD_v<semver>.zip`** (produced by `tools/package_release.sh`).
 - **★ The `.rbf` filename stays `DVD_YYYYMMDD.rbf` — date only, NEVER a version.** This is
@@ -220,11 +221,46 @@ gh pr list --state merged --base main --limit 300 \
 If a PR spans branches or the boundary is fuzzy, cross-check against merge commits:
 `git log <prev_tag>..HEAD --merges --format='%h %s'`.
 
-Turn that list into notes: a one-line **headline** for the title, then group the PRs by
-area (e.g. Playback / Navigation / Physical disc / Analog-CRT / Build) with a short
-human sentence each — not just the raw PR titles. Call out anything user-visible (new
-formats, new OSD options, new controls, fixed limitations) and anything that changes
-install steps. Write to `/tmp/relnotes.md` for `--notes-file`.
+Turn that list into notes. Write to `/tmp/relnotes.md` for `--notes-file`.
+
+### ★ The notes format (codified 2026-11-22 from v0.9.0, v0.9.1 and v0.10.0)
+
+Read the previous release's body (`gh release view <prev_tag> --json body -q .body`) and
+match it. The shape, in order:
+
+1. **No top heading.** Open with a plain paragraph of 2–4 sentences: what this release is
+   about, in user terms (*"This release is about DVD games…"*).
+2. **Which parts changed**, as one short paragraph: *"Both the core (`.rbf`) and the custom
+   Main (`MiSTer_DVDcss`) changed. … so update both."* Or: *"Every fix is in the core … so
+   updating the core alone is enough. The zip updates both as usual."* Say which features
+   live in which part.
+3. **`###` sections by area**, user-facing names: Audio, Video, Subtitles, Navigation,
+   Interactive discs, Save states, Network shares, Physical discs. Only the sections this
+   release needs, most important first.
+4. **Each item is a paragraph, not a bullet**: `**Bold user-facing name** (#PR, fixes
+   #issue).` then prose. Say what the user saw before, why (one plain sentence, no signal
+   names), what happens now, and any caveat, such as what was tested or what needs
+   `MiSTer_DVDcss`. A new OSD option says its page and default: *"a new setting on the
+   Video page, **Off** by default"*. Use `"Since v0.X.Y, …"` for a regression. Use plain
+   words, not RTL terms (`ascal`, `SPRM`, `HLI` and `EDID` never appear). An internal
+   change folded into a user item gets one sentence at the end of its section, not its own
+   item.
+5. **`### Under the hood`**, always last before Thanks: internal rework in one paragraph,
+   ending with *"None of this should change anything you can see or hear. If something
+   that worked in v<prev> doesn't now, please report it."*
+6. **`### Thanks`** (see below): the lead-in *"Thanks to everyone who reported bugs, asked
+   for features or helped with this release:"*, bullets `- **name**, for <what> (#PR)`,
+   closing with *"Reports like these are how most of these fixes happened, so keep them
+   coming."*
+7. `---`, then the **fixed install boilerplate**, copied verbatim from the last release
+   with only the version changed: `**Installing or updating**`, the "Download
+   `MiSTer_DVD_v<semver>.zip` and extract it … delete them if you don't want them around."
+   paragraph, then `Manual: <https://owenb321.github.io/MiSTer_DVD/>`.
+
+No "Generated with Claude Code" footer and no `@` mentions. Manual pages are linked by their
+absolute `https://owenb321.github.io/MiSTer_DVD/…` URL. The **title** is `v<semver>`, or
+`v<semver> — <headline>` when one change leads the release (v0.9.0, v0.8.0). v0.9.1 and
+v0.10.0 used the bare version.
 
 ### ★ Thanks section (mandatory, by user decision 2026-11-22)
 
