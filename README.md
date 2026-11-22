@@ -54,10 +54,11 @@ know. It is not an endorsement of the approach — draw your own conclusions.
   picture, sound, subtitles and captions — so lip sync holds across seeks, menus and mode changes.
 - **Audio** — AC-3 (every channel mode), DTS (the core stream, up to 5.1), MP2, and LPCM (up to
   96 kHz and 8 channels, downmixed) decoded
-  [entirely in fabric](https://owenb321.github.io/MiSTer_DVD/audio/formats/); AC-3 and DTS as
+  [entirely in fabric](https://owenb321.github.io/MiSTer_DVD/audio/formats/), with a
+  [Night mode](https://owenb321.github.io/MiSTer_DVD/playback/settings/#dynamic-range) for Dolby Digital; AC-3 and DTS as
   [IEC 61937 bitstream](https://owenb321.github.io/MiSTer_DVD/audio/passthrough/) to a receiver — over optical S/PDIF,
   or over HDMI with the custom Main, so 5.1 needs no add-on board. Tracks with no bitstream
-  format still play as PCM in that mode.
+  format still play as PCM in that mode, and DTS plays as PCM on a TV that accepts only AC-3.
 - **Analog / CRT** — a native 15 kHz 480i/576i raster built from the disc's
   [authored fields](https://owenb321.github.io/MiSTer_DVD/video/analog-crt/), with broadcast-standard composite
   sync: the presentation a set-top player feeds a TV. VCD and MPEG-1 SIF content gets a
