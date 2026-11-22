@@ -327,12 +327,12 @@ dvd_hdmi_bitstream=2      ; 0=auto (default), 1=off, 2=force
 Read `/tmp/dvd_hdmi_audio.log` to see what it decided and why — it records the EDID result
 and each stage of the handoff.
 
-### Receiver shows "decoder off" on a SuperStation One
+### Receiver shows "decoder off" over HDMI on a SuperStation One or an analog-DAC board
 
-HDMI passthrough does not work on a SuperStation One: its HDMI audio path carries PCM
-correctly but not a Dolby Digital or DTS bitstream. Connect the console's **TOSLINK**
-output to the receiver instead, which passes both. See
-[Passthrough](../audio/passthrough.md).
+Older versions of the core kept the bitstream off HDMI on a SuperStation One and on a
+DE10-Nano whose analog board has a DAC jack, so the receiver showed "decoder off". Update
+the core. If it still happens, check the receiver is on its HDMI input rather than
+optical. See [Passthrough](../audio/passthrough.md).
 
 ### DTS tracks play in stereo in Passthru, or the receiver shows PCM for them
 
