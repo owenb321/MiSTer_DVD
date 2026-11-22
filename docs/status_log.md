@@ -22,12 +22,12 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## ascal Bob resync: a mid-stream switch to Bob on Interlaced HDMI (2026-11-22)
 
-**State:** 🔧 `feature/ascal-bob-resync` (`dev-bobresync`); fit
+**State:** ✅ HW, MERGED (PR #204; `dev-bobresync`); fit
 `DVD_bobresync_20261122_1748` PASS. ✅ HIL A/B on rig 236: control 7 of 8 mid-stream Bob
 switches combed, fix 8 of 8 bobbed, Weave unchanged. One line in `sys/ascal.vhd`: its two
 field-buffer chains re-align while bob is on, not only on a progressive input. Found by
 the HDHR core, which shares ascal. **Gate:** `check_ascal_bob_resync.py --red` (in
-`run_field_blend.sh`). **Detail:** `docs/field_blend.md` "ascal Bob resync". **Next:** PR.
+`run_field_blend.sh`). **Detail:** `docs/field_blend.md` "ascal Bob resync". **Next:** a look by eye at a scaled mode (1080p).
 
 ---
 

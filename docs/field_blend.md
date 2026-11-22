@@ -436,9 +436,9 @@ cannot make:
   maintainer's eye; screenshots do not carry the OSD);
 - Bob motion judged by eye.
 
-## ascal Bob resync (2026-11-22, `feature/ascal-bob-resync`)
+## ascal Bob resync (2026-11-22, PR #204)
 
-**State:** 🔧 on `feature/ascal-bob-resync` (`dev-bobresync`); fit
+**State:** ✅ MERGED (PR #204; `dev-bobresync`); fit
 `DVD_bobresync_20261122_1748` PASS. ✅ HIL A/B on rig 236.
 
 **The bug.** On the Interlaced raster, `Deinterlace = Bob` asks ascal to bob the HDMI
