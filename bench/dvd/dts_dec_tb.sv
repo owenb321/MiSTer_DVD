@@ -117,7 +117,7 @@ module dts_dec_tb;
     dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000), .ARM_TIMEOUT_W(13)) dut (
         .cb_cp_mode(1'b0), .cb_lpcm_step(1'b0), .cb_mp2_step(1'b0), .cb_lpcm_q(), .cb_mp2_q(),
         .cb_req, .cb_sel, .cb_addr, .cb_valid, .cb_data, .dts_tables_ok(!notables),
-        .clk(clk), .rst_n(rst_n), .enable(1'b1), .pause(1'b0), .aud_soft_switch(1'b0),
+        .clk(clk), .rst_n(rst_n), .enable(1'b1), .drc_mode(2'd0), .pause(1'b0), .aud_soft_switch(1'b0),
         .ring_byte, .ring_valid, .ring_ready, .frame_valid, .frame_len, .frame_type,
         .lpcm_quant(2'd2),                    // a stale LPCM 24-bit word length: DTS must force 16
         .lpcm_nch_m1(3'd1), .lpcm_fs96(1'b0), .lpcm_bad(1'b0), .link96(1'b0), .lpcm_unsup(),

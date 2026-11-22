@@ -717,7 +717,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-vcdrestart"
+`define CORE_VERSION "dev-drc"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -952,6 +952,14 @@ parameter CONF_STR = {
     // declares OX6, so Main never reconfigures the chip for a core that cannot
     // drive it. Bit layout is unchanged, so no CONF_STR "v,N" bump is needed.
     "P3OX6,Audio Out,Decode PCM,Passthru (SPDIF+HDMI);",
+    // Dynamic Range (issue #189): the AC-3 decode's DRC gain, i.e. how much of each
+    // block's dynrng word is applied. Normal = the authored gain at full strength (the
+    // behaviour before this row, so index 0 and bit-identical); Full = no compression
+    // (unity gain); Night = the gain squared (twice the dB, as ffmpeg's drc_scale 2),
+    // capped at the format's own maximum boost. AC-3 in Decode PCM only: DTS, LPCM and
+    // MP2 carry no dynrng, and Passthru leaves DRC to the receiver. status[62:61],
+    // never allocated before, so no "v,N" bump. docs/status_log.md "Dynamic Range".
+    "P3O[62:61],Dynamic Range,Normal,Full,Night;",
     // SPDIF Byte Order: flips the 61937 payload byte packing. If the receiver
     // recognises the format (e.g. "Dolby D"/"DTS") but plays static, toggle
     // this. status[7]. Only meaningful in Passthru.
@@ -1288,6 +1296,7 @@ wire [31:0] cb_sum_seen;
 wire [15:0] eng_frames_w, eng_refused_w;
 wire  [4:0] eng_last_err_w;
 wire        dts_active_w;
+wire        dts_dynf_w, drc_capped_w;       // sticky (issue #189): dts_flags [3], [4]
 // telemetry word 31 (docs/field_parity.md "Strict first field"): the field-parity
 // corrector's feedback heals (clk_dec) and the mixer's strict first-field waits (dot clk),
 // both hard-reset-only wrapping counts out of mpeg2video. Declared ahead of the telem.
@@ -1333,7 +1342,8 @@ dvd_telem dvd_telem_inst (
     .dec_pic_over (core_pic_over),
     // words 25..30: the audio engine (docs/dts_decoder.md): the codebook copy's verdict
     // and checksum (D4 rule 2: never silent), the engine's frames and refusals
-    .dts_flags    ({3'd0, eng_last_err_w, 5'd0, dts_active_w, cb_tables_ok, ~cb_busy}),
+    .dts_flags    ({3'd0, eng_last_err_w, 3'd0, drc_capped_w, dts_dynf_w, dts_active_w,
+                    cb_tables_ok, ~cb_busy}),
     .cb_sum       (cb_sum_seen),
     .eng_frames   (eng_frames_w),
     .eng_refused  (eng_refused_w),
@@ -4768,6 +4778,7 @@ assign ps_aud_ready = ~(aud_ring_almost_full && aud_bp_armed && ~step_session);
 // the LPCM/MP2 frames aud_route routes to it. Costs no fabric -- the module was
 // always instantiated and never reset by the mode; `enable` only parked its FSM.
 wire        aud_dec_en = ~status[5];
+wire  [1:0] aud_drc = status[62:61];        // O[62:61] Dynamic Range
 wire        ac3_synced_dbg, ac3_err_dbg;
 
 dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000),
@@ -4776,6 +4787,7 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000),
     .clk         (clk_sys),
     .rst_n       (aud_rst_n & ~cb_host_rst),   // + once after the codebook copy
     .enable      (aud_dec_en & ~cb_busy),   // parked while the codebook copy runs
+    .drc_mode    (aud_drc),
     // D4 / P3: the codebook copy, the engine's codebook port, and DTS on or off
     .cb_cp_mode  (cb_busy),
     .cb_lpcm_step(cb_lpcm_step),
@@ -4792,6 +4804,8 @@ dvd_audio_decode #(.CLK_HZ(27000000), .AUD_HZ(48000),
     .dbg_eng_refused (eng_refused_w),
     .dbg_eng_last_err(eng_last_err_w),
     .dbg_dts_active  (dts_active_w),
+    .dbg_dts_dynf    (dts_dynf_w),
+    .dbg_drc_capped  (drc_capped_w),
     .pause       (pause_aud),    // freeze/silence audio while paused OR a seek gesture is held
     // This aud_rst_n pulse is the GENTLE, audio-only class (flush_ctl's
     // aud_resync: a track switch, or a non-seamless display re-anchor) and NOT

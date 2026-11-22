@@ -4,7 +4,8 @@
 // Vectors (+dir=DIR, tools/imdct_isa.py vec): one continuous run from a junk ring.
 // Per item, the bench
 //   N  writes the block's coefficients into X (slot = channel), starts op 25 with the
-//      block's side information, gives imdct_go;
+//      block's side information and its Dynamic Range mode (drc_mode, then inverted for
+//      the rest of the op: the op must use the mode it latched), gives imdct_go;
 //   U  (ISKIP, a7[0]) writes an injected work buffer and channel 0's delay line into the
 //      ring, marks channel 0 valid, starts op 25 at the IFFT -- the only way to reach
 //      the 33-bit pre-sums (no coefficient block does through PRE);
@@ -33,6 +34,7 @@ module imdct_eng_tb;
     logic  [15:0] pcm_l, pcm_r;
     logic         pcm_valid, xq_ready, cb_req, cb_sel;
     logic  [11:0] cb_addr;
+    logic   [1:0] drc_mode = 2'd0;
 
     dts_vec dut (
         .clk, .rst_n, .start, .op, .args, .done,
@@ -41,12 +43,12 @@ module imdct_eng_tb;
         .pcm_l, .pcm_r, .pcm_valid, .pcm_ready(1'b1),
         .xq_addr(11'd0), .abort(1'b0),
         .imdct_req, .imdct_go, .imdct_fin, .pcm_ra(9'd0), .pcm_q,
-        .coef_ra(11'd0), .coef_q);
+        .coef_ra(11'd0), .coef_q, .drc_mode);
 
     string dir;
     logic [34:0] ring0  [0:2047];
     logic [34:0] expect_w [0:2047];
-    integer fi, fc, fj, fe, n, cyc, gcyc, fcyc, nitems, nf, blksw, dyn, acmod, cmix, sur, ecyc, sh;
+    integer fi, fc, fj, fe, n, cyc, gcyc, fcyc, nitems, nf, blksw, dyn, acmod, cmix, sur, mode, ecyc, sh;
     logic [23:0] cw;
     logic [34:0] w;
     byte kind;
@@ -74,7 +76,7 @@ module imdct_eng_tb;
         while ($fscanf(fi, " %c", kind) == 1) begin
             args = '0;
             if (kind == "N") begin
-                if ($fscanf(fi, "%d %d %d %d %d %d %d", nf, blksw, dyn, acmod, cmix, sur, ecyc) != 7)
+                if ($fscanf(fi, "%d %d %d %d %d %d %d %d", nf, blksw, dyn, acmod, cmix, sur, mode, ecyc) != 8)
                     $fatal(1, "FAIL [setup] items.txt line %0d", nitems);
                 for (int ch = 0; ch < nf; ch++)
                     for (int b = 0; b < 256; b++) begin
@@ -84,6 +86,7 @@ module imdct_eng_tb;
                 args[15:0] = blksw; args[31:16] = dyn; args[47:32] = acmod;
                 args[79:64] = cmix; args[95:80] = sur;
             end else begin
+                mode = 0;
                 if ($fscanf(fi, "%d %d", sh, ecyc) != 2) $fatal(1, "FAIL [setup] items.txt line %0d", nitems);
                 for (int k = 0; k < 256; k++) begin
                     if ($fscanf(fj, "%h", w) != 1) $fatal(1, "FAIL [setup] inj.mem short");
@@ -97,8 +100,10 @@ module imdct_eng_tb;
                 args[15:0] = sh; args[47:32] = 1; args[127:112] = 1;          // 1/0, ISKIP
             end
             // start op 25; give go once it has waited two cycles (ISKIP's schedule read)
-            @(negedge clk); start = 1'b1; op = 6'd25;
-            @(negedge clk); start = 1'b0;
+            // the item's Dynamic Range mode at the start, then a different one for the
+            // rest of the op: dts_vec must use the mode it latched (the OSD can move mid-op)
+            @(negedge clk); start = 1'b1; op = 6'd25; drc_mode = mode[1:0];
+            @(negedge clk); start = 1'b0; drc_mode = ~mode[1:0];
             n = 0;
             while (!imdct_req) begin @(negedge clk); if (++n > 100) $fatal(1, "FAIL [hang] item %0d: no imdct_req", nitems); end
             @(negedge clk); @(negedge clk);

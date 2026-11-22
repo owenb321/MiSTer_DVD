@@ -69,7 +69,7 @@ module pause_wdog_tb;
     dvd_audio_decode #(.CLK_HZ(CLK_HZ), .AUD_HZ(48000), .WDOG_W(WDOG_W)) dut (
         .cb_cp_mode(1'b0), .cb_lpcm_step(1'b0), .cb_mp2_step(1'b0), .cb_lpcm_q(), .cb_mp2_q(),
         .cb_req(), .cb_sel(), .cb_addr(), .cb_valid(1'b0), .cb_data(64'd0), .dts_tables_ok(1'b0),
-        .clk(clk), .rst_n(rst_n), .enable(1'b1), .pause(pause), .aud_soft_switch(1'b0),
+        .clk(clk), .rst_n(rst_n), .enable(1'b1), .drc_mode(2'd0), .pause(pause), .aud_soft_switch(1'b0),
         .ring_byte(ring_byte), .ring_valid(ring_valid), .ring_ready(ring_ready),
         .frame_valid(frame_valid), .frame_len(16'(FLEN)), .frame_type(2'd0),      // AC-3
         .lpcm_quant(2'd0), .lpcm_nch_m1(3'd1), .lpcm_fs96(1'b0), .lpcm_bad(1'b0),

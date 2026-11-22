@@ -26,6 +26,10 @@ control. It is rare. In a survey of 491 discs it appeared on 4 frames of 1 disc.
 
 If a track plays silent and shows `AUDIO UNSUPPORTED`, cycle to another with **B7**.
 
+Each Dolby Digital block also carries the soundtrack's own dynamic range compression. It is
+applied as authored by default; the **Dynamic Range** setting turns it off (**Full**) or
+doubles it (**Night**) — see [Settings](../playback/settings.md#dynamic-range).
+
 ## WAV files
 
 A `.wav` file selected from `Load Video` plays as audio with the bouncing logo on screen —
@@ -175,6 +179,10 @@ Two limits worth knowing:
 
 - **It does not apply in `Passthru`.** The core sends an untouched bitstream, so level is
   entirely your receiver's business — see [Bitstream passthrough](passthrough.md).
+- **It is not the same as Dynamic Range = Night.** Night uses the compression authored into a
+  Dolby Digital soundtrack, before the volume control; Core Volume's boost works on any
+  format. For quiet late-night listening of a Dolby Digital disc, try Night first — see
+  [Settings](../playback/settings.md#dynamic-range).
 - **It is a playback control, not a repair.** It sits at the very end of the chain, after
   decoding and after the audio filter.
 

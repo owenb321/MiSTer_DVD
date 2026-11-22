@@ -138,7 +138,7 @@ module aud_retime_tb;
     // the hold, or a hold that times out (S11) is released by the fallback on the
     // old clock the same instant. Both longer than S2's deliberate 150 ms wait.
     dvd_audio_decode #(.CLK_HZ(2700000), .AUD_HZ(48000), .ARM_TIMEOUT_W(21), .HOLD_W(20)) dut ( .cb_cp_mode(1'b0), .cb_lpcm_step(1'b0), .cb_mp2_step(1'b0), .cb_lpcm_q(), .cb_mp2_q(), .cb_req(), .cb_sel(), .cb_addr(), .cb_valid(1'b0), .cb_data(64'd0), .dts_tables_ok(1'b0),
-        .clk(clk), .rst_n(rst_n), .enable(1'b1), .pause(1'b0), .aud_soft_switch(1'b0),
+        .clk(clk), .rst_n(rst_n), .enable(1'b1), .drc_mode(2'd0), .pause(1'b0), .aud_soft_switch(1'b0),
         .ring_byte(ring_byte), .ring_valid(ring_valid), .ring_ready(ring_ready),
         .frame_valid(frame_valid), .frame_len(frame_len), .frame_type(2'd2),   // LPCM
         .lpcm_quant(2'd0), .lpcm_nch_m1(3'd1), .lpcm_fs96(1'b0), .lpcm_bad(1'b0),

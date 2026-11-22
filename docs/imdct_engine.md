@@ -53,7 +53,14 @@ constant, and fold it into the accumulator:
 - `acc (=|+=|-=) sample`: an add;
 - on the element's last term, write `acc` to its destination.
 
-DRC is the one variable shift (`(c × mant) >>> (5 − e)`).
+DRC is the one variable shift (`(c × mant) >>> (5 − e)`). Since issue #189 the multiplier
+and shift come from `drc_mode` (the OSD's Dynamic Range), latched at the op's start:
+- Normal: as above.
+- Full: `32, 5`.
+- Night: `(32 + Y)², 10 − 2e`, capped at `63, 2` when e ≥ 2.
+
+`tools/imdct_model.drc_coef` is the definition that both emulators share. `status_log.md`
+"Dynamic Range" has the rest.
 
 ### Datapath changes in `dts_vec`
 

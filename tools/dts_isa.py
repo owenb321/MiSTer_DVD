@@ -93,6 +93,7 @@ NCH_MAX = 5                       # primary channels (AMODE < 10)
 
 # Counters the CNT op and the engine keep (telemetry ids)
 CNT_DMIX_IGNORED = 0
+CNT_DYNF = 1                      # DTS frames whose header sets DYNF (issue #189)
 
 
 def s16(v):
@@ -234,6 +235,7 @@ def assemble(text, mutate=None, vops=None, cbase=None, extra_equ=None, org=0):
     equ.update({'B_' + n.upper(): i for n, i in BOOK_ID.items()})
     equ.update({'V_' + n.upper(): i for n, i in vop_map.items()})
     equ['CNT_DMIX_IGNORED'] = CNT_DMIX_IGNORED
+    equ['CNT_DYNF'] = CNT_DYNF
     equ['ERRV'] = ERR_BASE
     equ.update(extra_equ or {})
     aliases, labels, stmts = {}, {}, []
