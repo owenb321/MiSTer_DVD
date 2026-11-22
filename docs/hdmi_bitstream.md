@@ -741,9 +741,11 @@ check frames, but it does answer whether a bitstream is on the wire at all.
 That is issue #197 measured at the output itself, with a control that fails. The chip-log
 A/B in `docs/status_log.md` showed the same thing one step earlier, at the ADV7513's mode.
 
-⏳ **Still needs a transparent path:** the bit-exact frame match, the byte order, and #196
-(a gain applied to a bitstream is indistinguishable from this card's own alteration).
-Use a USB S/PDIF input known to be bit-perfect for optical, or another HDMI card.
+Issue #196 needs no capture. It is a documentation fix for behaviour the code
+guarantees: both bitstream paths are muxed in after `audio_out`'s `vol_att`
+(§7 Known limitations), and the field report observed exactly that.
+⏳ **Nice to have, with a transparent path** (a bit-perfect USB S/PDIF input, or another
+HDMI card): the bit-exact frame match and the byte order.
 ⏳ The `--iso` reference path is also not yet run against a real image.
 
 ---

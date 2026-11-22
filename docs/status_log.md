@@ -77,8 +77,10 @@ capture card, analysed with `tools/iec61937_check.py`. The control (`DVD_vcdrest
 kept sending 212 AC-3 bursts per 8 s at Audio Off; the fix sent exact digital silence
 (`docs/hdmi_bitstream.md` "First rig capture"). The card alters every sample, so it can't
 check frames bit for bit.
-**Next step:** a bit-transparent capture path (a bit-perfect USB S/PDIF input) for the
-frame match and #196's volume claim; then a reporter confirmation.
+#196 is a documentation fix for behaviour the code guarantees (the bitstream is muxed
+after `vol_att`), and the report itself observed it, so no capture is needed.
+**Next step:** a reporter confirmation. Optional: a bit-exact frame match through a
+bit-perfect USB S/PDIF input.
 
 ---
 
