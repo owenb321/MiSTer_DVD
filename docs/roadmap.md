@@ -706,7 +706,7 @@ save-states build, M10K 533 → 520, DSP 91 → 84, 98 % → 91 % ALM, timing PA
 against `main` (5.1, short blocks, stereo; `audio_check.py`), then the maintainer's call on
 pushing both branches.**
 
-### ⏳ Issue #189: Dynamic Range (AC-3 DRC Normal / Full / Night), on `feature/drc-setting`
+### ✅ Issue #189: Dynamic Range (AC-3 DRC Normal / Full / Night), MERGED PR #199
 
 - [x] RTL, models, gates (`run_drc_mode.sh --red`, `run_imdct_eng.sh --red`, `run_dts.sh` V20). Normal
   is bit-identical (`run_ac3_ab.sh`). DTS DYNF is counted, not applied. Record: `status_log.md`
@@ -716,7 +716,7 @@ pushing both branches.**
   Night − Normal tracks Normal − Full window by window (corr 0.999, slope 1.001).
 - [x] By ear (2026-11-21, the maintainer): no gap switching modes live; Night noticeably lifts quiet
   sections; the three modes are otherwise close on this disc.
-- [ ] ⏳ PR.
+- [x] MERGED PR #199.
 - [ ] Optional follow-ups: an independent PCM golden for Full/Night (a52dec `-r` / liba52's DRC
   callback), and our own compressor for DTS/LPCM/MP2 Night if users ask for it.
 
