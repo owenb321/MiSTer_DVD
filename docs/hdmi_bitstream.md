@@ -852,6 +852,15 @@ Off, `dvd_hdmi_bitstream` auto, the new Main on both arms.
 
 So the fix works end to end, and the control fails the way the issue predicted.
 
+**The AC-3 silence was §9's guard, and the stacked build clears it (2026-11-22, the same
+TV).** `DVD_ss1hdmibs_20261122_0450` (§9's fix on top of this one, same Main), *A.I.*,
+Passthru, auto, by ear:
+- AC-3 track: `bs_session=1`, chip `std-I2S+CSreg`, `dts_active 0`: **sound**. The TV has
+  no codec display, so it was by ear only;
+- DTS track: `pcm_session=1`, chip `PCM I2S`, `dts_active 1`: **sound**;
+- back to AC-3: the chip returns to bitstream, **sound**.
+So both halves of this fix are confirmed on the sink they were written for.
+
 > **Superseded (2026-11-22): the cause was the core, not the board.** The SuperStation One
 > is an MCP23009 board, and `sys_top`'s `mcp_en` guard kept the bitstream off its HDMI
 > pins (§9). The "not bit-exact" conclusion below is wrong; it stays as the bisect's record.

@@ -25,7 +25,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 **State:** 🔧 `feature/ss1-hdmi-bs` (`dev-ss1hdmibs`, stacked on #201's branch); fit
 `DVD_ss1hdmibs_20261122_0450` PASS. ✅ HW A/B by ear on rig .201 (SuperStation One →
 AV receiver, *A.I.* AC-3): control (#201 build) decoder off; fix Dolby Digital, twice,
-forced and auto. ✅ DE10-Nano regression on .236 (Hagibis: Passthru bursts as #197, Decode PCM clean PCM); the SuperStation's analog jack not listened to (skipped).
+forced and auto. ✅ Stacked with #201 into the AC-3-only Insignia TV: AC-3 bitstream plays (silent on both #201 arms before), DTS decodes to PCM and plays, and switching back to AC-3 bitstreams again (`hdmi_bitstream.md` §8). ✅ DE10-Nano regression on .236 (Hagibis: Passthru bursts as #197, Decode PCM clean PCM); the SuperStation's analog jack not listened to (skipped).
 
 `sys_top`'s `hdmi_bs_ok` refused the bitstream on `SW[0] | mcp_en` boards, because stock
 feeds their I2S DAC from the HDMI audio pins. The SuperStation One is an MCP23009 board,
@@ -47,7 +47,7 @@ same-sitting A/B settled it. **Gate:** `check_hdmi_bs_dac_wiring.py --red` (in
 **HW A/B by ear on rig .201** (Insignia NS24D310NA21, EDID AC-3 without DTS; *A.I.*): DTS
 track silent on the control, plays on the fix (decoded, chip released to PCM). **Rig .236
 → AV receiver** (lists DTS): AC-3 and DTS both bitstreamed and decoded by the receiver, so
-the fix leaves DTS alone there. **Found on the way:** rig .201, a **SuperStation One**,
+the fix leaves DTS alone there. The AC-3 silence on that TV (both arms) was the SuperStation guard: with the stacked fix both AC-3 (bitstream) and DTS (PCM) play there, by ear. **Found on the way:** rig .201, a **SuperStation One**,
 could not bitstream over HDMI to anything. The cause was `sys_top`'s `mcp_en` guard, not
 the board: fixed on `feature/ss1-hdmi-bs` (the entry above, `hdmi_bitstream.md` §9). **Design and decisions:** `docs/hdmi_bitstream.md` §8.
 
