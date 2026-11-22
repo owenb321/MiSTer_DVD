@@ -910,11 +910,31 @@ noise. **Change (`feature/ss1-hdmi-bs`, 7821e5a):** the DAC pins read the PCM se
 
 So the guard was not the SuperStation's problem. Whichever pins its ADV7513 reads, and
 whether or not it is an MCP board, the third build reached it. Its registers match the
-DE10-Nano's (§8), and its TOSLINK passthrough decodes. **Remaining hypothesis:** something
-on that board alters the I2S bits or the signalling between the FPGA and the transmitter,
-which PCM survives and a 61937 sync word does not. It needs a capture of the SuperStation's
-HDMI audio (the Hagibis on .201, compared with .236's #197 capture: burst period and
-burst-shaped runs) or the board's audio wiring from its maker.
+DE10-Nano's (§8), and its TOSLINK passthrough decodes.
+
+**The capture (2026-11-22): the bursts are on the SuperStation's HDMI wire, shaped like
+the DE10-Nano's.** The SuperStation's HDMI straight into the Hagibis, the change's build,
+`dvd_hdmi_bitstream=2`, *A.I.* AC-3, Passthru, 10 s, raw `hw:CARD=Hagibis`, compared with
+rig 236's #197 capture (`cap1/on1`, T2) through the same card:
+
+| | SuperStation (.201) | DE10-Nano (.236) |
+|---|---|---|
+| burst period | 3072 words (265×), 3070 (9×, the card's re-clock) | 3072 (208×), 3070 (4×) |
+| burst length | 902 words | 902 words |
+| first words as the card delivers them | `f881 4d82 fff1 382c 0b60 …` | `f881 4d82 fff1 382c 0b60 …` |
+
+The card alters the same words in the same way on both boards, so whatever reaches the
+SuperStation's ADV7513 is the same stream the DE10-Nano sends. The chip side matches too:
+N = 6144 and the measured CTS = 27000, steady over six reads, and the bus holds only the
+ADV7513's own maps (0x38/0x39/0x3C/0x3E/0x3F), with no second chip on it.
+
+**So the I2S path is ruled out.** The difference is outside the audio samples, in
+something this card does not show: the channel-status non-PCM bit or the audio InfoFrame
+as the receiver gets them (the registers that set both are identical), or the integrity of
+the TMDS link. A PCM sample with an error is a click. A 61937 burst with an error is
+rejected, so a marginal link could leave the receiver at "decoder off" while PCM plays.
+**Next test (no build):** run the SuperStation into the receiver through an HDMI
+repeater/switch, which regenerates the link, or with a different short cable.
 
 **Whether to keep the change:** on a DE10-Nano with an MCP23009 analog board, HDMI
 passthrough was silent by construction, and the change fixes that by design. That has
