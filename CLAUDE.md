@@ -415,6 +415,7 @@ otherwise; `--red` runs its mutation arms).
 | Field-coded MPEG-2 display order (`first_field_top`) | ✅ | `field_parity.md` | `run_field_order.sh`, `check_field_order_wiring.py` |
 | Pause holds one field (field still) | ✅ | `field_parity.md` | `run_pause_still.sh` |
 | Deinterlace = Weave/Bob/Blend (`O[51:50]`) | ✅ | `field_blend.md` | `run_field_blend.sh`, `check_field_blend_wiring.py` |
+| ascal Bob resync: Bob switched on over a running 480i raster no longer stays combed on HDMI (`sys/ascal.vhd`, one line; from the HDHR core) | 🔧 `feature/ascal-bob-resync`, fit PASS; ✅ HIL A/B (control 7/8 combed, fix 8/8 bobbed); ⏳ PR | `field_blend.md` "ascal Bob resync" | `check_ascal_bob_resync.py --red` (in `run_field_blend.sh`) |
 | Mode-switch re-align + switch blank; `pal_detect` hardening | ✅ | `single_raster_analog.md` §6 | `run_mode_realign.sh` |
 | Post-seek reference re-align (issue #45) | ✅ | `seek_realign.md` | `run_seek_realign.sh` |
 | Film 24p evidence gate (no flapping) | ✅ | `film_24p_plan.md` §14 | `run_film_evidence.sh` |

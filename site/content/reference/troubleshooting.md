@@ -490,6 +490,13 @@ Also confirm **`Frame Drop` is On** — advancing past a frame is the only way t
 can recover time once it has fallen behind, so with it off the picture just runs later and
 later.
 
+### Deinterlace set to Bob still looks combed over HDMI
+
+On `Video Output = Interlaced`, older versions of the core could leave the HDMI picture
+combed (woven) when `Deinterlace` was switched to Bob during playback. Update the core.
+On an older version, switching `Video Output` to Progressive and back clears it, as does
+setting Bob before you start the disc. See [Interlaced video](../video/interlaced.md).
+
 ### Video skips frames
 
 This should not happen on either **Video Output** setting: every disc measured keeps up,
