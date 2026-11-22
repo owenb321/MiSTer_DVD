@@ -435,3 +435,38 @@ cannot make:
 - the OSD row shows 3 values on Progressive and 2 on Interlaced, and swaps live (the
   maintainer's eye; screenshots do not carry the OSD);
 - Bob motion judged by eye.
+
+## ascal Bob resync (2026-11-22, PR #204)
+
+**State:** ✅ MERGED (PR #204; `dev-bobresync`); fit
+`DVD_bobresync_20261122_1748` PASS. ✅ HIL A/B on rig 236.
+
+**The bug.** On the Interlaced raster, `Deinterlace = Bob` asks ascal to bob the HDMI
+output (`HDMI_BOB_DEINT`). ascal triple-buffers an interlaced input in two chains
+(`o_ibuf0/o_obuf0`, `o_ibuf1/o_obuf1`). Weave advances them on alternate fields, and bob
+writes and reads every field through one of them. Stock re-aligns the chains only while
+the input is progressive (`IF o_inter='0' THEN o_ibuf1<=o_ibuf0; o_obuf1<=o_obuf0;`). So
+Bob switched on over a running 480i raster could leave them offset: a woven, combed
+picture with no line doubling, until a trip through a progressive raster. Found and
+measured on 1080i by the HDHR core, which shares this ascal (8 of 11 mid-stream switches
+bad, 10 of 10 good when Bob was set before the interlaced raster started).
+
+**The fix** (`sys/ascal.vhd`, `DVD-FORK FIX`): re-align while bob is on as well,
+`IF o_inter='0' OR o_bob_deint='1'`. Weave is untouched, and so is every progressive input.
+Gate: `tools/check_ascal_bob_resync.py --red` (in `run_field_blend.sh`).
+
+**HIL A/B (rig 236, Hagibis).** *The Office* (true-interlaced), Video Output = Interlaced,
+Weave at launch, then 8 rounds of: 3 s under Weave, Deinterlace = Bob live, 3 s, back to
+Weave. The rig ran `video_mode=2` (720×480p60), so ascal is 1:1 vertically and a bobbed
+frame has identical line pairs. A moving frame counts as line-doubled when
+`min(mean|f[0::2]-f[1::2]|, mean|f[1:-1:2]-f[2::2]|) < 0.5` (the HDHR session's metric):
+
+| | control (`DVD_dtssink`, no fix) | fix |
+|---|---|---|
+| Weave, all rounds | 0 line-doubled | 0 line-doubled |
+| Bob switched on mid-stream | **7 of 8 bad** (11 of ~110 frames doubled); 1 good | **8 of 8 good** (109 of 109) |
+
+**Known limit:** the A/B was measured at 720×480 output. At other output modes ascal
+scales, and the line-pair metric no longer applies; the fix itself does not depend on the
+output mode.
+

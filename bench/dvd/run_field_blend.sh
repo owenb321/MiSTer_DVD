@@ -164,6 +164,12 @@ launch chain chain_bob_vscale  pass - +vscale=1 +bob=1
 launch chain chain_film_vscale pass - +vscale=1 +pfr=1
 score
 
+# ascal's Bob on the Interlaced raster (HDMI): its field-buffer chains re-align while bob is
+# on, so a mid-stream switch to Bob is not left combed (docs/field_blend.md "ascal Bob resync").
+echo "== ascal bob resync"
+if [ $RED = 1 ]; then python3 tools/check_ascal_bob_resync.py --red || fail=1
+else python3 tools/check_ascal_bob_resync.py || fail=1; fi
+
 if [ $RED = 1 ]; then
   echo "== field_blend: RED =="
   $IV -Pfield_blend_tb.BLEND=0 -o "$OUT/mod_red" dvd/field_blend.sv $MOD_SRC 2>"$OUT/mod_red.build.log" || { echo "  BUILD FAILED: mod_red"; fail=1; }

@@ -1965,7 +1965,13 @@ BEGIN
 			END IF;
 
 			-- Non-interlaced, use same buffer for even and odd lines
-			IF o_inter='0' THEN
+			-- DVD-FORK FIX (docs/field_blend.md "ascal Bob resync"): also while bob is on.
+			-- Weave toggles the two chains on alternate fields; bob writes and reads
+			-- every field through one of them, so a bob switch on an already-
+			-- interlaced input left them offset (combed output, no line doubling)
+			-- until a progressive raster resynced them. Found and measured by the
+			-- HDHR core: 8 of 11 mid-stream switches bad before, 10 of 10 good after.
+			IF o_inter='0' OR o_bob_deint='1' THEN
 				o_ibuf1<=o_ibuf0;
 				o_obuf1<=o_obuf0;
 			END IF;
