@@ -22,8 +22,8 @@ from the PRs merged since the last release.
   `` `CORE_VERSION` `BUILD_DATE` ``.
   `build_release.sh` refuses a `dev-` string on a publishable `--release` build and refuses
   a bare semver on a dev build, so the invariant is mechanical rather than remembered.
-- **Release tag = `v<semver>`** (e.g. `v0.4.0`); title = `v<semver>`, optionally
-  `v<semver> — <headline>` (see "The notes format").
+- **Release tag = `v<semver>`** (e.g. `v0.4.0`); title = `v<semver>` and nothing
+  else (by user decision, 2026-11-22: no headline in the title).
   (This replaces the older `v<version>-<yyyymmdd>` tag format — pure semver now.)
 - **Zip = `MiSTer_DVD_v<semver>.zip`** (produced by `tools/package_release.sh`).
 - **★ The `.rbf` filename stays `DVD_YYYYMMDD.rbf` — date only, NEVER a version.** This is
@@ -65,11 +65,11 @@ what the notes say, and because `CORE_VERSION` is part of the netlist — decidi
 would cost a second compile.
 
 1. **Gather the notes.** Every PR merged since the last release (recipe in "Release notes"
-   below), grouped into human sentences. Then run the `docs-sweep` skill over
+   below), in the format codified there. Then run the `docs-sweep` skill over
    `<prev_tag>..HEAD`: you have just read every PR, so asking of each one "does this change
    controls, an OSD option, an on-screen message, install steps, or compatibility?" is
    nearly free. Fix the owning page in `site/content/` for anything stale.
-   The headline you write here decides the version (patch / minor / major — see `CLAUDE.md`).
+   What the notes contain decides the version (patch / minor / major — see `CLAUDE.md`).
 
 2. **Land ONE release commit** on `main`, containing the docs-sweep edits **and**:
    - `CORE_VERSION` in `dvd/emu.sv` → `"v<semver>"` (from whatever `dev-<slug>` main carries).
@@ -119,7 +119,7 @@ would cost a second compile.
    ./main/build_main.sh`): same script as CI, nothing public yet. Show the maintainer the
    report and the notes. Only when they approve: `git push origin main`, then:
    ```bash
-   ./tools/publish_draft.sh v<semver> --notes /tmp/relnotes.md --title "v<semver> — <headline>"
+   ./tools/publish_draft.sh v<semver> --notes /tmp/relnotes.md --title "v<semver>"
    ```
    It pre-flights locally (version matches the tag, tree clean and pushed, core
    non-marginal, manifest matches the `.rbf`), creates the **draft** with the `.rbf` +
@@ -258,9 +258,9 @@ match it. The shape, in order:
    paragraph, then `Manual: <https://owenb321.github.io/MiSTer_DVD/>`.
 
 No "Generated with Claude Code" footer and no `@` mentions. Manual pages are linked by their
-absolute `https://owenb321.github.io/MiSTer_DVD/…` URL. The **title** is `v<semver>`, or
-`v<semver> — <headline>` when one change leads the release (v0.9.0, v0.8.0). v0.9.1 and
-v0.10.0 used the bare version.
+absolute `https://owenb321.github.io/MiSTer_DVD/…` URL. The **title** is the bare `v<semver>`, always
+(by user decision, 2026-11-22). v0.9.0 and earlier carried a `— <headline>`; that is
+retired. The opening paragraph does the headline's job.
 
 ### ★ Thanks section (mandatory, by user decision 2026-11-22)
 
