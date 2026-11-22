@@ -22,7 +22,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## Dynamic Range: AC-3 DRC Normal / Full / Night; DTS DYNF counted (issue #189, 2026-11-12)
 
-**State:** ✅ HW capture A/B on `feature/drc-setting` (2026-11-13); ⏳ by ear. Fitted (`DVD_drc_20261113_0253`, SEED 7):
+**State:** ✅ HW capture A/B on `feature/drc-setting` (2026-11-13); ✅ by ear (2026-11-21, the maintainer, Road Warrior ch. 3: no gap or click when switching modes live; the modes are close to each other on this disc, but Night noticeably lifts the quiet sections). Fitted (`DVD_drc_20261113_0253`, SEED 7):
 **+67 ALM** (38,259 → 38,326, 91 %), M10K 520 → 520, DSP 87 → 87 vs `DVD_vcdrestart` (`main`).
 Timing PASS (clk_dec ≥ 90.8 MHz, clk_mem ≥ 99.8), and `clock_check` PASS.
 

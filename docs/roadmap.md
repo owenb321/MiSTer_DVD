@@ -714,7 +714,9 @@ pushing both branches.**
 - [x] Fit: +67 ALM, +0 M10K, +0 DSP, timing PASS (SEED 7).
 - [x] HIL capture A/B (2026-11-13, Road Warrior ch. 3): Normal = `main` (per-window max 0.06 dB);
   Night − Normal tracks Normal − Full window by window (corr 0.999, slope 1.001).
-- [ ] ⏳ The maintainer's ear, then a PR.
+- [x] By ear (2026-11-21, the maintainer): no gap switching modes live; Night noticeably lifts quiet
+  sections; the three modes are otherwise close on this disc.
+- [ ] ⏳ PR.
 - [ ] Optional follow-ups: an independent PCM golden for Full/Night (a52dec `-r` / liba52's DRC
   callback), and our own compressor for DTS/LPCM/MP2 Night if users ask for it.
 
