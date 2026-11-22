@@ -838,6 +838,25 @@ Found while working on #196/#197. No user had reported it.
 [15] AC-3 engages and decoded DTS releases, with no `cfg[15]` push per track; RED
 `nodts-never-set`, `nodts-ignores-dts-sad`, `nodts-in-force-mode`, `nodts-not-pushed`).
 
-**HW check.** An AC-3-only sink can be built from an edited EDID, or the rig's own EDID if
-it lacks DTS. With a DTS track, `tools/iec61937_check.py --expect pcm` should show no
-bursts, and an AC-3 track should show AC-3 bursts.
+**HW A/B (2026-11-22, rig .201, by ear).** The sink was an Insignia NS24D310NA21 TV. Its
+EDID, read off the ADV7513 at `i2c-1:0x3f`, lists LPCM 2 ch and AC-3 6 ch at 48 kHz, and
+no DTS. Disc: *A.I.* VTS 1, track 1 AC-3 5.1 and track 3 DTS 5.1. Passthru, Disc Menus
+Off, `dvd_hdmi_bitstream` auto, the new Main on both arms.
+
+| | control `DVD_drc_20261113_0253` | fix `DVD_dtssink_20261122_0152` |
+|---|---|---|
+| Main's log | `no_dts=1 core_nodts=0/0` | `no_dts=1 core_nodts=1/1` |
+| DTS track | `bs_session=1`, chip non-PCM, decoder idle: **silent** | `pcm_session=1`, chip `PCM I2S`, `dts_active 1`: **sound** |
+| AC-3 track | `bs_session=1`, chip non-PCM: silent | the same: silent |
+
+So the fix works end to end, and the control fails the way the issue predicted. **The
+AC-3 silence is a separate, pre-existing finding**, identical on both arms: this TV lists
+AC-3 but plays nothing from our HDMI AC-3 bitstream. Our HDMI bitstream had only been
+confirmed into AV receivers and the capture card, never into a TV's own speakers. Either
+this TV lists AC-3 only to pass it on (ARC/optical out), or it does not accept our
+`std-I2S+CSreg` signalling. That needs its own investigation and issue. Until then a TV
+like this one needs `Decode PCM` for AC-3.
+
+The rigs' other sinks, for the record: rig 236's Hagibis card and a "MATRIX 4*4" switch,
+and an AOC Q27G3XMN monitor, list LPCM only. A Samsung TV (`SAM 0d42`) lists AC-3 + DTS.
+An Insignia NS-50E440NA14 behind (apparently) an AVR lists everything up to TrueHD/DTS-HD.
