@@ -899,8 +899,9 @@ An Insignia NS-50E440NA14 behind (apparently) an AVR lists everything up to True
 **State:** 🔧 `feature/ss1-hdmi-bs` (stacked on #201's branch), fit
 `DVD_ss1hdmibs_20261122_0450` PASS. ✅ HW A/B by ear on rig .201 (SuperStation One →
 the AV receiver over HDMI, *A.I.* AC-3, Passthru): control **decoder off**, fix **Dolby
-Digital**, fix again **Dolby Digital**. ⏳ The DE10-Nano regression check on .236, and the
-SuperStation's analog jack by ear (Decode PCM) on the fix build.
+Digital**, fix again **Dolby Digital**. ✅ DE10-Nano regression on .236 (Hagibis, *A.I.*): Passthru 212 AC-3-period bursts in 8 s,
+the same as the #197 reference; Decode PCM: PCM, no bursts. The SuperStation's analog
+jack by ear was skipped (maintainer's call): it gets the PCM serializer, as before.
 
 **The guard.** `sys/sys_top.v` had `hdmi_bs_ok = hdmi_bs_en & ~(SW[0] | mcp_en)`. On a
 board whose analog jack is an I2S DAC (`SW[0]`, or an MCP23009 I/O-expander board:

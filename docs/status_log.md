@@ -25,7 +25,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 **State:** 🔧 `feature/ss1-hdmi-bs` (`dev-ss1hdmibs`, stacked on #201's branch); fit
 `DVD_ss1hdmibs_20261122_0450` PASS. ✅ HW A/B by ear on rig .201 (SuperStation One →
 AV receiver, *A.I.* AC-3): control (#201 build) decoder off; fix Dolby Digital, twice,
-forced and auto. ⏳ DE10-Nano regression on .236; the SuperStation's analog jack by ear.
+forced and auto. ✅ DE10-Nano regression on .236 (Hagibis: Passthru bursts as #197, Decode PCM clean PCM); the SuperStation's analog jack not listened to (skipped).
 
 `sys_top`'s `hdmi_bs_ok` refused the bitstream on `SW[0] | mcp_en` boards, because stock
 feeds their I2S DAC from the HDMI audio pins. The SuperStation One is an MCP23009 board,
@@ -35,8 +35,7 @@ fix and a diagnostic build both failed, and the docs briefly blamed the board's 
 wiring. The receiver had most likely been left on its optical input. A Hagibis capture
 then showed bursts on the SuperStation's HDMI identical to the DE10-Nano's, and a
 same-sitting A/B settled it. **Gate:** `check_hdmi_bs_dac_wiring.py --red` (in
-`run_hdmi_bitstream.sh`). **Detail:** `docs/hdmi_bitstream.md` §9. **Next:** the
-regression check on .236, then a PR after #201's.
+`run_hdmi_bitstream.sh`). **Detail:** `docs/hdmi_bitstream.md` §9. **Next:** a PR after #201's.
 
 ---
 
