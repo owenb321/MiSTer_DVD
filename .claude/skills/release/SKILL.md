@@ -226,6 +226,24 @@ human sentence each — not just the raw PR titles. Call out anything user-visib
 formats, new OSD options, new controls, fixed limitations) and anything that changes
 install steps. Write to `/tmp/relnotes.md` for `--notes-file`.
 
+### ★ Thanks section (mandatory, by user decision 2026-11-22)
+
+Every release's notes carry a generic **Thanks** section for the users who reported bugs
+or tested builds, through GitHub issues **or** Discord. Most reports arrive on Discord.
+
+- **GitHub reporters** can be gathered: take each issue the release's PRs closed
+  (`Fixes #NN` / `Closes #NN` in the PR bodies) and its `author.login`. Skip issues the
+  maintainer filed themselves: those are usually Discord reports transcribed by the
+  `field-report` skill.
+- **Discord reporters cannot be gathered.** `field-report` deliberately strips Discord
+  handles from issues (public repo), so the issue says only `_Reported via Discord_`. The
+  names come from the maintainer: ask for them.
+- Until the maintainer supplies them, the section holds a `TODO-THANKS` line.
+  ⛔ **Never create the draft or publish while `grep -q TODO-THANKS` matches the notes
+  file.** Check it right before `publish_draft.sh` and again before `--draft=false`.
+- Write names in plain text, without `@`: an `@login` in release notes notifies that
+  person, and that is the maintainer's call, not a default.
+
 ## Notes
 
 - Physical-disc/encrypted-ISO support ships as part of the release now (the `MiSTer_DVDcss`
