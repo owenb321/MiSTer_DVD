@@ -677,6 +677,49 @@ The §5a engage policy and teardown are covered off-hardware in two places:
 If (1) fails with the receiver naming nothing or mis-locking, try the §3
 preamble table before anything else.
 
+### Bit-exact capture instead of a receiver (`tools/iec61937_check.py`, 2026-11-21)
+
+A receiver says a bitstream plays, and only someone listening can say it. This tool
+measures it. Given a PCM capture of the core's HDMI or optical output, it finds the
+IEC 61937 bursts (`F872 4E1F`), pulls the AC-3 / DTS frame out of each burst and looks
+every frame up among the frames of the same substream read off the disc. That makes
+these HW-gate items measurable with no receiver:
+
+| Claim | Capture, then |
+|---|---|
+| passthrough is the disc's own frames | `--iso <disc> --stream 0x80 --expect bitstream` |
+| byte order right (the "static" gotcha) | the report's `byte order normal` (`swapped` = SPDIF Byte Order on Swap) |
+| no dropped / repeated frames | `order breaks` 0 over a capture with no seek in it |
+| Audio Off silences passthrough (issue #197) | `--expect silent` |
+| MiSTer volume never touches a bitstream (issue #196) | `--expect bitstream` passes at any volume |
+| teardown back to PCM (LPCM VOB, Decode PCM) | `--expect pcm` |
+
+It needs a capture path that hands back the wire's 16-bit words untouched: integer PCM,
+no resampling, no mixer, and the non-audio flag ignored. Two candidates on the rig:
+
+- **HDMI straight into the USB capture card**, with `dvd_hdmi_bitstream=2`, because the
+  card's EDID won't list AC-3. ⚠ On rig 236 that means unplugging the RetroTINK, which
+  normally feeds the card from the analog output.
+- **A bit-transparent USB S/PDIF input** for optical. Many cheap ones mute when the
+  non-audio flag is set.
+
+Whether a path is transparent is exactly what the first capture answers: matching frames
+= yes; no bursts, or bursts that don't match = no (or the core sent PCM). Capture through
+`hw:`, not PipeWire's float mixer: a float capture is refused because it cannot be
+bit-exact.
+
+**Validated:**
+- `--selftest` covers 19 synthetic cases, one per verdict, each failing exactly its own
+  case: a flipped bit, byte swap, wrong track, dropped frame, bursts where PCM or silence
+  was expected, and the reverse. It runs in `run_hdmi_bitstream.sh`.
+- Against an independent encoder (ffmpeg's `-f spdif` muxer) on real frames: the AC-3
+  vector `bench/ac3/vectors/bbb_short_5p1.ac3` (11/11) and T2's DTS slice
+  `bench/dvd/test_vobs/dts_t2_4k.hex` (4/4).
+
+⏳ **Not yet run:** the `--iso` reference path against a real image (the ISO library was
+not reachable from the workstation it was written on) and the first capture from the
+rig.
+
 ---
 
 ## 7. Known limitations

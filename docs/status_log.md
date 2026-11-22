@@ -72,8 +72,10 @@ its arm; fails 6 ways on `main`'s `emu.sv`), in `run_hdmi_bitstream.sh`;
 `check_player_regs_wiring.py --red` (+ "SPRM15 follows Audio Off");
 `check_std_convert_wiring.py`, `run_std_rate.sh --red`, `run_passthru_pcm.sh` green;
 `main/tests/run_tests.sh --red` green; ARM build clean against `fed03e5`.
-**Next step:** an audible check with a receiver (optical + HDMI) and a capture card that
-has a signal; a reporter confirmation.
+**Next step:** a bit-exact capture instead of a receiver. Run
+`tools/iec61937_check.py` (`docs/hdmi_bitstream.md` "Bit-exact capture") on HDMI
+straight into the card with `dvd_hdmi_bitstream=2`, at Audio On (`--expect bitstream`) and
+Audio Off (`--expect silent`), and at two MiSTer volumes. Then a reporter confirmation.
 
 ---
 

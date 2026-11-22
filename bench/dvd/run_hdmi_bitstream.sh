@@ -42,6 +42,11 @@ else
     python3 tools/check_audio_off_wiring.py || fail=1
 fi
 
+# The HIL capture checker's own verdicts (docs/hdmi_bitstream.md "Bit-exact capture"):
+# every case must give its verdict, so a broken checker cannot pass a capture.
+echo "=== iec61937_check selftest"
+python3 tools/iec61937_check.py --selftest || fail=1
+
 
 # ---------------------------------------------------------------------------
 # RED arm. The bench INSTANTIATES iec61937_wrap, so it cannot mutate the module
