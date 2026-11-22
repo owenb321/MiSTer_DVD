@@ -849,13 +849,25 @@ Off, `dvd_hdmi_bitstream` auto, the new Main on both arms.
 | DTS track | `bs_session=1`, chip non-PCM, decoder idle: **silent** | `pcm_session=1`, chip `PCM I2S`, `dts_active 1`: **sound** |
 | AC-3 track | `bs_session=1`, chip non-PCM: silent | the same: silent |
 
-So the fix works end to end, and the control fails the way the issue predicted. **The
-AC-3 silence is a separate, pre-existing finding**, identical on both arms: this TV lists
-AC-3 but plays nothing from our HDMI AC-3 bitstream. Our HDMI bitstream had only been
-confirmed into AV receivers and the capture card, never into a TV's own speakers. Either
-this TV lists AC-3 only to pass it on (ARC/optical out), or it does not accept our
-`std-I2S+CSreg` signalling. That needs its own investigation and issue. Until then a TV
-like this one needs `Decode PCM` for AC-3.
+So the fix works end to end, and the control fails the way the issue predicted.
+
+**Rig .201 does not bitstream over HDMI at all, and that confounds every .201 result
+above.** The AC-3 silence (both arms) led to a bisect. Every HDMI bitstream from rig .201
+failed, whatever the sink:
+- a Samsung TV (`SAM 0d42`, lists AC-3 + DTS): AC-3 and DTS both silent;
+- the maintainer's AV receiver ("decoder off"): with today's core and Main, the Oct 1 Main,
+  the Sept 30 core, the **Aug 31 `bsflapfix2` core that passed on this receiver then**, and
+  at `video_mode=8`.
+On .201, PCM to the receiver plays, the ADV7513 reads back `0x0C=0x44 0x12=0xA0
+0x15=0x20` (as designed), and its active ini lines match .236's for everything audio.
+**The same receiver on rig .236, with today's build, plays Dolby Digital and DTS.** So the
+code is fine and the cause is specific to .201 (open: a full ADV7513 register diff is next;
+.236's dump is saved). The DTS-decode result on .201 still stands, since it is PCM. The
+TV AC-3 result does not: it says nothing about TVs until it is repeated from a working rig.
+
+**HW, rig .236 → the receiver (`dev-dtssink`, *Ultimate T2*):** `no_dts=0`; AC-3 track:
+Dolby Digital, sound; DTS track: **DTS, sound**, bitstreamed. The new core leaves DTS
+alone on a sink that lists it.
 
 The rigs' other sinks, for the record: rig 236's Hagibis card and a "MATRIX 4*4" switch,
 and an AOC Q27G3XMN monitor, list LPCM only. A Samsung TV (`SAM 0d42`) lists AC-3 + DTS.
