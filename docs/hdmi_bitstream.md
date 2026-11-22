@@ -477,9 +477,10 @@ directions **asymmetrically**:
 - **Releasing:** drop the ack FIRST so the core stops emitting, restore the PCM
   registers 50 ms later.
 
-Also guarded: `SW[0]`/`mcp_en` route the HDMI audio signals to the analog
+~~Also guarded: `SW[0]`/`mcp_en` route the HDMI audio signals to the analog
 board's audio pins, where an I2S DAC would render a bitstream as noise. The mux
-falls back to PCM in that case.
+falls back to PCM in that case.~~ **Superseded by §9:** that guard made HDMI passthrough
+silent on every MCP23009 board. The I2S DAC now reads the PCM serializer directly.
 
 **Old Main + new core** → no ack → today's behaviour exactly.
 **New Main + old core** → no `OX6` declaration → Main never reconfigures the chip.
@@ -851,6 +852,19 @@ Off, `dvd_hdmi_bitstream` auto, the new Main on both arms.
 
 So the fix works end to end, and the control fails the way the issue predicted.
 
+**The AC-3 silence was §9's guard, and the stacked build clears it (2026-11-22, the same
+TV).** `DVD_ss1hdmibs_20261122_0450` (§9's fix on top of this one, same Main), *A.I.*,
+Passthru, auto, by ear:
+- AC-3 track: `bs_session=1`, chip `std-I2S+CSreg`, `dts_active 0`: **sound**. The TV has
+  no codec display, so it was by ear only;
+- DTS track: `pcm_session=1`, chip `PCM I2S`, `dts_active 1`: **sound**;
+- back to AC-3: the chip returns to bitstream, **sound**.
+So both halves of this fix are confirmed on the sink they were written for.
+
+> **Superseded (2026-11-22): the cause was the core, not the board.** The SuperStation One
+> is an MCP23009 board, and `sys_top`'s `mcp_en` guard kept the bitstream off its HDMI
+> pins (§9). The "not bit-exact" conclusion below is wrong; it stays as the bisect's record.
+
 **Rig .201 does not bitstream over HDMI at all, and that confounds every .201 result
 above.** The AC-3 silence (both arms) led to a bisect. Every HDMI bitstream from rig .201
 failed, whatever the sink:
@@ -888,3 +902,56 @@ alone on a sink that lists it.
 The rigs' other sinks, for the record: rig 236's Hagibis card and a "MATRIX 4*4" switch,
 and an AOC Q27G3XMN monitor, list LPCM only. A Samsung TV (`SAM 0d42`) lists AC-3 + DTS.
 An Insignia NS-50E440NA14 behind (apparently) an AVR lists everything up to TrueHD/DTS-HD.
+
+## 9. MCP23009 boards and the SuperStation One (2026-11-22): the guard was the cause
+
+**State:** ✅ MERGED (PR #203), fit
+`DVD_ss1hdmibs_20261122_0450` PASS. ✅ HW A/B by ear on rig .201 (SuperStation One →
+the AV receiver over HDMI, *A.I.* AC-3, Passthru): control **decoder off**, fix **Dolby
+Digital**, fix again **Dolby Digital**. ✅ DE10-Nano regression on .236 (Hagibis, *A.I.*): Passthru 212 AC-3-period bursts in 8 s,
+the same as the #197 reference; Decode PCM: PCM, no bursts. The SuperStation's analog
+jack by ear was skipped (maintainer's call): it gets the PCM serializer, as before.
+
+**The guard.** `sys/sys_top.v` had `hdmi_bs_ok = hdmi_bs_en & ~(SW[0] | mcp_en)`. On a
+board whose analog jack is an I2S DAC (`SW[0]`, or an MCP23009 I/O-expander board:
+`mcp_en`), stock drives the DAC from `HDMI_SCLK/I2S/LRCLK` (`AUDIO_L/R/SPDIF`). So the
+bitstream was refused on the HDMI pins there, because it would have reached the DAC as
+noise. The Main still set the chip's non-PCM flag, so the receiver got PCM samples flagged
+as data: "decoder off". **The SuperStation One is such a board.** **Change (7821e5a):**
+the DAC pins read the PCM serializer (`i2s_*_pcm`) and `hdmi_bs_ok = hdmi_bs_en`. With no
+bitstream, `HDMI_*` *are* `i2s_*_pcm`, so every board is bit-for-bit stock. With one, the
+DAC keeps getting the PCM path and never the burst. Gate:
+`tools/check_hdmi_bs_dac_wiring.py --red` (in `run_hdmi_bitstream.sh`).
+
+**The A/B that settled it** (same direct cable, receiver on its HDMI input, the same Main):
+
+| build | receiver |
+|---|---|
+| `DVD_ss1hdmibs_20261122_0450` (the change), `dvd_hdmi_bitstream=2` | Dolby Digital, sound |
+| the same, auto mode | Dolby Digital, sound |
+| control `DVD_dtssink_20261122_0152` (the guard in), auto mode | **decoder off, silent** |
+| the change again, auto mode | Dolby Digital, sound |
+
+**⚠ An earlier round wrongly cleared the guard.** The first test of this build, and of a
+diagnostic build that also put the bitstream on `AUDIO_*` (`dev-ss1hdmibs2`, reverted),
+both read "decoder off". The maintainer later found the receiver set to its optical input
+during a test, and that most likely happened then too. On the strength of that round, this
+section blamed the board's wiring for a while. Lesson: in a by-ear A/B, confirm the sink's
+input before each reading, and run the control in the same sitting.
+
+**The capture (2026-11-22)** narrowed it before the A/B. The SuperStation's HDMI straight
+into the Hagibis, the change's build, `dvd_hdmi_bitstream=2`, 10 s, raw
+`hw:CARD=Hagibis`, against rig 236's #197 capture through the same card:
+
+| | SuperStation (.201) | DE10-Nano (.236) |
+|---|---|---|
+| burst period | 3072 words (265×), 3070 (9×, the card's re-clock) | 3072 (208×), 3070 (4×) |
+| burst length | 902 words | 902 words |
+| first words as the card delivers them | `f881 4d82 fff1 382c 0b60 …` | `f881 4d82 fff1 382c 0b60 …` |
+
+The same stream reaches both boards' ADV7513. N = 6144 and CTS = 27000 on the
+SuperStation, steady, and its I2C bus holds only the ADV7513's own maps
+(0x38/0x39/0x3C/0x3E/0x3F). Nothing on the board alters the bitstream.
+
+**Who else this fixes:** a DE10-Nano with an MCP23009 analog I/O board, or with `SW[0]`
+set, had silent HDMI passthrough by construction. Not tested on such a board.

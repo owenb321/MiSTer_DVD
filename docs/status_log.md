@@ -20,6 +20,25 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ---
 
+## HDMI passthrough on MCP23009 boards / the SuperStation One (2026-11-22)
+
+**State:** ✅ HW-CONFIRMED, MERGED (PR #203; `dev-ss1hdmibs`); fit
+`DVD_ss1hdmibs_20261122_0450` PASS. ✅ HW A/B by ear on rig .201 (SuperStation One →
+AV receiver, *A.I.* AC-3): control (#201 build) decoder off; fix Dolby Digital, twice,
+forced and auto. ✅ Stacked with #201 into the AC-3-only Insignia TV: AC-3 bitstream plays (silent on both #201 arms before), DTS decodes to PCM and plays, and switching back to AC-3 bitstreams again (`hdmi_bitstream.md` §8). ✅ DE10-Nano regression on .236 (Hagibis: Passthru bursts as #197, Decode PCM clean PCM); the SuperStation's analog jack not listened to (skipped).
+
+`sys_top`'s `hdmi_bs_ok` refused the bitstream on `SW[0] | mcp_en` boards, because stock
+feeds their I2S DAC from the HDMI audio pins. The SuperStation One is an MCP23009 board,
+so its HDMI passthrough was always silent ("decoder off"). The DAC now reads the PCM
+serializer and the guard is gone. **Refuted on the way, and why:** a first round said the
+fix and a diagnostic build both failed, and the docs briefly blamed the board's I2S
+wiring. The receiver had most likely been left on its optical input. A Hagibis capture
+then showed bursts on the SuperStation's HDMI identical to the DE10-Nano's, and a
+same-sitting A/B settled it. **Gate:** `check_hdmi_bs_dac_wiring.py --red` (in
+`run_hdmi_bitstream.sh`). **Detail:** `docs/hdmi_bitstream.md` §9. **Next:** none; the analog jack during a bitstream is unchecked by ear (muted by design).
+
+---
+
 ## DTS on an HDMI sink that lists AC-3 only: decoded to PCM (issue #201, 2026-11-22)
 
 **State:** ✅ MERGED (PR #202), sim- and unit-green; ⏳ the reporter's confirmation. Fit
@@ -28,11 +47,9 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 **HW A/B by ear on rig .201** (Insignia NS24D310NA21, EDID AC-3 without DTS; *A.I.*): DTS
 track silent on the control, plays on the fix (decoded, chip released to PCM). **Rig .236
 → AV receiver** (lists DTS): AC-3 and DTS both bitstreamed and decoded by the receiver, so
-the fix leaves DTS alone there. **Found on the way:** rig .201, a **SuperStation One**,
-cannot bitstream over HDMI to anything, back to the Aug 31 build that passed on the same
-receiver. .236, a DE10-Nano, can. Same transmitter chip, identical audio registers;
-the SuperStation's TOSLINK passthrough decodes fine. So the board's I2S path to the
-transmitter is not bit-exact. The manual tells SuperStation owners to use TOSLINK; `hdmi_bitstream.md` §8 has the bisect. **Design and decisions:** `docs/hdmi_bitstream.md` §8.
+the fix leaves DTS alone there. The AC-3 silence on that TV (both arms) was the SuperStation guard: with the stacked fix both AC-3 (bitstream) and DTS (PCM) play there, by ear. **Found on the way:** rig .201, a **SuperStation One**,
+could not bitstream over HDMI to anything. The cause was `sys_top`'s `mcp_en` guard, not
+the board: fixed by PR #203 (the entry above, `hdmi_bitstream.md` §9). **Design and decisions:** `docs/hdmi_bitstream.md` §8.
 
 The Main kept one `sink_ok` for "AC-3 or DTS", so a TV that names AC-3 only was sent DTS
 bursts: most likely silence, with no message. The Main now keeps per-codec EDID flags. In
@@ -50,8 +67,7 @@ reads `cfg[15]` and the value it holds (logged by the Main).
 audio-off checkers (`pass_dts`), `main/tests/run_tests.sh --red` ([14]/[15] + 4 arms).
 **Known limits:** no AC-3 fallback for a DTS-only sink (no cfg bit left; none seen);
 an older Main never sets `cfg[15]`, and an older core ignores it. Both behave as before.
-**Next:** the reporter's confirmation. Separately, why rig .201 never bitstreams over HDMI (next step: diff its
-full ADV7513 register dump against .236's while both bitstream).
+**Next:** the reporter's confirmation.
 
 ---
 
