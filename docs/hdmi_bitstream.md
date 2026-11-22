@@ -905,7 +905,7 @@ An Insignia NS-50E440NA14 behind (apparently) an AVR lists everything up to True
 
 ## 9. MCP23009 boards and the SuperStation One (2026-11-22): the guard was the cause
 
-**State:** 🔧 `feature/ss1-hdmi-bs` (stacked on #201's branch), fit
+**State:** ✅ MERGED (PR #203), fit
 `DVD_ss1hdmibs_20261122_0450` PASS. ✅ HW A/B by ear on rig .201 (SuperStation One →
 the AV receiver over HDMI, *A.I.* AC-3, Passthru): control **decoder off**, fix **Dolby
 Digital**, fix again **Dolby Digital**. ✅ DE10-Nano regression on .236 (Hagibis, *A.I.*): Passthru 212 AC-3-period bursts in 8 s,

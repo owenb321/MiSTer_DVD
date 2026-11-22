@@ -22,7 +22,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## HDMI passthrough on MCP23009 boards / the SuperStation One (2026-11-22)
 
-**State:** 🔧 `feature/ss1-hdmi-bs` (`dev-ss1hdmibs`, stacked on #201's branch); fit
+**State:** ✅ HW-CONFIRMED, MERGED (PR #203; `dev-ss1hdmibs`); fit
 `DVD_ss1hdmibs_20261122_0450` PASS. ✅ HW A/B by ear on rig .201 (SuperStation One →
 AV receiver, *A.I.* AC-3): control (#201 build) decoder off; fix Dolby Digital, twice,
 forced and auto. ✅ Stacked with #201 into the AC-3-only Insignia TV: AC-3 bitstream plays (silent on both #201 arms before), DTS decodes to PCM and plays, and switching back to AC-3 bitstreams again (`hdmi_bitstream.md` §8). ✅ DE10-Nano regression on .236 (Hagibis: Passthru bursts as #197, Decode PCM clean PCM); the SuperStation's analog jack not listened to (skipped).
@@ -35,7 +35,7 @@ fix and a diagnostic build both failed, and the docs briefly blamed the board's 
 wiring. The receiver had most likely been left on its optical input. A Hagibis capture
 then showed bursts on the SuperStation's HDMI identical to the DE10-Nano's, and a
 same-sitting A/B settled it. **Gate:** `check_hdmi_bs_dac_wiring.py --red` (in
-`run_hdmi_bitstream.sh`). **Detail:** `docs/hdmi_bitstream.md` §9. **Next:** a PR after #201's.
+`run_hdmi_bitstream.sh`). **Detail:** `docs/hdmi_bitstream.md` §9. **Next:** none; the analog jack during a bitstream is unchecked by ear (muted by design).
 
 ---
 
@@ -49,7 +49,7 @@ track silent on the control, plays on the fix (decoded, chip released to PCM). *
 → AV receiver** (lists DTS): AC-3 and DTS both bitstreamed and decoded by the receiver, so
 the fix leaves DTS alone there. The AC-3 silence on that TV (both arms) was the SuperStation guard: with the stacked fix both AC-3 (bitstream) and DTS (PCM) play there, by ear. **Found on the way:** rig .201, a **SuperStation One**,
 could not bitstream over HDMI to anything. The cause was `sys_top`'s `mcp_en` guard, not
-the board: fixed on `feature/ss1-hdmi-bs` (the entry above, `hdmi_bitstream.md` §9). **Design and decisions:** `docs/hdmi_bitstream.md` §8.
+the board: fixed by PR #203 (the entry above, `hdmi_bitstream.md` §9). **Design and decisions:** `docs/hdmi_bitstream.md` §8.
 
 The Main kept one `sink_ok` for "AC-3 or DTS", so a TV that names AC-3 only was sent DTS
 bursts: most likely silence, with no message. The Main now keeps per-codec EDID flags. In
