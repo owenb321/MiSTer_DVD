@@ -1629,11 +1629,9 @@ assign SDCD_SPDIF = (mcp_en & ~spdif_out) ? 1'b0 : 1'bZ;
 	// signals, not the HDMI pins. Stock wires HDMI_* here, which is the same thing until
 	// the HDMI pins carry a bitstream. That used to be refused outright on these boards
 	// (hdmi_bs_ok below), so HDMI passthrough on an MCP board was silent: "decoder off".
-	// ⚠ DIAGNOSTIC (dev-ss1diag, NOT for merge): the bitstream on the I/O-board pins too,
-	// to test whether the SuperStation One's HDMI chip reads its I2S from them.
-	assign AUDIO_SPDIF = av_dis ? 1'bZ : (SW[0] | mcp_en) ? HDMI_LRCLK : spdif_out;
-	assign AUDIO_R     = av_dis ? 1'bZ : (SW[0] | mcp_en) ? HDMI_I2S   : analog_r;
-	assign AUDIO_L     = av_dis ? 1'bZ : (SW[0] | mcp_en) ? HDMI_SCLK  : analog_l;
+	assign AUDIO_SPDIF = av_dis ? 1'bZ : (SW[0] | mcp_en) ? i2s_lrclk_pcm : spdif_out;
+	assign AUDIO_R     = av_dis ? 1'bZ : (SW[0] | mcp_en) ? i2s_data_pcm  : analog_r;
+	assign AUDIO_L     = av_dis ? 1'bZ : (SW[0] | mcp_en) ? i2s_bclk_pcm  : analog_l;
 `endif
 
 // DVD-FORK: IEC 61937 bitstream over HDMI. When the core asserts hdmi_bs_en it
