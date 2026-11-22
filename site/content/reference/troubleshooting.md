@@ -327,6 +327,26 @@ dvd_hdmi_bitstream=2      ; 0=auto (default), 1=off, 2=force
 Read `/tmp/dvd_hdmi_audio.log` to see what it decided and why — it records the EDID result
 and each stage of the handoff.
 
+### Receiver shows "decoder off" on a SuperStation One
+
+HDMI passthrough does not work on a SuperStation One: its HDMI audio path carries PCM
+correctly but not a Dolby Digital or DTS bitstream. Connect the console's **TOSLINK**
+output to the receiver instead, which passes both. See
+[Passthrough](../audio/passthrough.md).
+
+### DTS tracks play in stereo in Passthru, or the receiver shows PCM for them
+
+Your HDMI display's EDID lists Dolby Digital but not DTS, so the core decodes DTS tracks
+itself and sends stereo PCM, on optical as well as HDMI. Dolby Digital tracks still go out
+as a bitstream. This is deliberate: without it, a DTS track on such a display would be
+silent. See
+[Passthrough](../audio/passthrough.md#a-display-that-takes-dolby-digital-but-not-dts).
+
+If a receiver that does decode DTS is on optical, or the display under-reports what it can
+decode, set `dvd_hdmi_bitstream=2` in `MiSTer.ini` to send DTS as a bitstream again.
+`/tmp/dvd_hdmi_audio.log` records the decision: `no_dts=1` means the display does not list
+DTS.
+
 ### Another core has no HDMI audio after I used the DVD core
 
 Update `MiSTer_DVDcss` to the version that shipped with your `.rbf`, and power-cycle the

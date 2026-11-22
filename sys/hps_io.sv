@@ -128,6 +128,11 @@ module hps_io #(parameter CONF_STR, CONF_STR_BRAM=0, PS2DIV=0, WIDE=0, VDNUM=1, 
 	// at bit 13 is the highest it defines).
 	output            ini_hdmi_bs_ok,   // cfg[14] MiSTer_DVDcss: ADV7513 is in
 	                                    //         IEC958-direct/non-PCM mode
+	// DVD-FORK (issue #201): cfg[15], set by MiSTer_DVDcss when the HDMI sink's
+	// EDID lists AC-3 but not DTS. The core then decodes DTS to PCM in Passthru.
+	// Stock Main never sets it, which is today's behaviour. Bit 15 is the LAST free
+	// cfg bit: a further Main->core flag needs another channel.
+	output            ini_hdmi_no_dts,  // cfg[15]
 	// DVD-FORK (single-raster analog): cfg word bookkeeping for the core.
 	// cfg_seen = Main has written the buttons/cfg word at least once since FPGA
 	// configuration (the ini bits above are meaningless before that);
@@ -237,6 +242,7 @@ assign ini_ypbpr      = cfg[5];
 assign ini_sog        = cfg[9];
 // DVD-FORK (HDMI bitstream): HPS ack, see the port comment
 assign ini_hdmi_bs_ok = cfg[14];
+assign ini_hdmi_no_dts = cfg[15];   // DVD-FORK (issue #201)
 
 reg [3:0] sdn;
 reg [3:0] sd_rrb = 0;

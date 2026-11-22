@@ -783,3 +783,108 @@ HDMI card): the bit-exact frame match and the byte order.
   clean fix (a second ring) is **34 M10K** against 47 free — RAM 92% → 97.6% on
   a design that has needed fit rescue twice. An 8 KB clone (~8 M10K) is the
   cheaper lever if it ever becomes a priority.
+  Issue #201 hit this edge (§8): on an AC-3-only sink, DTS goes to PCM on both legs.
+
+## 8. A sink that lists AC-3 but not DTS (issue #201, 2026-11-22)
+
+**Problem.** `scan_sads()` used to set one `sink_ok` if the EDID named AC-3 **or** DTS at
+48 kHz, and the core then bitstreamed every DD/DTS track. Many TVs name AC-3 only, so
+a DTS track was sent as a burst the sink cannot decode. That most likely means silence,
+with no message: `Sink does not list AC-3/DTS` fires only when **neither** codec is listed.
+Found while working on #196/#197. No user had reported it.
+
+**Fix: DTS falls back to the in-fabric decoder.**
+
+- **Main** (`main/support/dvd/dvd_hdmi_audio.cpp`): `scan_sads()` returns
+  `SINK_AC3 | SINK_DTS`. `update_no_dts()` sets `no_dts` when the ini mode is auto (0),
+  the core has declared OX6, it is the DVD core, and the sink names AC-3 but not DTS.
+  `user_io_send_buttons()` ORs it into **`cfg[15]`** (integration steps 61/62,
+  `CONF_DVD_HDMI_NODTS`). The bit follows the sink, not the track, so it is pushed only
+  when the EDID or the mode changes.
+- **Core**: `sys/hps_io.sv` exports `ini_hdmi_no_dts = cfg[15]` → `hdmi_no_dts` →
+  `aud_route .dts_dec`. Under `dts_dec` a DTS frame is not `is_bitstream`, so it is granted
+  to `dvd_audio_decode` like LPCM. `pcm_session` and `bs_session` follow from the routing
+  alone: Main sees a PCM session and releases the ADV7513, and AC-3 keeps engaging it as
+  before. Because it is sampled at each grant, an EDID change mid-track (hotplug) takes
+  effect at a frame boundary.
+- **SPRM15**: `player_regs .pass_mode` is now `pass_dts = pass_sel & ~hdmi_no_dts`. On
+  such a sink the DTS bit rests on `cb_tables_ok` alone, so a core whose codebook copy
+  failed tells the disc it cannot play DTS.
+- **`AUDIO UNSUPPORTED`** for DTS (codebooks failed) can now fire in Passthru when
+  `hdmi_no_dts` is set, because the decoder is the one playing it there.
+- **0x7B word**: bit 14 = this core reads `cfg[15]`, bit 13 = the value it holds. The Main
+  only logs these (`/tmp/dvd_hdmi_audio.log`: `no_dts=` and `core_nodts=v4/value`).
+
+**Decisions.**
+
+- **Optical gets PCM too (user decision, 2026-11-22).** One ring consumer per frame, so
+  a DTS frame goes to either the wrapper (both legs get a bitstream) or the decoder (both
+  get PCM). Keeping optical on DTS while HDMI gets PCM is the "two ring consumers" item
+  deferred in §7, at a cost of 8–34 M10K. The accepted cost: someone with HDMI to an
+  AC-3-only TV and optical to a DTS receiver now gets stereo PCM on DTS tracks.
+  `dvd_hdmi_bitstream=2` restores the old behaviour for them, and the manual says so.
+- **Force (=2) and off (=1) leave `cfg[15]` clear.** Force exists because sinks
+  misreport. Off never engages HDMI, so optical keeps the DTS bitstream as before.
+- **No AC-3 fallback for a sink that names DTS only.** `cfg[15]` was the last free cfg
+  bit, and no such sink has been seen. The Main logs the flags, so a report would show it.
+- **No new on-screen notice.** A decoded DTS track is the feature working, not a failure
+  to explain. It is the same rule as the removed engage notice (§5).
+
+**Gates.** `bench/dvd/run_passthru_pcm.sh --red` (`aud_route_tb` TEST 7; RED
+`dts-dec-ignored`, `dts-dec-takes-ac3`, `dts-always-decoded`); `bench/dvd/run_telem.sh`
+(0x7B bits 13/14); `tools/check_dts_sink_wiring.py --red` (in `run_hdmi_bitstream.sh`);
+`tools/check_player_regs_wiring.py --red` and `tools/check_audio_off_wiring.py --red`
+(both follow `pass_dts`); `main/tests/run_tests.sh --red` ([14] the 8-row decision table,
+[15] AC-3 engages and decoded DTS releases, with no `cfg[15]` push per track; RED
+`nodts-never-set`, `nodts-ignores-dts-sad`, `nodts-in-force-mode`, `nodts-not-pushed`).
+
+**HW A/B (2026-11-22, rig .201, by ear).** The sink was an Insignia NS24D310NA21 TV. Its
+EDID, read off the ADV7513 at `i2c-1:0x3f`, lists LPCM 2 ch and AC-3 6 ch at 48 kHz, and
+no DTS. Disc: *A.I.* VTS 1, track 1 AC-3 5.1 and track 3 DTS 5.1. Passthru, Disc Menus
+Off, `dvd_hdmi_bitstream` auto, the new Main on both arms.
+
+| | control `DVD_drc_20261113_0253` | fix `DVD_dtssink_20261122_0152` |
+|---|---|---|
+| Main's log | `no_dts=1 core_nodts=0/0` | `no_dts=1 core_nodts=1/1` |
+| DTS track | `bs_session=1`, chip non-PCM, decoder idle: **silent** | `pcm_session=1`, chip `PCM I2S`, `dts_active 1`: **sound** |
+| AC-3 track | `bs_session=1`, chip non-PCM: silent | the same: silent |
+
+So the fix works end to end, and the control fails the way the issue predicted.
+
+**Rig .201 does not bitstream over HDMI at all, and that confounds every .201 result
+above.** The AC-3 silence (both arms) led to a bisect. Every HDMI bitstream from rig .201
+failed, whatever the sink:
+- a Samsung TV (`SAM 0d42`, lists AC-3 + DTS): AC-3 and DTS both silent;
+- the maintainer's AV receiver ("decoder off"): with today's core and Main, the Oct 1 Main,
+  the Sept 30 core, the **Aug 31 `bsflapfix2` core that passed on this receiver then**, and
+  at `video_mode=8`.
+On .201, PCM to the receiver plays, the ADV7513 reads back `0x0C=0x44 0x12=0xA0
+0x15=0x20` (as designed), and its active ini lines match .236's for everything audio.
+**The same receiver on rig .236, with today's build, plays Dolby Digital and DTS.** So the
+code is fine and the cause is specific to .201. **Rig .201 is a SuperStation One**, a
+single-board MiSTer-compatible console. Rig .236 is a DE10-Nano. Nothing published names the
+SuperStation's HDMI transmitter or how its audio is wired. It answers at the ADV7513's I2C
+address and plays PCM. **Settled 2026-11-22:**
+- Its transmitter is the same chip, ID `0x7511` rev `0x13`. A full 256-register dump taken
+  mid-bitstream at `video_mode=8` matches .236's in every audio and configuration register:
+  N/CTS, `0x0A`-`0x16` (I2S select, CS source, the `0x12[7]` non-PCM flag, 48 kHz) and the
+  audio infoframe. The only differences are status and interrupt bytes: `0x97` 00/80,
+  `0x9E` 18/17, `0xA0` 01/00, `0xC5` 10/90, `0xC8` 02/42 (.236/.201).
+- **Its TOSLINK passthrough decodes fine on the same receiver** (maintainer, by ear). That
+  output is the FPGA's own S/PDIF pin and does not go through the HDMI chip.
+
+So the core's bursts are right and the transmitter is told the right thing. What reaches the
+transmitter's I2S input on that board is not bit-exact. PCM hides an LSB-level error and a
+61937 sync word does not, so the receiver never locks ("decoder off"). This is
+hardware-specific. The manual (passthrough, troubleshooting, compatibility) tells
+SuperStation owners to use TOSLINK. A fabric-side fix, such as an I2S timing or edge
+change, would need a capture path on that board to prove it and is not planned. The DTS-decode result on .201 still stands, since it is PCM. The
+TV AC-3 result does not: it says nothing about TVs until it is repeated from a working rig.
+
+**HW, rig .236 → the receiver (`dev-dtssink`, *Ultimate T2*):** `no_dts=0`; AC-3 track:
+Dolby Digital, sound; DTS track: **DTS, sound**, bitstreamed. The new core leaves DTS
+alone on a sink that lists it.
+
+The rigs' other sinks, for the record: rig 236's Hagibis card and a "MATRIX 4*4" switch,
+and an AOC Q27G3XMN monitor, list LPCM only. A Samsung TV (`SAM 0d42`) lists AC-3 + DTS.
+An Insignia NS-50E440NA14 behind (apparently) an AVR lists everything up to TrueHD/DTS-HD.

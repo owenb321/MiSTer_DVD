@@ -114,6 +114,10 @@ set-top player would not.
 
 ## Known limitations
 
+**HDMI passthrough fails on a SuperStation One.** A Dolby Digital or DTS bitstream over its
+HDMI does not decode (the receiver shows "decoder off"). Its TOSLINK output passes both, and
+PCM over HDMI is fine. See [Passthrough](../audio/passthrough.md).
+
 **Interactive DVD games are incomplete.** Some game discs mis-navigate their dispatcher
 logic, and individual minigames can misbehave. Film and TV discs are the supported path.
 

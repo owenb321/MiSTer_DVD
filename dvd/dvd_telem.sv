@@ -171,6 +171,7 @@ module dvd_telem #(
     input         af_passthru,            // Audio Out = Passthru
     input         af_pcm_session,         // ...and the current content is LPCM/MP2
     input         af_bs_session,          // ...and the current content IS AC-3/DTS
+    input         af_no_dts,              // cfg[15] as the core sees it (issue #201)
 
     // --- core -> Main REQUESTS, on the same CMD_AF word ------------------
     // The DVD-remote Eject and Volume buttons (B19..B21) are things only the
@@ -222,7 +223,8 @@ module dvd_telem #(
     assign src[15] = sched_dur;
     // CMD_AF word layout:
     //   [15]    format v2  -- this word carries bit 2 (bs_session)
-    //   [14:13] spare
+    //   [14]    the core reads cfg[15] (issue #201: DTS decoded for an AC-3-only sink)
+    //   [13]    cfg[15] as received
     //   [12]    format v3  -- this word carries [11:3] (the remote requests)
     //   [11:8]  Vol Down request counter
     //   [7:4]   Vol Up   request counter
@@ -230,7 +232,7 @@ module dvd_telem #(
     //   [2]     bitstream session   [1] PCM session   [0] Passthru
     // See the port comments for why the requests are a toggle and counters
     // rather than levels, and why bit 12 has to exist.
-    assign src[16] = {1'b1, 2'd0, 1'b1,
+    assign src[16] = {1'b1, 1'b1, af_no_dts, 1'b1,
                       rq_voldn_seq, rq_volup_seq, rq_eject_tgl,
                       af_bs_session, af_pcm_session, af_passthru};
     assign src[17] = dec_disp;

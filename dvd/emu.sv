@@ -243,6 +243,7 @@ wire forced_scandoubler;                  // hps_io cfg[4]
 wire ini_vga_scaler, ini_csync, ini_ypbpr, ini_sog;  // hps_io MiSTer.ini exports (DVD-FORK)
 wire cfg_seen, cfg_wr;                               // hps_io cfg-word bookkeeping (DVD-FORK)
 wire hdmi_bs_ack;                                    // cfg[14] HPS ack (DVD-FORK, HDMI bitstream)
+wire hdmi_no_dts;                                    // cfg[15] HDMI sink lists AC-3, not DTS (issue #201)
 wire bs_stb_w;                                       // 48 kHz pair strobe from iec61937_wrap
 wire [1:0] video_out_mode = status[10:9]; // 0=Auto 1=Interlaced 2=Progressive (O[27:26] left dead — old Analog Out)
 wire [1:0] deint_mode     = status[51:50]; // Deinterlace: 0=Weave 1=Bob 2=Blend (3 unused = Weave). OB/bit 11 + O[49] retired
@@ -733,7 +734,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-passthruaudio"
+`define CORE_VERSION "dev-dtssink"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -1249,6 +1250,7 @@ hps_io #(.CONF_STR(CONF_STR), .BLKSZ(4)) hps_io_inst (
     .ini_ypbpr      (ini_ypbpr),
     .ini_sog        (ini_sog),
     .ini_hdmi_bs_ok (hdmi_bs_ack),
+    .ini_hdmi_no_dts(hdmi_no_dts),
     .cfg_seen       (cfg_seen),
     .cfg_wr         (cfg_wr),
 
@@ -1376,6 +1378,8 @@ dvd_telem dvd_telem_inst (
     // Standard Convert engaging mid-play). Ungated, Main would keep the chip in
     // non-PCM mode and raise "Sink does not list AC-3/DTS" with nothing playing.
     .af_bs_session  (rt_bs_session & pass_mode),
+    // Issue #201: this core honours cfg[15] (word bit 13), and whether it is set.
+    .af_no_dts      (hdmi_no_dts),
     .rq_eject_tgl   (rq_eject_tgl),
     .rq_volup_seq   (rq_volup_seq),
     .rq_voldn_seq   (rq_voldn_seq)
@@ -2904,11 +2908,16 @@ wire [15:0] vm_rnd_seed = entropy_ctr[15:0] ^
 // interlaced raster, or an explicit Letterbox/Crop on Progressive. So Progressive reads
 // 16:9 TV under Auto/Fit (unchanged), 4:3 letterbox under Letterbox, 4:3 pan&scan under Crop.
 wire [15:0] pr_sprm14, pr_sprm15, pr_sprm20;
+// pass_dts: Passthru can carry DTS. Not when the HDMI sink lists AC-3 but not DTS
+// (issue #201): aud_route then decodes DTS, so SPRM15's DTS bit rests on dts_ok
+// alone, and a disc whose codebook copy failed picks its AC-3 track instead.
+wire pass_dts = pass_sel & ~hdmi_no_dts;
 player_regs player_regs_inst (
     .rmask                (vmg_rmask_w),
     .aa_live              (aa_live),
     .aa_sel               (aa_osd_sel),
-    .pass_mode            (pass_sel),   // the selection, not Audio On/Off (issue #197)
+    .pass_mode            (pass_dts),   // the selection, not Audio On/Off (issue #197),
+                                        // and not when the sink cannot take DTS (#201)
     .dts_ok               (cb_tables_ok),
     .sprm14               (pr_sprm14),
     .sprm15               (pr_sprm15),
@@ -4359,14 +4368,15 @@ end
 // DTS (format 6) decodes in fabric since P3 (docs/dts_decoder.md), from codebooks copied
 // to DDR3 at configuration; if that copy's checksum failed (cb_tables_ok low, telemetry
 // word 26) the decoder discards DTS, and a DTS track in Decode PCM says so here rather
-// than playing silent (D4 rule 2). In Passthru the receiver decodes DTS: no notice.
+// than playing silent (D4 rule 2). In Passthru the receiver decodes DTS: no notice,
+// unless the HDMI sink cannot take DTS (issue #201), when the decoder plays it here.
 // LPCM whose header holds a value DVD-Video reserves (44.1/32 kHz, quant 3) is muted
 // by dvd_audio_decode, which says so while that track is the one playing
 // (docs/lpcm_full.md). Read from the stream, so it holds for .VOB/.mpg files too: not
 // gated on iso_mode_w/nav_ready_w, nor on pass_mode (LPCM is decoded here either way).
 wire aud_unsupported = (iso_mode_w & nav_ready_w & aud_dec_en & ~css_scrambled &
                         ((attr_a_fmt_w == 3'd3) |
-                         ((attr_a_fmt_w == 3'd6) & ~cb_tables_ok & ~pass_mode))) |
+                         ((attr_a_fmt_w == 3'd6) & ~cb_tables_ok & ~(pass_mode & ~hdmi_no_dts)))) |
                        (aud_lpcm_unsup & aud_dec_en & ~css_scrambled);
 
 // (C) Title-VTS notice — largest-VTS heuristic path ONLY. With Disc Menus On
@@ -4537,6 +4547,10 @@ aud_route aud_route_i (
     .hard_rst_n  (reset_n),
     .sess_clr    (~media_seen),
     .split_en    (pass_mode),
+    // Issue #201: the HDMI sink lists AC-3 but not DTS, so DTS is decoded here
+    // and leaves as PCM (both legs; docs/hdmi_bitstream.md §8). Stock Main never
+    // sets cfg[15]: unchanged there.
+    .dts_dec     (hdmi_no_dts),
     .frame_valid (aud_frame_valid),
     .frame_type  (aud_frame_type),
     .frame_len   (aud_frame_len),

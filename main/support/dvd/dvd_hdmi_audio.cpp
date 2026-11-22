@@ -26,12 +26,22 @@
 // Getting this wrong in the permissive direction is the bad failure: telling a
 // plain TV to expect non-PCM and then feeding it a data burst is noise. So the
 // test is deliberately strict - the sink must NAME AC-3 or DTS and claim 48 kHz.
+//
+// The two codecs are kept apart (issue #201): a TV that names AC-3 but not DTS is
+// common, and sending it DTS plays silence. For that sink the core is told (cfg[15])
+// to decode DTS to PCM while AC-3 keeps bitstreaming. A sink naming DTS but not
+// AC-3 gets no such fallback (there is no free cfg bit for it, and no such sink has
+// been seen); it is logged.
 
 #define SAD_FMT_AC3   2
 #define SAD_FMT_DTS   7
 
+#define SINK_AC3      1   // scan_sads() flags: the sink names the codec at 48 kHz
+#define SINK_DTS      2
+
 static int scan_sads(const uint8_t *edid, int size)
 {
+	int flags = 0;
 	if (!edid || size < 256) return 0;
 	if (edid[126] == 0) return 0;                 // no extension blocks at all
 
@@ -61,20 +71,22 @@ static int scan_sads(const uint8_t *edid, int size)
 					int fmt   = (cea[s] >> 3) & 0x0F;
 					int rates = cea[s + 1];
 					// bit 2 = 48 kHz, which is the only rate DVD bitstream uses
-					if ((fmt == SAD_FMT_AC3 || fmt == SAD_FMT_DTS) && (rates & 0x04))
-						return 1;
+					if (!(rates & 0x04)) continue;
+					if (fmt == SAD_FMT_AC3) flags |= SINK_AC3;
+					if (fmt == SAD_FMT_DTS) flags |= SINK_DTS;
 				}
 			}
 			p += 1 + len;
 		}
 	}
-	return 0;
+	return flags;
 }
 
-static int sink_supports_bitstream(void)
+// SINK_AC3 | SINK_DTS, re-read only when the EDID changes.
+static int sink_flags(void)
 {
-	static int cached_ver = -1;
-	static int cached_ok  = 0;
+	static int cached_ver   = -1;
+	static int cached_flags = 0;
 
 	uint8_t *buf = 0;
 	int size = 0;
@@ -82,11 +94,17 @@ static int sink_supports_bitstream(void)
 	if (ver != cached_ver)
 	{
 		cached_ver = ver;
-		cached_ok  = scan_sads(buf, size);
-		printf("dvd_hdmi_audio: EDID v%d - sink %s AC-3/DTS bitstream\n",
-		       ver, cached_ok ? "ACCEPTS" : "does NOT accept");
+		cached_flags = scan_sads(buf, size);
+		printf("dvd_hdmi_audio: EDID v%d - sink lists AC-3 %s, DTS %s\n", ver,
+		       (cached_flags & SINK_AC3) ? "yes" : "no",
+		       (cached_flags & SINK_DTS) ? "yes" : "no");
 	}
-	return cached_ok;
+	return cached_flags;
+}
+
+static int sink_supports_bitstream(void)
+{
+	return sink_flags() != 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -158,6 +176,8 @@ static void report_pump(void)
 static int core_pcm_session = 0;   // 1 = Passthru is carrying PCM content
 static int core_bs_session  = 0;   // 1 = Passthru is carrying AC-3/DTS right now
 static int core_fmt_v2      = 0;   // the core reports bs_session at all
+static int core_nodts_v4    = 0;   // the core reads cfg[15] (issue #201)
+static int core_nodts       = 0;   // ...and the cfg[15] it holds
 
 static void poll_audio_format(void)
 {
@@ -172,12 +192,16 @@ static void poll_audio_format(void)
 	// An older core does not answer this command; leave the format unknown and
 	// behave exactly as before rather than guessing.
 	if (magic != DVD_TELEM_MAGIC) { core_pcm_session = 0; core_bs_session = 0;
-	                               core_fmt_v2 = 0; return; }
+	                               core_fmt_v2 = 0; core_nodts_v4 = 0; core_nodts = 0;
+	                               return; }
 	// bit0 = passthru, bit1 = pcm session, bit2 = bitstream session,
-	// bit15 = this word carries bit 2 at all.
+	// bit15 = this word carries bit 2 at all. bit14 = the core reads cfg[15],
+	// bit13 = the cfg[15] it holds (issue #201; logged, not acted on).
 	core_pcm_session = (fmt >> 1) & 1;
 	core_bs_session  = (fmt >> 2) & 1;
 	core_fmt_v2      = (fmt >> 15) & 1;
+	core_nodts_v4    = (fmt >> 14) & 1;
+	core_nodts       = (fmt >> 13) & 1;
 }
 
 // What the ADV7513 must be told to expect. ⚠ NOT the inverse of pcm_session:
@@ -220,6 +244,37 @@ int dvd_hdmi_audio_ack(void)
 	return acked;
 }
 
+// cfg[15] (issue #201): the core decodes DTS to PCM. Read by user_io_send_buttons().
+static int no_dts = 0;
+
+int dvd_hdmi_audio_no_dts(void)
+{
+	return no_dts;
+}
+
+// Set only in auto mode (dvd_hdmi_bitstream=0) for a sink that names AC-3 and not
+// DTS. Force (2) keeps forcing both codecs, as documented; off (1) never engages
+// HDMI, so DTS still goes out optical as a bitstream. Not gated on Passthru: the
+// core only acts on it in Passthru, and holding it steady avoids a cfg push on
+// every OSD toggle.
+static void update_no_dts(int mode)
+{
+	int want = 0;
+	if (declared && is_dvd() && mode == 0)
+	{
+		int f = sink_flags();
+		want = (f & SINK_AC3) && !(f & SINK_DTS);
+	}
+	if (want == no_dts) return;
+	no_dts = want;
+	const char *why = want ? "sink lists AC-3 but not DTS: the core decodes DTS to PCM"
+	                       : "cleared: DTS is bitstreamed as before";
+	printf("dvd_hdmi_audio: cfg[15] no_dts=%d (%s)\n", want, why);
+	FILE *f = fopen(HDMI_LOG_PATH, "a");
+	if (f) { fprintf(f, "no_dts=%d (%s)\n", want, why); fclose(f); }
+	user_io_send_buttons(1);        // pushes cfg[], incl. bit 15, to the core
+}
+
 static void set_ack(int on)
 {
 	if (acked == on) return;
@@ -255,6 +310,7 @@ void dvd_hdmi_audio_tick(void)
 	if (!declared || !is_dvd())
 	{
 		if (acked) { set_ack(0); set_chip(0); }
+		update_no_dts(0);
 		// A core built before the HDMI tap never declares OX6. Say so, but only
 		// once the user actually selects passthru, so it cannot nag.
 		if (is_dvd() && !declared && user_io_status_get("6"))
@@ -268,6 +324,7 @@ void dvd_hdmi_audio_tick(void)
 	int mode = cfg.dvd_hdmi_bitstream;
 	int passthru = user_io_status_get("6");       // Audio Out = Passthru
 	int sink_ok  = (mode == 2) || sink_supports_bitstream();
+	update_no_dts(mode);
 
 	// Passthru is no longer all-or-nothing: the core bitstreams AC-3/DTS and sends
 	// LPCM/MP2 as PCM, so the chip has to follow the CONTENT, not the OSD bit.
@@ -289,16 +346,17 @@ void dvd_hdmi_audio_tick(void)
 	static int last_dbg = -1;
 	int dbg = (passthru ? 1 : 0) | (sink_ok ? 2 : 0) | (declared ? 4 : 0) | (mode << 3)
 	        | (core_pcm_session ? 0x100 : 0) | (core_bs_session ? 0x200 : 0)
-	        | (core_fmt_v2 ? 0x400 : 0);
+	        | (core_fmt_v2 ? 0x400 : 0) | (no_dts ? 0x800 : 0)
+	        | (core_nodts_v4 ? 0x1000 : 0) | (core_nodts ? 0x2000 : 0);
 	if (dbg != last_dbg)
 	{
 		last_dbg = dbg;
 		FILE *f = fopen(HDMI_LOG_PATH, "a");
 		if (f)
 		{
-			fprintf(f, "state: passthru=%d sink_ok=%d declared=%d ini_mode=%d acked=%d pcm_session=%d bs_session=%d fmt_v2=%d\n",
+			fprintf(f, "state: passthru=%d sink_ok=%d declared=%d ini_mode=%d acked=%d pcm_session=%d bs_session=%d fmt_v2=%d no_dts=%d core_nodts=%d/%d\n",
 			        passthru, sink_ok, declared, mode, acked, core_pcm_session,
-			        core_bs_session, core_fmt_v2);
+			        core_bs_session, core_fmt_v2, no_dts, core_nodts_v4, core_nodts);
 			fclose(f);
 		}
 	}

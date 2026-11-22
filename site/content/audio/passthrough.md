@@ -23,6 +23,14 @@ exactly what the DE10-Nano's single wired audio line to the HDMI transmitter car
 **5.1 over HDMI needs no add-on board at all** — just the custom Main and a receiver that
 advertises AC-3/DTS support in its EDID.
 
+!!! warning "SuperStation One: use optical for passthrough"
+    On a **SuperStation One**, a Dolby Digital or DTS bitstream sent over HDMI does not
+    decode: the receiver shows "decoder off" and stays silent. The console's HDMI audio
+    path carries PCM correctly but does not pass a bitstream intact. Its **TOSLINK output
+    passes both formats fine**, so connect that to the receiver. PCM over HDMI, including
+    `Decode PCM` and LPCM or MP2 tracks in Passthru, works normally. Passthrough over HDMI
+    is tested on a DE10-Nano.
+
 !!! warning "HDMI bitstream needs `MiSTer_DVDcss`"
     Optical S/PDIF passthrough works on the bare `.rbf`. **Over HDMI it does not** — see
     [What you need](../getting-started/what-you-need.md). Nothing else about passthrough
@@ -58,7 +66,7 @@ change speed.
 | Format | In Passthru | Notes |
 |---|---|---|
 | **AC-3 (Dolby Digital)** | Bitstreamed | All channel modes |
-| **DTS** | Bitstreamed | Including any extensions (DTS-ES, 96/24) the core's decoder ignores |
+| **DTS** | Bitstreamed | Including any extensions (DTS-ES, 96/24) the core's decoder ignores. Decoded to stereo PCM instead if your HDMI display lists Dolby Digital but not DTS ([below](#a-display-that-takes-dolby-digital-but-not-dts)) |
 | **LPCM** | Sent as PCM | Decoded in the core and sent as ordinary stereo — see below |
 | **MP2** | Sent as PCM | Same; this is what VCD and SVCD discs carry |
 
@@ -106,6 +114,18 @@ MiSTer's volume.
 plain PCM silence, so it may show "PCM" rather than "Dolby Digital" while audio is off,
 and re-lock for a second when you turn it back on.
 
+## A display that takes Dolby Digital but not DTS
+
+Many televisions can decode Dolby Digital but not DTS, and say so in their EDID. With
+`MiSTer_DVDcss`, the core reads that and **decodes DTS tracks itself**, sending them as
+stereo PCM, while Dolby Digital tracks still go out as a bitstream. A DTS track therefore
+plays instead of going silent, at the cost of the 5.1 mix.
+
+That stereo PCM goes to **optical as well as HDMI**. If HDMI goes to such a television and
+optical goes to a receiver that does decode DTS, set `dvd_hdmi_bitstream=2` (force, below)
+to send DTS as a bitstream again. Optical then carries DTS, and the television gets a
+bitstream it ignores.
+
 ## If the receiver names the format but plays static
 
 Toggle **`SPDIF Byte Order`** (Normal / Swap). Payload byte order is the classic failure
@@ -124,9 +144,10 @@ ARC** — so there is an override:
 main=MiSTer_DVDcss
 
 ; HDMI bitstream for Audio Out = Passthru.
-;   0 = auto  (default) engage only when the sink's EDID advertises AC-3/DTS
+;   0 = auto  (default) engage only when the sink's EDID advertises AC-3/DTS;
+;             DTS is decoded to PCM if the sink lists AC-3 but not DTS
 ;   1 = off   never engage; HDMI behaves as it did before
-;   2 = force engage regardless of EDID
+;   2 = force engage regardless of EDID, for Dolby Digital and DTS alike
 dvd_hdmi_bitstream=0
 ```
 

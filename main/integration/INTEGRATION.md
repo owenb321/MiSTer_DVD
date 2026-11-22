@@ -163,6 +163,8 @@ sink expects PCM, and a bitstream would arrive as full-scale noise.
 | 14 | `user_io.cpp` | `CONF_DVD_HDMI_BS` into the `cfg[]` word sent to the core |
 | 15 | `user_io.cpp` | `dvd_hdmi_audio_declare()` off the `OX` arm in `parse_config()` |
 | 16 | `user_io.h` | `#define CONF_DVD_HDMI_BS 0b0100000000000000` (bit 14) |
+| 61 | `user_io.cpp` | `CONF_DVD_HDMI_NODTS` into the `cfg[]` word, after step 14's line (issue #201) |
+| 62 | `user_io.h` | `#define CONF_DVD_HDMI_NODTS 0b1000000000000000` (bit 15, the last free one) |
 | 17 | `video.h` | export `hdmi_config_set_audio()` + `video_hdmi_config_generation()` |
 | 18 | `video.cpp` | `static int hdmi_cfg_generation` beside the other file statics |
 | 19 | `video.cpp` | bump that counter in `hdmi_config_init()` |
