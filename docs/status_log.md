@@ -23,7 +23,10 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 ## Passthru field report: Audio Off, MiSTer volume, a stale stock Main (issues #196, #197, #198, 2026-11-21)
 
 **State:** 🔧 on `feature/passthru-audio`. Fit `DVD_passthruaudio_20261121_1532` SEED 7, timing
-PASS, 38,239 ALM / 520 M10K / 87 DSP (control 38,259 / 520 / 87). **HIL A/B on the rig**
+PASS, 38,239 ALM / 520 M10K / 87 DSP (control 38,259 / 520 / 87). After merging `main`
+(Dynamic Range, PR #199): `DVD_passthruaudio_20261122_0041` SEED 7, timing PASS (clk_dec
+94.52 / 91.25 MHz, clk_mem 100.56 / 102.54 MHz), 38,279 ALM / 520 / 87 (`main` with Dynamic
+Range alone: 38,326). **HIL A/B on the rig**
 (T2, Disc Menus Off, Passthru, `dvd_hdmi_bitstream=2`, the new Main on both arms):
 `/tmp/dvd_hdmi_audio.log` on the control (`DVD_vcdrestart_20261112_0549`) shows NO state
 change at Audio Off (`bs_session=1`, chip left `std-I2S+CSreg`). On the fix, Audio Off gives
