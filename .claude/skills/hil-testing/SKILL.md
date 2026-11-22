@@ -45,6 +45,7 @@ tools/mister.py restore         # stock Main, harness files gone, saved settings
 | `hud_read.py read/blocks <png>` | decode a screenshot's HUD / `O[2]` diagnostic blocks |
 | `dvd_explore.py <iso> --minutes 30` | unattended soak with self-tested oracles |
 | `audio_check.py <iso>` | is every audio track the disc offers actually audible? |
+| `iec61937_check.py <cap.wav> --iso <iso> --stream 0x80 --expect bitstream` | is a passthrough capture the disc's own AC-3/DTS frames, bit for bit? (`--expect silent`/`pcm` too; needs a bit-transparent capture path, `docs/hdmi_bitstream.md` "Bit-exact capture") |
 | `acmod_scan.py [iso...]` | what acmod does each AC-3 track really carry, vs what the RTL accepts? (no hardware) |
 | `nav_diff.py <disc> --script "1 2"` | diff the core's navigation against libdvdnav |
 | `nav_offline.py <disc> --auto 3` / `--library` | the same diff with **no rig**: the core's VM microcode under a model of the reader (`docs/nav_engine.md` §5) -- try it before queueing for the board; a difference is a lead to reproduce with `nav_diff` |

@@ -528,11 +528,14 @@ if not os.path.exists(m_path):
     fail(32, f"{m_path} not found")
 m = read(m_path)
 
+# Anchored on `case 0:` + the condition ONLY. The body below it is upstream's and
+# keeps growing (MGL_ACTION_INFO, the Atari ST's state 6 arrived after 7317947);
+# an anchor that quoted it broke on the first stock bump that touched it.
 m = replace_once(m,
-    "\t\t\tif (CheckTimer(mgl->timer))\n"
-    "\t\t\t{\n"
-    "\t\t\t\tmgl->state = (mgl->item[mgl->current].action == MGL_ACTION_LOAD) ? 1 : 4;\n",
+    "\t\tcase 0:\n"
+    "\t\t\tif (CheckTimer(mgl->timer))\n",
 
+    "\t\tcase 0:\n"
     "\t\t\t// dvd:mgl \u2014 an UNARMED timer is not an EXPIRED one. mgl_parse()\n"
     "\t\t\t// memsets the struct, so mgl->timer is 0 until user_io_init() arms it\n"
     "\t\t\t// at its very end -- and CheckTimer(0) returns TRUE. Anything that\n"
@@ -540,9 +543,7 @@ m = replace_once(m,
     "\t\t\t// ever set, and the file mounts immediately: ProgressMessage()/\n"
     "\t\t\t// MenuHide() at the end of a boot.rom transfer does exactly that.\n"
     "\t\t\t// See MiSTer_DVD/docs/mgl_launch.md.\n"
-    "\t\t\tif (mgl->timer && CheckTimer(mgl->timer))\n"
-    "\t\t\t{\n"
-    "\t\t\t\tmgl->state = (mgl->item[mgl->current].action == MGL_ACTION_LOAD) ? 1 : 4;\n",
+    "\t\t\tif (mgl->timer && CheckTimer(mgl->timer))\n",
     32, "mgl->timer && CheckTimer")
 
 # 42. The small Info() popup (volume bar, Mute, resolution, "Screenshot

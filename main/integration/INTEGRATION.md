@@ -6,6 +6,15 @@ what changes, so a stock-version bump that breaks an anchor can be fixed by hand
 
 Base pinned in `build_main.sh`: `MAIN_MISTER_REF` (a MiSTer-devel/Main_MiSTer commit).
 
+**Current pin: `fed03e5` (2026-11-14, issue #198)**, moved from `7317947` (2026-07-13) to pick
+up the stock `MiSTer.ini` options added since (`fb_terminal=2`, `osd_rotate=3`,
+`dpad_threshold`, `screenshot_info`, `sanity_check`). Of the 60-odd steps only step 32 needed
+a new anchor. ⚠ **The next bump is not an anchor fix.** Two days after this pin upstream
+started moving core identification into `support/core/core_ids.cpp` (`50f0bd3`) and SD/poll
+dispatch into per-core handlers (`af60c2e`); at its tip step 2 (`SD_TYPE_A2`) and step 3
+(`is_3do()`) have no anchor at all. Steps 2-6 have to be redesigned as a `support/dvd`
+registration in that model. Line numbers quoted below are from `7317947`.
+
 ## Files copied in (no edits needed — the Makefile auto-globs `support/*/*.cpp`)
 
 - `support/dvd/dvd_css.cpp` / `dvd_css.h`   — CSS-decrypted sector reads (dlopen libdvdcss)
@@ -418,9 +427,14 @@ this exists to draw.
 **The first edit outside `user_io.cpp`.** `menu.cpp`, one condition:
 
 ```c
+   case 0:
 -  if (CheckTimer(mgl->timer))
 +  if (mgl->timer && CheckTimer(mgl->timer))
 ```
+
+Anchored on `case 0:` and the condition only. Up to `7317947` the anchor also quoted the
+`if`'s first body line, and upstream rewrote that body (MGL `info` items, the Atari ST's
+state 6), which broke the step on the `fed03e5` bump. The bug itself is still upstream.
 
 `mgl_parse()` memsets the struct, so `mgl->timer` is **0** from the moment the MGL
 is parsed (`user_io_init` line ~1516) until it is armed at that function's very end
@@ -726,6 +740,6 @@ core switch goes through that function (the OSD core browser, an MGL, the return
 snapshot over SPI, which is impossible after `fpga_core_reset(1)`. It is silent, bounded
 (~300 ms) and does nothing unless a DVD-Video disc has been playing. The new-mount case needs
 no step: `dvd_sstate_note_mount` (step 58) calls the flush itself. **One stock anchor**
-(`OsdDisable();` + `static char path[1024];`, unique at `7317947`): re-verify it on a
+(`OsdDisable();` + `static char path[1024];`, unique at `7317947` and at `fed03e5`): re-verify it on a
 `MAIN_MISTER_REF` bump. Power-off and the reset button never reach it. Detail:
 `docs/nav_engine.md` §11i.

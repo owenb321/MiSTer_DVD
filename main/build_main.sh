@@ -65,11 +65,20 @@ fi
 source "$HERE/docker_reexec.sh"
 maybe_reexec_in_docker "$0" "$@"
 
-# Stock Main_MiSTer base. Pinned to the last stock commit before the Physical Disc
-# fork diverged (the CSS overlay was developed against it). Bump deliberately; if a
-# newer stock moves an anchor, apply_integration.py fails loudly naming the step.
+# Stock Main_MiSTer base. Bump deliberately; if a newer stock moves an anchor,
+# apply_integration.py fails loudly naming the step.
+#
+# fed03e5 (2026-11-14, issue #198): brings in the MiSTer.ini options added since
+# 7317947 (2026-07-13), fb_terminal=2 among them. It is deliberately the LAST commit
+# before upstream's core-dispatch refactor (af60c2e "Optimize core-specific SD and
+# polling dispatch", 50f0bd3 "Move core identification declarations into support
+# code", 2026-11-16): that moves is_*() core identification into
+# support/core/core_ids.cpp and SD/poll dispatch into per-core handlers, which is
+# where steps 2-6 hook in. Porting onto it is a redesign of those steps, not an
+# anchor fix, and was still landing upstream when this pin was chosen.
+# See docs/physical_disc.md "The stock Main base".
 MAIN_MISTER_URL="${MAIN_MISTER_URL:-https://github.com/MiSTer-devel/Main_MiSTer.git}"
-MAIN_MISTER_REF="${MAIN_MISTER_REF:-7317947}"
+MAIN_MISTER_REF="${MAIN_MISTER_REF:-fed03e5}"
 BUILD_DIR="${BUILD_DIR:-$HERE/.build}"
 STOCK="$BUILD_DIR/Main_MiSTer"
 OUT_NAME="MiSTer_DVDcss"

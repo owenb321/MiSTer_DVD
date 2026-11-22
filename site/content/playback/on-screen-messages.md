@@ -76,6 +76,20 @@ seek bar's cursor, so the two always agree; it returns to the live position once
 lands. On a `.mpg`, `.VOB` or VCD/SVCD the whole clock is an estimate worked out from how
 fast the file is playing — see [VCD & SVCD](../formats/vcd-svcd.md).
 
+## HDMI audio
+
+!!! note "Needs `MiSTer_DVDcss`"
+    Only the custom Main sends a bitstream over HDMI, so only it raises these. They appear
+    in a popup titled `HDMI Audio` when `Audio Out` is `Passthru` but the HDMI bitstream
+    cannot be switched on: the first two when a Dolby Digital or DTS track starts, the
+    third as soon as Passthru is selected. Optical S/PDIF is not affected by any of them.
+
+| Message | Meaning | What to do |
+|---|---|---|
+| `Sink does not list AC-3/DTS` | Your TV or receiver's EDID does not say it can decode Dolby Digital or DTS, so HDMI stays on PCM, which carries silence for that track. Common over ARC, which often misreports. | If the receiver can decode it, set `dvd_hdmi_bitstream=2` in `MiSTer.ini` to force it. Otherwise use `Decode PCM`. See [Troubleshooting](../reference/troubleshooting.md#no-audio-over-hdmi-in-passthru-but-optical-works). |
+| `Bitstream disabled` | `dvd_hdmi_bitstream=1` in `MiSTer.ini` turns the HDMI bitstream off. | Set it back to `0` (auto) or `2` (force). See [Controlling the HDMI path](../audio/passthrough.md#controlling-the-hdmi-path-from-misterini). |
+| `Core has no HDMI bitstream` | The `.rbf` is older than the custom Main and cannot send a bitstream over HDMI. | Update the core and `MiSTer_DVDcss` together from the same release. |
+
 ## Save states
 
 These come from the MiSTer Main rather than the core, so they appear in the usual grey

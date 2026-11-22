@@ -64,8 +64,8 @@ for showing widescreen content on a 4:3 display.
 
 | Setting | Options | What it does |
 |---|---|---|
-| **Audio** | **On** / Off | Master audio enable. |
-| **Audio Out** | **Decode PCM** / Passthru (SPDIF+HDMI) | Decode PCM decodes in fabric and sends stereo. Passthru sends the undecoded bitstream to an AV receiver — see [Bitstream passthrough](../audio/passthrough.md). |
+| **Audio** | **On** / Off | Master audio enable. Off silences every output, a [passed-through](../audio/passthrough.md) bitstream included. |
+| **Audio Out** | **Decode PCM** / Passthru (SPDIF+HDMI) | Decode PCM decodes in fabric and sends stereo. Passthru sends the undecoded bitstream to an AV receiver — see [Bitstream passthrough](../audio/passthrough.md). In Passthru, MiSTer's own volume cannot change a Dolby Digital or DTS bitstream: [use the receiver's volume](../audio/passthrough.md#volume-and-audio-off). |
 | **Dynamic Range** | **Normal** / Full / Night | How far Dolby Digital soundtracks are compressed: Night brings quiet dialogue and loud effects closer together for late viewing, Full turns compression off. See [Dynamic Range](#dynamic-range). |
 | **SPDIF Byte Order** | **Normal** / Swap | Applies to *both* bitstream outputs despite the name. If a receiver names the format but plays static, toggle this. |
 | **A/V Offset** | **0 ms** / −200 / −100 / −50 / +50 / +100 / +150 / +200 | Lip-sync trim. |

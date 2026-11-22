@@ -60,6 +60,52 @@ while the core is open plays it (`dvd_phys` polls for media change).
 | `integration/` | `INTEGRATION.md` (the `user_io.cpp` edits + `-ldl`) and `apply_integration.py` (anchored, idempotent patcher). |
 | `build_main.sh` | Fetch pinned stock Main, apply overlay, patch, build `MiSTer_DVDcss`. |
 
+## The stock Main base (issue #198, 2026-11-21)
+
+`MiSTer_DVDcss` **replaces** stock Main for the whole time the DVD core is loaded, so it is
+also what parses `MiSTer.ini` then. A stock ini option newer than `MAIN_MISTER_REF` does
+nothing inside the DVD core: field report, `fb_terminal=2` "gives an error when launching
+the core" (the base was `7317947`, 2026-07-13; the option is Main_MiSTer PR #1337,
+2026-10-05). On that base the value parses as a plain truthy 1, so the VGA nag that PR
+suppresses for `fb_terminal=2` + `vga_scaler=0` + `direct_video=0` can be shown. More
+directly, the old `cfg.cpp` declares `FB_TERMINAL` UINT8 0..1, so it clamps the 2 and raises
+`cfg_error("FB_TERMINAL: '2' out of range")`, which is reported as an INI-error popup on
+load. That is the likely "error". The reporter's exact text and ini were not given.
+
+**Pin now `fed03e5` (2026-11-14).** It picks up `fb_terminal=2`, `osd_rotate=3`,
+`dpad_threshold`, `screenshot_info` and `sanity_check`, and 188 commits of general fixes,
+among them `36e752a` "video: fix EDID read after HPD and/or cold boot", which the HDMI
+bitstream's EDID gate reads. Only step 32's anchor had to change. `video_get_edid()`, the
+EDID version counter and the `hdmi_config_init()` audio block our steps hook are unchanged
+in shape (checked by reading `fed03e5`, not just because the anchors matched).
+
+**Why not the tip.** `af60c2e` / `e106d44` / `50f0bd3` / `f47acd3` (2026-11-16 onward) move
+core identification into `support/core/core_ids.cpp` and SD/poll dispatch into per-core
+handlers. At the tip `SD_TYPE_A2` and `is_3do()` (the anchors of steps 2 and 3) are gone,
+and steps 2-6 (slot type, `is_dvd()`, its reset, the mount dispatch) need redesigning as a
+registration in the new model. The refactor was still landing on the day of the pin
+(`fb7d444`, 2026-11-21). The next bump should wait for it to settle, and plan for that
+redesign. Upstream `#1426` (more than 4 ini files with an INI folder) is the only
+ini-facing change past the pin.
+
+**Verified:** `apply_integration.py` clean on `fed03e5`, `check_ir_remap.py --require-stock`
+OK on that tree, the ARM build clean in the pinned image, `main/tests/run_tests.sh --red`
+green. **HIL on the rig (2026-11-21):** MGL launch, playback, telemetry, `vmsnap`, the
+HDMI bitstream engage/release, and `sstate_stress.py` (T2, 12 ops, seed 198: 2 loads, 0
+fail, 0 warn). ✅ **Physical disc + CSS** on the rig's USB drive (Dell DW316, no region
+set), retail *The Force Awakens*:
+- The core loaded with no image and the disc auto-mounted.
+- CSS: 19 VOBs and 12 title keys, from the key cache.
+- The title VOB streamed with a clean picture (the opening crawl).
+- 20 s of telemetry: 0 lates, 0 drops, `disp_lag` 0, `av_drift` +18 ms; HDMI audio −47 dBFS.
+- Eject opened the tray. It also logged the known second `(image)` eject event, which is
+  pre-existing; see "Drive compatibility".
+
+⏳ The IR remote was not run (skipped by the maintainer's decision). `fb_terminal=2` is not
+observable by the harness (the OSD popup and Main's console are invisible to it). On the
+old base it is `cfg_error("FB_TERMINAL: '2' out of range")`, UINT8 0..1, clamped to 1:
+very likely the reporter's error.
+
 ## Region / CSS edge cases handled (from the fork's dvd_css)
 
 - **No drive region (RPC-II):** SG_IO REPORT KEY reports `region_mask == 0xff`; libdvdcss

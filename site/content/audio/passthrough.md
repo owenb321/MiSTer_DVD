@@ -84,6 +84,28 @@ a second or so of silence at the change is normal, and a real player does the sa
     monitor cannot decode. On such a display use `Decode PCM`, which decodes both in the
     core and sends stereo.
 
+## Volume and Audio Off
+
+**In Passthru, turn the volume up and down on the receiver.** A bitstream is compressed
+data that the receiver decodes, so nothing on the MiSTer can make it louder or quieter.
+MiSTer's own volume, mute and boost (the OSD's system menu, the remote's Vol Up / Vol Down,
+or the TV remote) work on PCM, which is where the volume is applied. Exactly where that
+leaves you:
+
+| Track | Over HDMI and the analog output | Over optical S/PDIF |
+|---|---|---|
+| Dolby Digital, DTS | Not changed: the receiver's volume | Not changed: the receiver's volume |
+| LPCM, MP2 | MiSTer's volume applies | Not changed: the receiver's volume |
+
+The optical output carries the core's own signal for the whole of a Passthru session, so
+that it can switch between bitstream and PCM per track without the receiver losing lock,
+and that signal does not go through MiSTer's volume. In `Decode PCM` every output follows
+MiSTer's volume.
+
+**`Audio` = Off silences passthrough as well**, on optical and on HDMI. The receiver sees
+plain PCM silence, so it may show "PCM" rather than "Dolby Digital" while audio is off,
+and re-lock for a second when you turn it back on.
+
 ## If the receiver names the format but plays static
 
 Toggle **`SPDIF Byte Order`** (Normal / Swap). Payload byte order is the classic failure

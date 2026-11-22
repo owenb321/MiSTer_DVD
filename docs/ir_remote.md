@@ -27,7 +27,8 @@ remote to show up, but the keycodes above 255 are not supported by the stock
 MiSTer Main so he wasn't able to map many buttons."*
 
 That report understates it. There are **three stacked ceilings**, all measured
-against the pinned stock tree (`main/.build/Main_MiSTer`, ref `7317947`), not
+against the pinned stock tree (`main/.build/Main_MiSTer`, ref `7317947`; `check_ir_remap.py
+--require-stock` passes unchanged on `fed03e5`, the issue #198 pin), not
 recalled:
 
 | # | Where | Effect |

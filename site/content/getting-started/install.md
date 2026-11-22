@@ -89,6 +89,15 @@ moved to the end, so if the core still plays images only, check that first.
 **Reload the core after editing.** The Main is chosen at core load, so an already-running
 core will not pick up the change.
 
+!!! info "`MiSTer_DVDcss` follows the stock Main up to a fixed date"
+    `MiSTer_DVDcss` is the stock MiSTer Main with this core's additions, built from the
+    stock Main as of a particular date, currently **14 November 2026**. While the DVD core
+    is loaded, it is the Main that reads `MiSTer.ini`, so a setting the stock Main added
+    after that date has no effect inside the DVD core until a later release catches up.
+    Every other core runs the stock Main and is unaffected. Recent stock settings it
+    includes: `fb_terminal=2` (a terminal sized for a CRT on the analog output),
+    `osd_rotate=3`, `dpad_threshold`, `screenshot_info` and `sanity_check`.
+
 !!! danger "Do not overwrite the stock `/media/fat/MiSTer`"
     `MiSTer_DVDcss` is an *additional* Main used only by this core. Both files live side
     by side.

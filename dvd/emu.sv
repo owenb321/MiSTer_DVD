@@ -468,7 +468,23 @@ wire        cdda_afull_w;
 // verdict, and without this term passthrough rises in that gap and is torn down just as audio
 // starts: HW measured audio up to 210 ms late, intermittently (docs/standard_convert.md).
 wire        std_conv_wait;
-wire        pass_mode  = status[6] & ~cdda_mode_w & ~std_conv_active & ~std_conv_wait;   // O6: 1 = IEC 61937 passthrough
+// O5 "Audio" On/Off (issue #197). Declared here because pass_mode needs it; the
+// decoder's enable (aud_dec_en, further down) is this same wire.
+wire        aud_on     = ~status[5];
+// pass_sel: the user's Passthru selection as the session can honour it. ONLY
+// player_regs reads it (SPRM15, the player's audio capability): turning Audio
+// Off must not change which stream a disc program picks.
+wire        pass_sel   = status[6] & ~cdda_mode_w & ~std_conv_active & ~std_conv_wait;   // O6: 1 = IEC 61937 passthrough
+// pass_mode: a bitstream may actually go out. Audio Off folds in here (issue
+// #197): before, Off only parked the decoder, and in Passthru the AC-3/DTS
+// frames bypass it, so Off did nothing. With pass_mode low the session is
+// exactly Decode with the decoder parked -- the path Off has always taken in
+// Decode: both bitstream legs fall back to the framework's PCM encoder carrying
+// zeros, the wrapper is idle, aud_route hands every frame to the parked decoder,
+// and af_bs_session (below) tells Main to put the ADV7513 back in PCM mode.
+// An Off/On edge mid-play is the same transition as switching Audio Out between
+// Decode and Passthru mid-play. Gate: tools/check_audio_off_wiring.py.
+wire        pass_mode  = pass_sel & aud_on;
 wire        pass_bswap = status[7];   // O7: 1 = swap payload byte order
 assign AUDIO_S      = 1;
 assign AUDIO_MIX    = 2'd0;
@@ -717,7 +733,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-drc"
+`define CORE_VERSION "dev-passthruaudio"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -1354,7 +1370,12 @@ dvd_telem dvd_telem_inst (
     // into PCM mode for an LPCM/MP2 track in Passthru.
     .af_passthru    (pass_mode),
     .af_pcm_session (rt_pcm_session),
-    .af_bs_session  (rt_bs_session),
+    // "A bitstream is on the wire right now", which Main engages the ADV7513 on.
+    // rt_bs_session is aud_route's last verdict and is only updated under
+    // split_en, so it goes stale when pass_mode falls (Audio Off, issue #197;
+    // Standard Convert engaging mid-play). Ungated, Main would keep the chip in
+    // non-PCM mode and raise "Sink does not list AC-3/DTS" with nothing playing.
+    .af_bs_session  (rt_bs_session & pass_mode),
     .rq_eject_tgl   (rq_eject_tgl),
     .rq_volup_seq   (rq_volup_seq),
     .rq_voldn_seq   (rq_voldn_seq)
@@ -2887,7 +2908,7 @@ player_regs player_regs_inst (
     .rmask                (vmg_rmask_w),
     .aa_live              (aa_live),
     .aa_sel               (aa_osd_sel),
-    .pass_mode            (pass_mode),
+    .pass_mode            (pass_sel),   // the selection, not Audio On/Off (issue #197)
     .dts_ok               (cb_tables_ok),
     .sprm14               (pr_sprm14),
     .sprm15               (pr_sprm15),
@@ -4777,7 +4798,7 @@ assign ps_aud_ready = ~(aud_ring_almost_full && aud_bp_armed && ~step_session);
 // O5 On (default). The ~pass_mode term is GONE: in Passthru the decoder handles
 // the LPCM/MP2 frames aud_route routes to it. Costs no fabric -- the module was
 // always instantiated and never reset by the mode; `enable` only parked its FSM.
-wire        aud_dec_en = ~status[5];
+wire        aud_dec_en = aud_on;   // O5; also folded into pass_mode (issue #197)
 wire  [1:0] aud_drc = status[62:61];        // O[62:61] Dynamic Range
 wire        ac3_synced_dbg, ac3_err_dbg;
 

@@ -677,6 +677,77 @@ The §5a engage policy and teardown are covered off-hardware in two places:
 If (1) fails with the receiver naming nothing or mis-locking, try the §3
 preamble table before anything else.
 
+### Bit-exact capture instead of a receiver (`tools/iec61937_check.py`, 2026-11-21)
+
+A receiver says a bitstream plays, and only someone listening can say it. This tool
+measures it. Given a PCM capture of the core's HDMI or optical output, it finds the
+IEC 61937 bursts (`F872 4E1F`), pulls the AC-3 / DTS frame out of each burst and looks
+every frame up among the frames of the same substream read off the disc. That makes
+these HW-gate items measurable with no receiver:
+
+| Claim | Capture, then |
+|---|---|
+| passthrough is the disc's own frames | `--iso <disc> --stream 0x80 --expect bitstream` |
+| byte order right (the "static" gotcha) | the report's `byte order normal` (`swapped` = SPDIF Byte Order on Swap) |
+| no dropped / repeated frames | `order breaks` 0 over a capture with no seek in it |
+| Audio Off silences passthrough (issue #197) | `--expect silent` |
+| MiSTer volume never touches a bitstream (issue #196) | `--expect bitstream` passes at any volume |
+| teardown back to PCM (LPCM VOB, Decode PCM) | `--expect pcm` |
+
+It needs a capture path that hands back the wire's 16-bit words untouched: integer PCM,
+no resampling, no mixer, and the non-audio flag ignored. Two candidates on the rig:
+
+- **HDMI straight into the USB capture card**, with `dvd_hdmi_bitstream=2`, because the
+  card's EDID won't list AC-3. ⚠ On rig 236 that means unplugging the RetroTINK, which
+  normally feeds the card from the analog output.
+- **A bit-transparent USB S/PDIF input** for optical. Many cheap ones mute when the
+  non-audio flag is set.
+
+Whether a path is transparent is exactly what the first capture answers: matching frames
+= yes; no bursts, or bursts that don't match = no (or the core sent PCM). Capture through
+`hw:`, not PipeWire's float mixer: a float capture is refused because it cannot be
+bit-exact.
+
+**Validated:**
+- `--selftest` covers 19 synthetic cases, one per verdict, each failing exactly its own
+  case: a flipped bit, byte swap, wrong track, dropped frame, bursts where PCM or silence
+  was expected, and the reverse. It runs in `run_hdmi_bitstream.sh`.
+- Against an independent encoder (ffmpeg's `-f spdif` muxer) on real frames: the AC-3
+  vector `bench/ac3/vectors/bbb_short_5p1.ac3` (11/11) and T2's DTS slice
+  `bench/dvd/test_vobs/dts_t2_4k.hex` (4/4).
+
+**★ First rig capture (2026-11-21): rig 236's USB HDMI card (MacroSilicon) is NOT
+bit-transparent.** Setup: HDMI straight into the card, `dvd_hdmi_bitstream=2`, raw
+`hw:CARD=Hagibis` (PipeWire's source suspended). What came back:
+- Every burst arrives on its exact period (3072 words for AC-3), but no sample is right:
+  `F872 4E1F` arrives as `F881 4D82`, and Pa reads anywhere from −1919 to −76 from one
+  burst to the next.
+- About 1 burst gap in 50 is 3070 words, so the card also drops a pair now and then
+  while re-clocking to its own 48 kHz.
+- The card's ALSA mixer has no gain control, so this can't be fixed from the host.
+
+The checker therefore also recognises **burst-shaped runs**: non-zero runs starting on a
+codec's burst period after a zero gap. It reports them as "the capture path alters
+samples", and counts them as bursts for `--expect silent` / `pcm`. So this card can't
+check frames, but it does answer whether a bitstream is on the wire at all.
+
+| T2, Passthru, 8 s per leg | control `DVD_vcdrestart` (`main`) | fix `DVD_passthruaudio` |
+|---|---|---|
+| Audio On | 212 AC-3-period bursts | 212 AC-3-period bursts |
+| **Audio Off** (`--expect silent`) | **FAIL: 212 bursts still going** | **PASS: 0 non-zero words** |
+| Audio On again | 212 bursts | 212 bursts |
+| Decode PCM (`--expect pcm`) | PASS | PASS |
+
+That is issue #197 measured at the output itself, with a control that fails. The chip-log
+A/B in `docs/status_log.md` showed the same thing one step earlier, at the ADV7513's mode.
+
+Issue #196 needs no capture. It is a documentation fix for behaviour the code
+guarantees: both bitstream paths are muxed in after `audio_out`'s `vol_att`
+(§7 Known limitations), and the field report observed exactly that.
+⏳ **Nice to have, with a transparent path** (a bit-perfect USB S/PDIF input, or another
+HDMI card): the bit-exact frame match and the byte order.
+⏳ The `--iso` reference path is also not yet run against a real image.
+
 ---
 
 ## 7. Known limitations
@@ -690,6 +761,23 @@ preamble table before anything else.
 - ~~**MP2 and LPCM tracks are silent in Passthru**~~. *Superseded 2026-09-10 (PR #79,
   HW-confirmed): LPCM and MP2 are decoded and sent as PCM in Passthru. See
   `docs/iec61937.md` status.*
+- **MiSTer's volume / mute / boost cannot touch a bitstream, and in Passthru it does not
+  reach optical at all** (issue #196). `vol_att` lives in the framework's `audio_out`, and
+  both bitstream paths are muxed in after it (`sys_top.v`: `spdif_out = spdif_pass_en ?
+  spdif_pass : spdif`; `HDMI_* = hdmi_bs_ok ? hdmi_bs_* : i2s_*_pcm`). `SPDIF_PASS_EN` is
+  `pass_mode & ~|bs_hold`, with no content term, so for the whole Passthru session optical is
+  `iec61937_wrap`, whose PCM mode takes `dec_audio_l/r` straight from the decoder: LPCM and MP2
+  over optical ignore the volume too. HDMI and analog follow it for PCM content (ack released
+  → framework I2S; analog via `audio_out`). Documented in the manual's passthrough page. A fix
+  would apply `vol_att` to the wrapper's PCM input, which needs the attenuation shipped to the
+  core (stock has no such path). Not planned.
+- **Audio Off is folded into `pass_mode`** (issue #197): `pass_mode = pass_sel & aud_on`, so
+  Off in Passthru is Off in Decode (zeros on every leg, Main releases the chip). `pass_sel`
+  feeds `player_regs` only, so SPRM15 does not follow the Audio toggle. `af_bs_session` is
+  `rt_bs_session & pass_mode`: aud_route updates `bs_session` only under `split_en`, so the
+  ungated bit went stale whenever `pass_mode` fell (Audio Off, or Standard Convert engaging
+  mid-play) and Main kept the ADV7513 in non-PCM mode with a PCM session on the wire.
+  Gate: `tools/check_audio_off_wiring.py --red` (in `run_hdmi_bitstream.sh`).
 - **Simultaneous decoded-PCM-on-HDMI + bitstream-on-S/PDIF is deferred.** It
   needs two consumers of the single `audio_ring` read side. Measured cost of the
   clean fix (a second ring) is **34 M10K** against 47 free — RAM 92% → 97.6% on

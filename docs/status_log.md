@@ -20,6 +20,73 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ---
 
+## Passthru field report: Audio Off, MiSTer volume, a stale stock Main (issues #196, #197, #198, 2026-11-21)
+
+**State:** 🔧 on `feature/passthru-audio`. Fit `DVD_passthruaudio_20261121_1532` SEED 7, timing
+PASS, 38,239 ALM / 520 M10K / 87 DSP (control 38,259 / 520 / 87). After merging `main`
+(Dynamic Range, PR #199): `DVD_passthruaudio_20261122_0041` SEED 7, timing PASS (clk_dec
+94.52 / 91.25 MHz, clk_mem 100.56 / 102.54 MHz), 38,279 ALM / 520 / 87 (`main` with Dynamic
+Range alone: 38,326). **HIL A/B on the rig**
+(T2, Disc Menus Off, Passthru, `dvd_hdmi_bitstream=2`, the new Main on both arms):
+`/tmp/dvd_hdmi_audio.log` on the control (`DVD_vcdrestart_20261112_0549`) shows NO state
+change at Audio Off (`bs_session=1`, chip left `std-I2S+CSreg`). On the fix, Audio Off gives
+`bs_session=0` → `adv7513: PCM I2S`, and Audio On re-engages it. The first capture attempt
+was void: the card was then fed by the RetroTINK on YPbPr (the analog output, which never
+carries a bitstream). The output itself was measured later, see "Audio Off measured on the
+wire" below. SPRM15 read 0x5800 On and Off, but that cannot fail on the rig
+(`dts_ok` = 1 masks the pass bit), so the static gate is the evidence.
+**Field report (Discord):** *"Audio: Off doesn't work, audio keeps playing, also after reset.
+Global and core audio options in the MiSTer menu don't have any effect on volume.
+fb_terminal=2 gives an error when launching the core. Sometimes 'Sink does not list...'"*
+
+One cause behind the first three: **the user is in Audio Out = Passthru**. The popup proves it:
+`Sink does not list AC-3/DTS` (`dvd_hdmi_audio.cpp`) fires only with `status[6]` set and
+`content_is_bitstream()`. "Sometimes" is not DTS-only: `scan_sads()` accepts AC-3 OR DTS as a
+single session-wide `sink_ok`, so the popup comes up once per transition into a DD/DTS
+track (LPCM/MP2 tracks and menus are PCM). A sink that lists AC-3 but not DTS gets
+`sink_ok = 1` and is sent DTS it cannot decode. That is a separate gap, not filed.
+
+- **#197, Audio Off.** `status[5]` fed only `aud_dec_en`, and the bitstream bypasses the decoder.
+  Fixed by folding Off into `pass_mode` (`pass_sel & aud_on`), so an Off session in Passthru
+  is the Decode+Off path, which is already silent (`dvd_audio_decode` drives `audio_l/r <= 0`
+  while `!enable`). `player_regs` keeps the raw selection (`pass_sel`), so SPRM15 does not
+  change stream choice. `af_bs_session` is gated on `pass_mode` so Main releases the chip:
+  the verdict is updated only under `split_en` and was stale once it fell. The same
+  staleness already existed for **Standard Convert engaging mid-play** (pre-existing, fixed
+  by the same term). An Off/On edge is the Decode↔Passthru mid-play switch, which is an
+  existing path. Detail: `hdmi_bitstream.md` §7.
+- **#196, volume.** Not a bug: `vol_att` is applied in `audio_out`, before the bitstream
+  mux. In Passthru it does not reach optical at all, LPCM/MP2 included, because the wrapper
+  owns that pin for the session. ⚠ The manual (`controls.md` Volume) said the opposite, that
+  MiSTer's volume "is the only one that can affect a bitstream". Corrected, plus a "Volume
+  and Audio Off" section and the three `HDMI Audio` popups, which were never listed.
+- **#198, the Main base.** `MAIN_MISTER_REF` 7317947 → `fed03e5`, the last commit before
+  upstream's core-dispatch refactor. Step 32 re-anchored. Detail and why not the tip:
+  `physical_disc.md` "The stock Main base". The reporter's "error" is very likely the old
+  base's `cfg_error("FB_TERMINAL: '2' out of range")` (UINT8 0..1 there; the value is clamped
+  to 1 and an "INI Error" popup comes up when the core loads). On `fed03e5` the range is
+  0..2. Not observable by the harness, since the popup is the OSD and stdout goes to
+  `/dev/console`. ✅ Physical disc + CSS on the new Main (retail *The Force Awakens*, USB
+  drive): auto-mount, title keys, a clean picture, 0 lates / 0 drops, eject opens the tray
+  (`physical_disc.md` "The stock Main base"). The IR remote was not run.
+
+**Gates:** `tools/check_audio_off_wiring.py --red` (6 arms, 10 mutations each failing exactly
+its arm; fails 6 ways on `main`'s `emu.sv`), in `run_hdmi_bitstream.sh`;
+`check_player_regs_wiring.py --red` (+ "SPRM15 follows Audio Off");
+`check_std_convert_wiring.py`, `run_std_rate.sh --red`, `run_passthru_pcm.sh` green;
+`main/tests/run_tests.sh --red` green; ARM build clean against `fed03e5`.
+✅ **Audio Off measured on the wire (2026-11-21):** HDMI went straight into rig 236's
+capture card, analysed with `tools/iec61937_check.py`. The control (`DVD_vcdrestart`)
+kept sending 212 AC-3 bursts per 8 s at Audio Off; the fix sent exact digital silence
+(`docs/hdmi_bitstream.md` "First rig capture"). The card alters every sample, so it can't
+check frames bit for bit.
+#196 is a documentation fix for behaviour the code guarantees (the bitstream is muxed
+after `vol_att`), and the report itself observed it, so no capture is needed.
+**Next step:** a reporter confirmation. Optional: a bit-exact frame match through a
+bit-perfect USB S/PDIF input.
+
+---
+
 ## Dynamic Range: AC-3 DRC Normal / Full / Night; DTS DYNF counted (issue #189, 2026-11-12)
 
 **State:** ✅ MERGED PR #199. ✅ HW capture A/B (2026-11-13); ✅ by ear (2026-11-21, the maintainer, Road Warrior ch. 3: no gap or click when switching modes live; the modes are close to each other on this disc, but Night noticeably lifts the quiet sections). Fitted (`DVD_drc_20261113_0253`, SEED 7):
