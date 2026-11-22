@@ -22,7 +22,9 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## DTS on an HDMI sink that lists AC-3 only: decoded to PCM (issue #201, 2026-11-22)
 
-**State:** 🔧 on `feature/dts-sink-fallback` (`dev-dtssink`), sim- and unit-green; ⏳ fit,
+**State:** 🔧 on `feature/dts-sink-fallback` (`dev-dtssink`), sim- and unit-green. Fit
+`DVD_dtssink_20261122_0152` SEED 7, timing PASS (clk_dec 91.49 / 90.60 MHz, clk_mem
+96.10 / 97.81 MHz), 38,335 ALM / 520 M10K / 87 DSP (merged `main`: 38,279 / 520 / 87).
 ⏳ HIL. **Design and decisions:** `docs/hdmi_bitstream.md` §8.
 
 The Main kept one `sink_ok` for "AC-3 or DTS", so a TV that names AC-3 only was sent DTS
