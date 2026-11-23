@@ -63,6 +63,41 @@ sectors; 19 discs needed resyncs, 6 of them gave up). The core follows cells, so
 not affect the design, but those discs' rows under-sample. Starting the walk from the
 title PGC's cells is a TODO for the tool.
 
+## The splice model
+
+`tools/trick_splice.py` builds the stream trick play feeds the decoder, from a real ISO, and
+decodes it with ffmpeg: one clean picture per VOBU, or FAIL.
+
+**2026-11-22, 24 discs from the sweep (seeded), every tier, both directions, 30 frames:
+192 / 192 clean, 0 decoder errors.** The `--raw` control (the cut sectors as read, no filter)
+decodes twice as many pictures, all of them corrupt (78–102 errors on Men in Black 3): the
+partial B-frame each read carries is real, and the filter is what removes it.
+
+**The filter rule, as the RTL must implement it:**
+- drop until the VOBU's first sequence header (`00 00 01 B3`);
+- pass the reference frame: one frame picture, or two complementary field pictures;
+- cut at the next **picture start code, recognised from its 4 bytes alone** (`00 00 01 00`).
+  The first model needed 6 bytes of header and let a picture start split by the read's end
+  through: 6 of 193 runs failed with "ignoring seq ext after 100";
+- at the end of a read, drop a dangling `00 00 01`. Zero bytes left before the next sequence
+  header are legal stuffing and can stay. 5 of the 24 discs end a read this way.
+
+**Cell edges are required, in both directions.** Reverse stops at a cell's first VOBU, where
+every `bwda` entry and `prev_vobu` say END_OF_CELL:
+
+| Jump | forward reached 30 | reverse reached 30 |
+|---|---|---|
+| 0.5 s | 24 / 24 | 24 / 24 |
+| 2 s | 24 / 24 | 20 / 24 |
+| 10 s | 24 / 24 | 6 / 24 (median 14) |
+| 30 s | 24 / 24 | 1 / 24 (median 7) |
+
+Forward crossed only because the model fell back to the next sector, which is wrong wherever
+the play order is not the physical order (`docs/dvd_nav.md` §2f) or inside an ILVU block.
+So at END_OF_CELL the reader takes the next (or previous) cell from the PGC's cell table:
+its first VOBU going forward, its last VOBU (`last_vobu_start_sector`) going back. It does
+not run cell commands.
+
 ## The physical-drive baseline
 
 **2026-11-22, rig .236, Dell DW316 (USB), a pressed dual-layer CSS film disc**, read through
@@ -87,7 +122,9 @@ one-off (`drive_jump.py`, run on the rig); the method is what to repeat.
 - A sample of one drive and one disc. USB drives vary widely, so the baseline must be
   conservative.
 
-**Proposed (awaiting the maintainer):** a fixed display cadence of one I-frame every T ms,
+**Decided (maintainer, 2026-11-22): T = 250 ms, and the hold steps through 2×, 8×, 40×,
+120×** (jumps of 0.5, 2, 10 and 30 s; valid 98 / 90 / 71 / 66 % of the time in the sweep, the
+rest falling back to a shorter jump). The mechanism: a fixed display cadence of one I-frame every T ms,
 T from the drive's p90 for a typical frame, with image reads gated to the same cadence.
 Decision 4 then holds by construction: the only difference left is that a late physical read
 holds the previous frame a little longer. A tier's speed is its jump ÷ T; at T = 250 ms the
@@ -95,13 +132,12 @@ jumps 0.5 / 1 / 2 / 10 / 30 / 60 / 120 s give 2× / 4× / 8× / 40× / 120× / 2
 
 ## Open questions
 
-- Cell and PGC edges: `fwda` returns END_OF_CELL near a cell end; the next cell's first VOBU
-  must come from the PGC, without running cell commands. At the PGC end, drop to normal play
-  so POST runs.
+- The PGC's edges: at the last cell going forward, drop to normal play so POST runs; at the
+  first cell going back, stop at its first VOBU and resume there.
 - Angle blocks and seamless-branch ILVUs: whether `fwda` stays inside the playing angle.
 - Entering: title domain only, playing, no buttons armed, no still.
 - `.mpg` and VCD have no nav packs: out of scope (they keep scrub-to-target).
 
 ## Next step
 
-The maintainer picks the cadence T and the tier set; then the offline splice model (build the I-frame stream from an ISO with the ES filter, decode it with ffmpeg and the bit-exact cosim).
+Feed the splice model's stream through the RTL decoder in simulation (the bench the quant-matrix gate uses is the starting point), so the claim "the decoder handles a spliced I-frame stream" is checked on our decoder and not only on ffmpeg. Then the RTL: the ES filter first, since it is self-contained.
