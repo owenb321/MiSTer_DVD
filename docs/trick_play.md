@@ -63,10 +63,38 @@ sectors; 19 discs needed resyncs, 6 of them gave up). The core follows cells, so
 not affect the design, but those discs' rows under-sample. Starting the walk from the
 title PGC's cells is a TODO for the tool.
 
+## The physical-drive baseline
+
+**2026-11-22, rig .236, Dell DW316 (USB), a pressed dual-layer CSS film disc**, read through
+libdvdcss (the drive refuses scrambled sectors until authenticated, so raw `/dev/sr0` reads
+fail and their timings are meaningless). Twelve reads per row at fresh positions, at 15 %,
+50 % and 85 % into the feature, both directions; 0 errors in 1,152 reads. The script is a
+one-off (`drive_jump.py`, run on the rig); the method is what to repeat.
+
+| Jump (≈ sectors) | 60 sectors: median, p90 | 127 sectors: median, p90 |
+|---|---|---|
+| 0.5 s (200) | 68–101, 102 ms | 78–146, 189 ms |
+| 2 s (800) | 68–105, 106 ms | 163–247, 247 ms |
+| 10 s (4,000) | 91–112, 125 ms | 187–283, 292 ms |
+| 30 s (12,000) | 101–133, 154 ms | 198–295, 319 ms |
+| 60 s (24,000) | 121–155, 266 ms | 196–324, 354 ms |
+| 120 s (48,000) | 128–170, 208 ms | 245–368, 409 ms |
+
+- **Transfer, not seek, dominates.** The extra 67 sectors cost 100–150 ms (≈ 1× DVD speed on
+  random reads); seek distance adds only 30–70 ms across the whole range.
+- With the next frame prefetched while the current one shows, the drive sustains about
+  6–9 typical I-frames per second and 2.5–4 of the largest.
+- A sample of one drive and one disc. USB drives vary widely, so the baseline must be
+  conservative.
+
+**Proposed (awaiting the maintainer):** a fixed display cadence of one I-frame every T ms,
+T from the drive's p90 for a typical frame, with image reads gated to the same cadence.
+Decision 4 then holds by construction: the only difference left is that a late physical read
+holds the previous frame a little longer. A tier's speed is its jump ÷ T; at T = 250 ms the
+jumps 0.5 / 1 / 2 / 10 / 30 / 60 / 120 s give 2× / 4× / 8× / 40× / 120× / 240× / 480×.
+
 ## Open questions
 
-- The physical-drive baseline: seek + read time for one I-frame on the rig's USB drive
-  (Dell DW316), per jump distance. That number sets the tiers.
 - Cell and PGC edges: `fwda` returns END_OF_CELL near a cell end; the next cell's first VOBU
   must come from the PGC, without running cell commands. At the PGC end, drop to normal play
   so POST runs.
@@ -76,4 +104,4 @@ title PGC's cells is a TODO for the tool.
 
 ## Next step
 
-Finish the sweep, then measure the physical drive's I-frame fetch time on rig .236.
+The maintainer picks the cadence T and the tier set; then the offline splice model (build the I-frame stream from an ISO with the ES filter, decode it with ffmpeg and the bit-exact cosim).
