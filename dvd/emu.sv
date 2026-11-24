@@ -3985,6 +3985,16 @@ dvd_iso_reader dvd_iso_reader_inst (
     // Issue #176: buttons on screen OR on the way. Pending matters: the reader
     // reaches a cell's end ~a VBUF ahead of the display, where a window opening in
     // the cell's last second is still parsed-but-not-promoted.
+    // Trick play (docs/trick_play.md): tied off until the controller drives it.
+    .trick_en       (1'b0),
+    .trick_tier     (2'd0),
+    .trick_rev      (1'b0),
+    .trick_go       (1'b0),
+    .trick_vobu     (),
+    .trick_nav      (),
+    .trick_eltm     (),
+    .trick_edge     (),
+    .trick_xcell_n  (),
     .cc_btns        (hl_btns_armed | hl_btns_pend),
 
     .vm_mode        (menus_on),           // Phase 4: the VM drives navigation
@@ -4119,6 +4129,7 @@ ps_demux ps_demux_inst (
     .in_ready     (ps_demux_in_ready),
 
     // O[8:6]: which audio substream/track to forward (default 0 = substream 0x80).
+    .aud_drop     (1'b0),            // trick play: tied off until the controller drives it
     .aud_track    (aud_track_eff),   // Phase 4: SetSTN (SPRM1) wins when set
     .aud_realign  (aud_switch | dmx_rlgn_go),   // new track, or the landing after a hard flush, starts on a real frame (see dmx_rlgn_go)
 

@@ -260,14 +260,31 @@ mutations, each failing its own arm: the 2 s rung, cell crossing, the backward l
 the gate, 1stref_ea, the whole-sector guard and the edge hold. With trick play off,
 `bench/dvd/run_reader_regress.sh` is bit-identical to the previous reader on every arm.
 
+## Audio and subpicture
+
+`dvd/ps_demux.sv` `aud_drop`: while high, every audio PES (MP2 stream `0xC0`–`0xC7` and
+private_stream_1 audio) takes the path a non-selected track already takes (skip by
+length). Without it, the audio ring fills in trick play, its backpressure stops the demux,
+and the video stalls with it: measured on Men in Black 3's trick reads, the demux stops
+after 22,560 of 618,496 bytes. Subpicture and PCI need nothing new: `sp_enable` and
+`pci_enable` exist and `dvd/emu.sv` will gate them with trick play, so no subtitle unit
+and no button highlight arms over trick frames. DSI keeps flowing.
+
+**Gate: `bench/dvd/run_trick_demux.sh` (`--red`).** A synthetic stream with video, MP2,
+AC-3 and a subpicture, and the raw sectors of 6 trick reads of Men in Black 3. With
+`aud_drop` and the audio ring full: no audio out, no stall, video byte-identical. The
+controls show the audio does flow without `aud_drop` (so the zero is not vacuous) and that
+a full ring stalls the demux. One RED mutation per discard site (MP2 and
+private_stream_1). Every bench that instantiates `ps_demux` ties `aud_drop` low;
+`dvd/emu.sv` ties it, and the reader's trick inputs, low until the controller exists.
+
 ## Next step
 
 In order, each with a bench and `--red` arms:
-1. **Drop audio and subpicture packs** while trick play runs (the audio ring would
-   back-pressure the demux) and mute.
-2. **The `disp_sched` cadence mode:** show each I-frame for 250 ms, ignoring PTS.
-3. **The controller** (`scrub_ctrl`): hold-FF/REW enters trick play with a seek to the
-   playhead, steps the tier, drives `trick_go` at 250 ms, and leaves with a seek to
-   `trick_nav`; the HUD clock follows `trick_eltm`. Then wire the reader ports and
-   `dvd/trick_es_filter.sv` into `dvd/emu.sv` and `DVD.qsf`, with `check_*_wiring.py` for
-   each seam, and build for the rig.
+1. **The `disp_sched` cadence mode:** show each I-frame for 250 ms, ignoring PTS.
+2. **The controller** (`scrub_ctrl`): hold-FF/REW enters trick play with a seek to the
+   playhead, steps the tier, drives `trick_go` at 250 ms and `aud_drop`, gates
+   `sp_enable`/`pci_enable`, and leaves with a seek to `trick_nav`; the HUD clock follows
+   `trick_eltm`. Then wire the reader ports, `aud_drop` and `dvd/trick_es_filter.sv` in
+   `dvd/emu.sv` and `DVD.qsf`, with a `check_*_wiring.py` for each seam, and build for
+   the rig.
