@@ -99,7 +99,12 @@ module kbd_map (
     input  wire [10:0] ps2_key,
 
     // One-cycle pulse per PRESS, in joystick_0[24:0] bit order.
-    output reg  [24:0] joy
+    output reg  [24:0] joy,
+    // RELEASE pulses for Fast Fwd [0] and Rewind [1] only: dvd/kbd_hold.sv pairs them
+    // with the press pulses above to tell a tap (a 10 s jump) from a hold (trick play,
+    // docs/trick_play.md). Still pulses: no level is held here, so a lost break is a
+    // non-event in this module; kbd_hold owns the level and its safety timeout.
+    output reg  [1:0]  rel
 );
 
     // ---- scancode -> bit index (combinational) -----------------------------
@@ -211,12 +216,16 @@ module kbd_map (
     always @(posedge clk or negedge rst_n) begin
         if (!rst_n) begin
             joy       <= 25'd0;
+            rel       <= 2'd0;
             ps2_tgl_q <= 1'b0;
         end else begin
             joy       <= 25'd0;                 // default: one-cycle pulse
+            rel       <= 2'd0;
             ps2_tgl_q <= ps2_key[10];
             // new key event (toggle flipped) + PRESSED (break events ignored)
             if ((ps2_key[10] ^ ps2_tgl_q) && ps2_key[9]) joy <= hit;
+            // ...and a BREAK of Fast Fwd / Rewind, for kbd_hold
+            if ((ps2_key[10] ^ ps2_tgl_q) && !ps2_key[9]) rel <= {hit[14], hit[13]};
         end
     end
 

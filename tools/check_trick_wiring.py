@@ -72,6 +72,21 @@ def inst(src, module):
     return None
 
 
+def inst_named(src, module, name):
+    m = re.search(r'(?m)^\s*' + re.escape(module) + r'\s+' + re.escape(name) + r'\s*\(', src)
+    if not m:
+        return None
+    i, depth = m.end() - 1, 0
+    for j in range(i, len(src)):
+        if src[j] == '(':
+            depth += 1
+        elif src[j] == ')':
+            depth -= 1
+            if depth == 0:
+                return src[i + 1:j]
+    return None
+
+
 def port(body, name):
     """The expression connected to .name( ... ), balanced parentheses."""
     m = re.search(r'\.' + re.escape(name) + r'\s*\(', body)
@@ -115,7 +130,8 @@ def check(emu_src, qsf_src):
         return bad
 
     # the controller
-    for p, net in (('held_ff', 'joy_ff'), ('held_rew', 'joy_rew'), ('allowed', 'trick_allowed'),
+    for p, net in (('held_ff', 'joy_ff | kbd_ff_held'), ('held_rew', 'joy_rew | kbd_rew_held'),
+                   ('allowed', 'trick_allowed'),
                    ('cur_rbn', 'dsi_nv_pck_lbn'), ('trick_vobu', 'trick_vobu_w'),
                    ('trick_nav', 'trick_nav_w'), ('trick_edge', 'trick_edge_w'),
                    ('active', 'trick_active'), ('tier', 'trick_tier'), ('rev', 'trick_rev'),
@@ -175,6 +191,27 @@ def check(emu_src, qsf_src):
                   r'\s*trick_cad_dec\s*<=\s*trick_cad_s1\s*;\s*end', src)
     want(m, 'trick_cad_dec is not trick_active through two clk_dec flops')
 
+    # keyboard / remote FF/REW: a tap is the 10 s jump, a hold is trick play (kbd_hold)
+    km = inst(src, 'kbd_map')
+    want(km is not None and port(km, 'rel') == 'kbd_rel', 'kbd_map .rel is not kbd_rel')
+    for name, press, rel, tap, held in (('kbd_hold_ff', 'kbd_joy[13]', 'kbd_rel[0]', 'kbd_ff_tap', 'kbd_ff_held'),
+                                        ('kbd_hold_rew', 'kbd_joy[14]', 'kbd_rel[1]', 'kbd_rew_tap', 'kbd_rew_held')):
+        b = inst_named(src, 'kbd_hold', name)
+        want(b is not None, f'kbd_hold {name} is not instantiated')
+        if b is not None:
+            for p, net in (('press', press), ('release_', rel), ('tap', tap), ('held', held)):
+                want(port(b, p) == net, f'{name} .{p} is {port(b, p)!r}, must be {net}')
+    want(assign_rhs(src, 'kbd_ff_jump') == 'trick_claim ? kbd_ff_tap : kbd_joy[13]',
+         f"kbd_ff_jump is {assign_rhs(src, 'kbd_ff_jump')!r}")
+    want(assign_rhs(src, 'kbd_rew_jump') == 'trick_claim ? kbd_rew_tap : kbd_joy[14]',
+         f"kbd_rew_jump is {assign_rhs(src, 'kbd_rew_jump')!r}")
+    ds = inst(src, 'dpad_seek')
+    if ds is not None:
+        want(re.search(r'\bkbd_ff_jump\b', port(ds, 'rt_edge') or '') and 'kbd_joy' not in (port(ds, 'rt_edge') or ''),
+             f"dpad_seek .rt_edge is not the keyboard FF tap: {port(ds, 'rt_edge')!r}")
+        want(re.search(r'\bkbd_rew_jump\b', port(ds, 'lf_edge') or '') and 'kbd_joy' not in (port(ds, 'lf_edge') or ''),
+             f"dpad_seek .lf_edge is not the keyboard REW tap: {port(ds, 'lf_edge')!r}")
+
     # the HUD: the line stays up, the direction arrows show the tier
     th = inst(src, 'transport_hud')
     want(th is not None, 'transport_hud is not instantiated')
@@ -193,7 +230,7 @@ def check(emu_src, qsf_src):
              'seek_bar shows in trick play (it is the scrub\'s bar: base and target are stale)')
 
     # Quartus sees the files
-    for f in ('dvd/trick_ctrl.sv', 'dvd/trick_es_filter.sv'):
+    for f in ('dvd/trick_ctrl.sv', 'dvd/trick_es_filter.sv', 'dvd/kbd_hold.sv'):
         want(re.search(r'(?m)^set_global_assignment\s+-name\s+SYSTEMVERILOG_FILE\s+' + re.escape(f) + r'\s*$',
                        qsf_src), f'DVD.qsf does not name {f}')
     return bad
@@ -218,6 +255,11 @@ RED = [
     ('R14 the HUD line hides mid-gesture', '.bar_active   (bar_active_w | trick_active),', '.bar_active   (bar_active_w),'),
     ('R15 the arrows ignore the tier', '.scrub_tier   (trick_active ? trick_tier : hold_freeze ? hud_tier_w : 2\'d0),',
      '.scrub_tier   (hold_freeze ? hud_tier_w : 2\'d0),'),
+    ('R16 a keyboard hold never reaches trick play', '.held_ff    (joy_ff  | kbd_ff_held),', '.held_ff    (joy_ff),'),
+    ('R17 a keyboard hold also jumps 10 s', 'wire kbd_ff_jump  = trick_claim ? kbd_ff_tap  : kbd_joy[13];',
+     'wire kbd_ff_jump  = kbd_joy[13];'),
+    ('R18 the jump bypasses the tap', '.rt_edge        ((dpad_seek_en & rt_edge) | kbd_ff_jump),',
+     '.rt_edge        ((dpad_seek_en & rt_edge) | kbd_joy[13]),'),
     ('R12 connection only in a comment', '.trick_go       (trick_go),', ".trick_go       (1'b0), // (trick_go)"),
 ]
 RED_QSF = ('R13 Quartus does not see the filter',

@@ -31,8 +31,8 @@ itself to MiSTer as a keyboard counts, which is how a **remote** drives the play
 
 | Key | Action | | Key | Action |
 |---|---|---|---|---|
-| ↑ ↓ ← → | Menu navigation | | ++tab++ / ++"F"++ | Fast Fwd (10 s per press) |
-| ++enter++ | Select | | ++backspace++ / ++"R"++ | Rewind (10 s per press) |
+| ↑ ↓ ← → | Menu navigation | | ++tab++ / ++"F"++ | Fast Fwd (10 s per tap; hold in a film) |
+| ++enter++ | Select | | ++backspace++ / ++"R"++ | Rewind (10 s per tap; hold in a film) |
 | ++space++ | Pause / Play | | ++esc++ / ++"B"++ | Return (go up) |
 | ++page-up++ / ++"P"++ | Prev Chapter | | ++"Q"++ | Stop |
 | ++page-down++ / ++"N"++ | Next Chapter | | ++"Z"++ | Aspect (cycle) |
@@ -44,13 +44,16 @@ itself to MiSTer as a keyboard counts, which is how a **remote** drives the play
 | ++"D"++ | Display (toggle status line) | | ++minus++ / ++num-minus++ | Vol Down |
 | | | | ++0++ – ++9++ | Select menu button by number |
 
-!!! warning "Fast Fwd and Rewind work differently here"
-    On a gamepad you *hold* them to scrub. On a keyboard or remote each press jumps **10
-    seconds**, and presses add up the same way [D-pad seek](#d-pad-seek) does — six quick
-    taps is one minute, and one seek happens when you stop. That is deliberate: a remote's
-    "hold" is really a rapid stream of taps, which a scrub would turn into dozens of
-    separate seeks. This works whether or not D-Pad Seek is switched on. Files with no seek
-    information — a bare `.m2v` — have no keyboard seek.
+!!! warning "Fast Fwd and Rewind: tap or hold"
+    On a keyboard or remote each **tap** jumps **10 seconds**, and taps add up the same way
+    [D-pad seek](#d-pad-seek) does — six quick taps is one minute, and one seek happens when
+    you stop. This works whether or not D-Pad Seek is switched on.
+
+    **Held** in a DVD film — or pressed repeatedly faster than about five times a second,
+    which is what most remotes send for a held button — they fast-forward or rewind at speed,
+    exactly as a held gamepad button does (see [During playback](#during-playback)). On a VCD, SVCD
+    or `.mpg` a held key still just adds up 10 s jumps. Files with no seek information — a
+    bare `.m2v` — have no keyboard seek.
 
 ## Using a remote
 
@@ -97,7 +100,7 @@ plus the media keys in the table below.
 |---|---|
 | Play, Pause, Play/Pause | Pause and resume; on a [still](#still-pictures), continue |
 | Stop | Stop (two-stage — see [Stopping a disc](#stopping-a-disc)) |
-| Fast Fwd, Rewind | Seek ±10 s per press |
+| Fast Fwd, Rewind | Seek ±10 s per tap; held in a DVD film, play fast forwards or backwards |
 | Next, Previous | Chapter forward and back |
 | Channel Up, Channel Down | Chapter forward and back while playing; page up/down in the MiSTer OSD |
 | OK, Select | Select |
@@ -152,8 +155,9 @@ mapped to Menu precisely because that remote's own Menu button belongs to the Mi
 
 !!! note "Held keys do not repeat"
     Holding a remote key down does not auto-repeat — each press is one action. That is how
-    MiSTer delivers keys to this class of core, and it is also why Fast Fwd and Rewind add
-    up over taps rather than needing a hold.
+    MiSTer delivers keys to this class of core. Fast Fwd and Rewind are the exception: the
+    core times how long they are held, so a hold plays a DVD film fast forwards or backwards
+    instead of jumping.
 
 ### Using your TV's remote over HDMI-CEC
 
@@ -176,7 +180,7 @@ Your remote's **transport keys** work as you would expect:
 |---|---|
 | Play / Pause | Pause and resume; on a [still](#still-pictures), continue |
 | Stop | Stop (two-stage — see [Stopping a disc](#stopping-a-disc)) |
-| Fast Fwd / Rewind | Seek ±10 s per press |
+| Fast Fwd / Rewind | Seek ±10 s per tap; held in a DVD film, play fast forwards or backwards |
 | Prev / Next | Chapter back and forward |
 | Exit / Back | Return (up one menu level) |
 | Eject | Eject |
@@ -332,7 +336,8 @@ does not flicker. See [Pausing interlaced video](../video/interlaced.md#pausing-
 
 **B2 / B3** step chapters.
 
-**B10 / B11** (`Fast Fwd` / `Rewind`) **held in a DVD film** play it forwards or backwards
+**B10 / B11** (`Fast Fwd` / `Rewind`) **held in a DVD film** — or the same keys held on a
+keyboard or remote — play it forwards or backwards
 at speed: a new picture every quarter of a second, faster the longer you hold — **2×**, then
 **8×** after 2 seconds, **40×** after 4½ and **120×** after 8. The status line stays up
 with the clock running and two to five arrows for the speed. Let go and the film carries on

@@ -1932,12 +1932,27 @@ wire sp_route_en;                                  // (assigned at the SPU block
 // gamepad's hold-to-scrub is untouched. Full reasoning: dvd/kbd_map.sv header.
 wire [24:0] kbd_joy;
 
+wire [1:0] kbd_rel;             // kbd_map: Fast Fwd / Rewind release pulses
 kbd_map kbd_map_inst (
     .clk     (clk_sys),
     .rst_n   (reset_n),
     .ps2_key (ps2_key),
-    .joy     (kbd_joy)
+    .joy     (kbd_joy),
+    .rel     (kbd_rel)          // Fast Fwd / Rewind releases, for kbd_hold below
 );
+
+// KEYBOARD / REMOTE FAST FWD AND REWIND: a TAP or a HOLD (dvd/kbd_hold.sv). A tap stays
+// the 10 s jump (dpad_seek below); a hold, or a remote's ~9 taps a second, drives trick
+// play like the gamepad's held B10/B11 (maintainer, 2026-11-24). Where trick play does
+// NOT claim FF/REW (a .mpg, a VCD, a menu) the raw press pulse still jumps at once, as
+// before; there kbd_*_held reaches trick_ctrl too, which ignores it (`allowed` low).
+wire       kbd_ff_tap, kbd_ff_held, kbd_rew_tap, kbd_rew_held;
+kbd_hold kbd_hold_ff  (.clk(clk_sys), .rst_n(reset_n), .press(kbd_joy[13]), .release_(kbd_rel[0]),
+                       .tap(kbd_ff_tap),  .held(kbd_ff_held));
+kbd_hold kbd_hold_rew (.clk(clk_sys), .rst_n(reset_n), .press(kbd_joy[14]), .release_(kbd_rel[1]),
+                       .tap(kbd_rew_tap), .held(kbd_rew_held));
+wire kbd_ff_jump  = trick_claim ? kbd_ff_tap  : kbd_joy[13];
+wire kbd_rew_jump = trick_claim ? kbd_rew_tap : kbd_joy[14];
 
 wire [31:0] joy_eff = joystick_0 | {7'd0, (kbd_joy & ~25'h000_6000)};
 
@@ -2246,7 +2261,8 @@ always @(posedge clk_sys or negedge reset_n) begin
         // never see them) and the D-pad clause below is gated on O[45], which a
         // dedicated seek key is deliberately NOT.
         else if ((cell_ready || lin_seek_ok_w) && !menu_active && !in_title_menu &&
-                 (ff_edge || rew_edge || kbd_joy[13] || kbd_joy[14])) pause_q <= 1'b0;
+                 (ff_edge || rew_edge || kbd_ff_jump || kbd_rew_jump ||
+                  trick_seek_pulse)) pause_q <= 1'b0;   // trick play's entry/exit too
         // a D-pad fixed-time seek likewise resumes playback (dvd/dpad_seek.sv
         // issues the jump when the coalesce window closes)
         else if (dpad_seek_en && (cell_ready || lin_seek_ok_w) && !menu_active &&
@@ -2757,8 +2773,8 @@ assign trick_claim   = trick_allowed || trick_owns;
 trick_ctrl trick_ctrl_inst (
     .clk        (clk_sys),
     .rst_n      (reset_n),
-    .held_ff    (joy_ff),
-    .held_rew   (joy_rew),
+    .held_ff    (joy_ff  | kbd_ff_held),    // the gamepad, or a keyboard / remote hold
+    .held_rew   (joy_rew | kbd_rew_held),
     .allowed    (trick_allowed),
     .cur_rbn    (dsi_nv_pck_lbn),
     .trick_vobu (trick_vobu_w),
@@ -2839,8 +2855,8 @@ dpad_seek dpad_seek_inst (
     // held button into ~9 complete seek gestures a second, and a swallowed
     // release freezes the picture. Here the same burst builds ONE jump.
     // (dvd/kbd_map.sv header carries the measurements.)
-    .lf_edge        ((dpad_seek_en & lf_edge) | kbd_joy[14]),   // Rewind   key = -10 s
-    .rt_edge        ((dpad_seek_en & rt_edge) | kbd_joy[13]),   // Fast Fwd key = +10 s
+    .lf_edge        ((dpad_seek_en & lf_edge) | kbd_rew_jump),  // Rewind   key = -10 s (a TAP, kbd_hold)
+    .rt_edge        ((dpad_seek_en & rt_edge) | kbd_ff_jump),   // Fast Fwd key = +10 s (a TAP, kbd_hold)
     .cancel         (jump_ack | chap_pulse | start_streaming | hold_freeze),
     .nav_flush      (load_flush),               // nav_dsi's own reset condition
     .dsi_commit     (dsi_commit),

@@ -333,9 +333,30 @@ cycle. After an exit both buttons must be released before trick play can start a
 - `DVD.qsf` names `dvd/trick_ctrl.sv` and `dvd/trick_es_filter.sv`.
 `tools/lint_undriven.sh` passes.
 
-**Open, for the maintainer:** a tap of FF/REW on a DVD now enters and leaves trick play at
-once and lands back on the VOBU on screen; on `scrub_ctrl` a tap nudged ~1 s. The manual
-(`site/content/playback/controls.md`) documents the hold only.
+**Open, for the maintainer:** a tap of the GAMEPAD's FF/REW on a DVD now enters and leaves
+trick play at once and lands back on the VOBU on screen; on `scrub_ctrl` a tap nudged ~1 s.
+
+## Keyboard and remote: tap or hold
+
+Decided 2026-11-24 (maintainer): a keyboard / remote FF/REW **hold** drives trick play too,
+and a **tap** stays the 10 s jump. Keyboard, CEC and IR keys reach the core as press pulses
+only (`dvd/kbd_map.sv`), and `emu.sv` kept them off every hold path because an IR remote
+"holds" as ~9 discrete taps a second. Now:
+- `kbd_map` also emits RELEASE pulses for FF/REW (`rel`), still pulses only;
+- `dvd/kbd_hold.sv` turns press/release into a run: gaps under 200 ms are bridged (the
+  remote's tap stream is one run), a run of 400 ms is a HOLD (`held`), a shorter one is a
+  TAP pulsed 200 ms after its last release; a key "down" 60 s with no event ends the run
+  (a lost release). CEC sends its releases (stock Main `hdmi_cec.cpp`, with a deadline);
+  Main drops keyboard auto-repeat, so a held key is one press and one release.
+- `emu.sv`: `trick_ctrl` takes `joy_ff | kbd_ff_held`; where trick play claims FF/REW the
+  10 s jump comes from the TAP (`kbd_ff_jump = trick_claim ? kbd_ff_tap : kbd_joy[13]`),
+  elsewhere from the raw press as before, so a VCD / `.mpg` is unchanged. Trick play's
+  seeks also unpause, so a keyboard hold from pause shows its frames.
+
+Gate `bench/dvd/run_kbd_hold.sh --red` (5 scenarios: tap, keyboard hold, IR tap stream,
+two taps, lost release; 4 mutations); `tools/check_trick_wiring.py` R16-R18;
+`bench/dvd/run_kbd.sh` unchanged. This is also what makes trick play testable from the HIL
+harness, whose key daemon is a keyboard.
 
 ## The first fit (2026-11-24)
 
