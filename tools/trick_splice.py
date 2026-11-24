@@ -24,8 +24,8 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from nav_extract import be32, is_nav_pack, STIME, sri_offset      # noqa: E402
 from trick_scan import title_extents, video_es, pictures, SEC, DSI  # noqa: E402
 
-# tier -> jump seconds (docs/trick_play.md "Decided": 2x 8x 40x 120x at T = 250 ms)
-TIER_S = [0.5, 2.0, 10.0, 30.0]
+# tier -> jump seconds (docs/trick_play.md "Decided": 16x 40x 120x 480x at T = 250 ms)
+TIER_S = [4.0, 10.0, 30.0, 120.0]
 
 
 def pic_starts(es):
@@ -115,8 +115,8 @@ def walk(f, lo, hi, start, step_s, fwd, frames):
 
 # ---- the reader's walk (dvd/dvd_iso_reader.sv TRICK PLAY), for bench/dvd/run_trick_reader.sh
 # The four tier rungs per direction: fwda index / bwda index (bwda runs short to long).
-RUNG_FWD = [18, 15, 3, 2]          # 0.5, 2, 10, 30 s
-RUNG_REV = [0, 3, 15, 16]
+RUNG_FWD = [11, 3, 2, 0]           # 4, 10, 30, 120 s
+RUNG_REV = [7, 15, 16, 18]
 
 
 def _usable(e):

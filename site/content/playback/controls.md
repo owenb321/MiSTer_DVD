@@ -338,8 +338,8 @@ does not flicker. See [Pausing interlaced video](../video/interlaced.md#pausing-
 
 **B10 / B11** (`Fast Fwd` / `Rewind`) **held in a DVD film** — or the same keys held on a
 keyboard or remote — play it forwards or backwards
-at speed: a new picture every quarter of a second, faster the longer you hold — **2×**, then
-**8×** after 2 seconds, **40×** after 4½ and **120×** after 8. The status line stays up
+at speed: a new picture every quarter of a second, faster the longer you hold — **16×**, then
+**40×** after 2 seconds, **120×** after 4½ and **480×** after 8. The status line stays up
 with the clock running and two to five arrows for the speed. Let go and the film carries on
 playing from the picture on screen. Sound and subtitles are off while it runs. Reaching the
 end of the film lets it finish as normal; rewinding to its start resumes playing there.

@@ -11,14 +11,14 @@
 # when trick play ends without a seek; trick play re-entered partway through a sector
 # arms only on a whole NAV pack (session 2).
 #
-#   [1] f1    forward, 2 s jumps
-#   [2] f3    forward, 30 s jumps, long enough to cross into the next cell
-#   [3] r1    backward, 2 s jumps
-#   [4] r3    backward, 30 s jumps, crossing into earlier cells (their LAST VOBU)
+#   [1] f1    forward, 10 s jumps
+#   [2] f3    forward, 120 s jumps, long enough to cross into the next cell
+#   [3] r1    backward, 10 s jumps
+#   [4] r3    backward, 120 s jumps, crossing into earlier cells (their LAST VOBU)
 #   [5] edge  backward from the PGC's first cell: stops at its edge (trick_edge)
 #   [6] gate  forward with the cadence gate pulsing: one VOBU per pulse
 #   --red adds one mutation per rule; each must FAIL its own arm:
-#   [R1] the 2 s rung read from the 1.5 s entry           -> f1
+#   [R1] the 10 s rung read from the 7.5 s entry          -> f1
 #   [R2] no cell crossing (every target taken in-cell)    -> f3
 #   [R3] a backward crossing enters at the cell's start   -> r3
 #   [R4] the cadence gate ignored                         -> gate
@@ -92,7 +92,7 @@ if [ "$RED" = 1 ]; then
   echo "== RED =="
   # red <id> <target arm> <perl substitution>
   REDS=(
-    "R1|f1|s/\(trick_rev \? 11'h555 : 11'h531\)/(trick_rev ? 11'h555 : 11'h535)/"
+    "R1|f1|s/\(trick_rev \? 11'h585 : 11'h501\)/(trick_rev ? 11'h585 : 11'h505)/"
     "R2|f3|s/wire        tk_in  = \(/wire        tk_in  = 1'b1 || (/"
     "R3|r3|s/: trick_lv     \? lv_rd /: trick_lv     ? cf_rd /"
     "R4|gate|s/\(trick_credit \|\| trick_go\)/(1'b1)/g"

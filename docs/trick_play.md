@@ -128,7 +128,7 @@ one-off (`drive_jump.py`, run on the rig); the method is what to repeat.
   conservative.
 
 **Decided (maintainer, 2026-11-22): T = 250 ms, and the hold steps through 2×, 8×, 40×,
-120×** (jumps of 0.5, 2, 10 and 30 s; valid 98 / 90 / 71 / 66 % of the time in the sweep, the
+120×** (⚠ superseded 2026-11-24 by 16× / 40× / 120× / 480×: see "The speed ladder, raised") (jumps of 0.5, 2, 10 and 30 s; valid 98 / 90 / 71 / 66 % of the time in the sweep, the
 rest falling back to a shorter jump). The mechanism: a fixed display cadence of one I-frame every T ms,
 T from the drive's p90 for a typical frame, with image reads gated to the same cadence.
 Decision 4 then holds by construction: the only difference left is that a late physical read
@@ -398,6 +398,25 @@ rung validity), not the source.
 - The ladder's distances fall ~10 % short of prediction (entry re-lock before the first
   frame, rung fallbacks at cell ends). Not a defect; worth a closer measurement if the
   speeds feel wrong.
+
+## The speed ladder, raised (maintainer, 2026-11-24)
+
+On the rig the maintainer found hold-to-scrub "much slower than previous core versions". It was
+the ladder, not the decoder: the cadence held ~4 pictures/s at every tier (image and drive),
+each just jumping a short way. The old scrub (`dvd/scrub_ctrl.sv`) moves ~15 / 60 / 240 / 960
+content-seconds per second; 2× / 8× / 40× / 120× was ~8× slower at every tier.
+
+**Decided: 16× / 40× / 120× / 480×**, jumps of 4 / 10 / 30 / 120 s (fwda 11/3/2/0, bwda
+7/15/16/18; the reader's `rg0_d..rg3_d` and `tools/trick_splice.py` `RUNG_*`/`TIER_S`).
+- vobu_sri offers 0.5–7.5 s in 0.5 s steps, 10, 30, 60, 120 s, so one jump per picture tops
+  out at 480×. 15 s does not exist, so tier 1 is 40× (old scrub: 60).
+- Rejected: two chained jumps per picture for 960× (more reader logic at 97 % ALM); keeping a
+  2× first tier (the maintainer chose the scrub-like ladder).
+- The fallback is unchanged: a rung that is END_OF_CELL steps down through the shorter tier
+  rungs, then next/prev_vobu. The 120 s rung was valid 44 % (fwd) / 59 % (bwd) in the sweep,
+  so the top tier often lands on a 30 s jump near cell ends.
+- ⏳ The physical drive's seek for a 120 s jump is longer than for 30 s; HIL to confirm the
+  drive still holds ~4 pictures/s at the top tier.
 
 ## Next step
 

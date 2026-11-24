@@ -734,7 +734,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-trickplay"
+`define CORE_VERSION "dev-trickplay2"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -7356,7 +7356,7 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     // an arrow count: four taps would have rendered as the fastest scrub tier.
     // Nothing is lost -- the popup line shows the gesture's real magnitude
     // ("SEEK FWD 12:30"), which is strictly more than the tap count ever said.
-    // Trick play: its tier, 2x..120x as two to five arrows.
+    // Trick play: its tier, 16x..480x as two to five arrows.
     .scrub_tier   (trick_active ? trick_tier : hold_freeze ? hud_tier_w : 2'd0),
     .display_edge (display_edge),
     .stop_on      (stopped_w & stop_kept_w),   // stage 1 only; stage 2 is bare logo

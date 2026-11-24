@@ -59,7 +59,7 @@ check the current track, and are not errors:
 | `ANGLE 2/3` | Camera angle on a multi-angle disc |
 | `CH 12/23` | Chapter, on a chapter step |
 | `TR 3/12` | Track, on an audio CD — it replaces `CH`, since a CD has no chapters |
-| `►►►` | Speed while fast-forwarding or rewinding — two to five arrows, more the longer you hold (on a DVD film: 2×, 8×, 40×, 120×) |
+| `►►►` | Speed while fast-forwarding or rewinding — two to five arrows, more the longer you hold (on a DVD film: 16×, 40×, 120×, 480×) |
 
 
 The status line along the bottom — `► 0:12:34/1:37:05 CH 12/23` — is toggled with **B9**

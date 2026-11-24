@@ -10,7 +10,7 @@
 //          the playhead. The seek's flush throws away the seconds of normal video
 //          buffered ahead in the VBUF, so the first trick frame comes at once, and
 //          the reader (trick_en already high) arms at the landing's first NAV pack.
-//   RUN   tier from hold time (2x, 8x, 40x, 120x after 0 / T1 / T2 / T3), trick_go
+//   RUN   tier from hold time (16x, 40x, 120x, 480x after 0 / T1 / T2 / T3), trick_go
 //          every GO_PERIOD (250 ms: the cadence gate, decision 4).
 //   EXIT  on release, a change of direction, `allowed` falling, or the reader at the
 //          PGC's edge: ONE seek to the VOBU whose picture is on screen, then idle until
@@ -27,9 +27,9 @@
 `default_nettype none
 module trick_ctrl #(
     parameter integer GO_PERIOD = 6_750_000,    // 250 ms at 27 MHz: one VOBU per period
-    parameter integer T1        = 54_000_000,   // 2.0 s held -> 8x
-    parameter integer T2        = 121_500_000,  // 4.5 s held -> 40x
-    parameter integer T3        = 216_000_000   // 8.0 s held -> 120x
+    parameter integer T1        = 54_000_000,   // 2.0 s held -> 40x
+    parameter integer T2        = 121_500_000,  // 4.5 s held -> 120x
+    parameter integer T3        = 216_000_000   // 8.0 s held -> 480x
 ) (
     input  wire        clk,                // clk_sys
     input  wire        rst_n,
@@ -44,7 +44,7 @@ module trick_ctrl #(
     input  wire        trick_edge,         // reader: the PGC's edge, holding
 
     output reg         active,             // trick play on: the reader, aud_drop, cadence, filter
-    output reg  [1:0]  tier,               // 0..3 = 2x / 8x / 40x / 120x
+    output reg  [1:0]  tier,               // 0..3 = 16x / 40x / 120x / 480x
     output reg         rev,                // 1 = backwards
     output reg         go,                 // one clk: the next jump may fire
     output reg         seek_pulse,         // one clk: a raw-RBN seek (entry or exit)

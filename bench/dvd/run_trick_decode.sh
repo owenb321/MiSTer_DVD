@@ -30,7 +30,7 @@ cd "$(dirname "$0")/../.."
 
 RED=0; [ "${1:-}" = "--red" ] && RED=1
 PICS="${PICS:-3}"
-TIER="${TIER:-1}"                       # 2 s jumps (8x)
+TIER="${TIER:-1}"                       # 10 s jumps (40x)
 OUT=bench/dvd/test_vobs/trick_decode    # gitignored
 mkdir -p "$OUT"
 

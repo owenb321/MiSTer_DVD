@@ -2241,10 +2241,10 @@ always @(posedge clk)
 // the FSM evaluates + arms the ILVU jump then.
 // =========================================================================
 // Trick-play rung field offsets in the sector (see the snoop below).
-wire [10:0] rg0_d = sd_buff_addr[10:0] - (trick_rev ? 11'h549 : 11'h53D);   // 0.5 s
-wire [10:0] rg1_d = sd_buff_addr[10:0] - (trick_rev ? 11'h555 : 11'h531);   // 2 s
-wire [10:0] rg2_d = sd_buff_addr[10:0] - (trick_rev ? 11'h585 : 11'h501);   // 10 s
-wire [10:0] rg3_d = sd_buff_addr[10:0] - (trick_rev ? 11'h589 : 11'h4FD);   // 30 s
+wire [10:0] rg0_d = sd_buff_addr[10:0] - (trick_rev ? 11'h565 : 11'h521);   // 4 s
+wire [10:0] rg1_d = sd_buff_addr[10:0] - (trick_rev ? 11'h585 : 11'h501);   // 10 s
+wire [10:0] rg2_d = sd_buff_addr[10:0] - (trick_rev ? 11'h589 : 11'h4FD);   // 30 s
+wire [10:0] rg3_d = sd_buff_addr[10:0] - (trick_rev ? 11'h591 : 11'h4F5);   // 120 s
 wire [3:0]  ang_idx = cur_angle - 4'd1;   // 0-based; every cur_angle writer gives >= 1
 wire [10:0] agli_o  = 11'h4BB + 11'd6 * {7'd0, ang_idx};                 // sector offset
 // Byte index relative to that entry: one subtractor instead of four offset
@@ -2287,9 +2287,9 @@ always @(posedge clk) begin
             11'h548: snoop_prevv[7:0]   <= sd_buff_dout;
             default: ;
         endcase
-        // The four tier rungs (0.5 / 2 / 10 / 30 s) for this direction. DSI vobu_sri:
-        // fwda[i] @0xEE+4i -> sector 0x4F5+4i, i = 18 / 15 / 3 / 2;
-        // bwda[k] @0x142+4k -> sector 0x549+4k, k = 0 / 3 / 15 / 16 (bwda runs short
+        // The four tier rungs (4 / 10 / 30 / 120 s) for this direction. DSI vobu_sri:
+        // fwda[i] @0xEE+4i -> sector 0x4F5+4i, i = 11 / 3 / 2 / 0;
+        // bwda[k] @0x142+4k -> sector 0x549+4k, k = 7 / 15 / 16 / 18 (bwda runs short
         // to long, fwda long to short: libdvdread vobu_sri_t, tools/nav_extract.py).
         // One subtractor per rung; a field's 4 bytes arrive in order, MSB first.
         if (rg0_d < 11'd4) snoop_r0 <= {snoop_r0[23:0], sd_buff_dout};
