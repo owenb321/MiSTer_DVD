@@ -1653,4 +1653,4 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # version string. SEED 7 held first roll: clk_dec 92.03/89.82, clk_mem 99.01/99.66
 # (@100C / @-40C). 38,286 / 41,910 ALMs (91 %), 520 / 553 M10K, 87 / 112 DSP.
 # clock_check PASS (0 fail, 0 warn). Build releases/DVD_20261122.rbf.
-set_global_assignment -name SEED 7
+set_global_assignment -name SEED 9
