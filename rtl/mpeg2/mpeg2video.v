@@ -52,7 +52,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
              rst,                                                                                                                 // clocked with clk
              stream_data, stream_valid,                                                                                           // clocked with clk
              stream_mark, pts_in, pts_in_valid,                                                                                  // DVD-FORK (PTS association): PES mark + PTS in
-             stc_tick, sched_en, half_scan, stc, stc_anchored, disp_anchored, anchor_req, anchor_disc, cc_credit_valid, cc_credit, anchor_delta, disp_lag, disp_lag_valid, sched_dbg_flags, sched_dbg_dur,                  // DVD-FORK (PTS scheduling): the free-running STC lives here (dvd/disp_sched.sv)
+             stc_tick, sched_en, trick_cad, half_scan, stc, stc_anchored, disp_anchored, anchor_req, anchor_disc, cc_credit_valid, cc_credit, anchor_delta, disp_lag, disp_lag_valid, sched_dbg_flags, sched_dbg_dur,                  // DVD-FORK (PTS scheduling): the free-running STC lives here (dvd/disp_sched.sv)
 	     reg_addr, reg_wr_en, reg_dta_in, reg_rd_en, reg_dta_out,                                                             // clocked with clk
              busy, error, interrupt, watchdog_rst,                                                                                // clocked with clk
              r, g, b, y, u, v, pixel_en, h_sync, v_sync, c_sync, h_pos, v_pos,                                                     // clocked with dot_clk
@@ -120,6 +120,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * emu for every consumer of the clock. */
   input            stc_tick;
   input            sched_en;
+  input            trick_cad;     // DVD-FORK (trick play, docs/trick_play.md): disp_sched's cadence mode
   input      [15:0]half_scan;
   output     [32:0]stc;
   output           stc_anchored;
@@ -1631,6 +1632,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .rst_n(sync_rst),
     .flush(flush_vbuf_eff),
     .sched_en(sched_en),
+    .cad_en(trick_cad),
     .tick(stc_tick),
     .video_live(video_live),
     .pause(pause),

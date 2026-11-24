@@ -75,6 +75,7 @@
 `default_nettype none
 
 module disp_sched #(
+    parameter        [15:0] CAD_TICKS      = 16'd22500,   // trick play: one picture per 250 ms
     parameter signed [33:0] FWD_MAX_TICKS  = 34'sd45000,   // wait out gaps shorter than this (0.5 s)
     parameter signed [33:0] LATE_MAX_TICKS = 34'sd243000   // re-anchor past this much lateness (2.7 s) -- see the DISCONTINUITY note
 ) (
@@ -82,6 +83,14 @@ module disp_sched #(
     input  wire        rst_n,                 // sync_rst
     input  wire        flush,                 // VBUF flush level: timeline restarts
     input  wire        sched_en,              // 0 = free-run (every picture due at once)
+    // TRICK PLAY CADENCE (docs/trick_play.md "The display cadence"): each picture is
+    // due CAD_TICKS after the previous pickup, PTS ignored; the first one at once. A
+    // picture that arrives later (a slow physical read) is shown at the next
+    // opportunity. While high nothing is late (next_due low, no catch-up drop) and a
+    // pickup neither anchors nor moves the timeline: every trick I-frame is a PTS jump,
+    // and each would otherwise re-anchor and fire an audio re-phase. Leaving trick play
+    // is a seek, whose flush restarts the timeline. Overrides sched_en.
+    input  wire        cad_en,
 
     input  wire        tick,                  // 90 kHz, one clk pulse
     input  wire        video_live,            // the display has shown a decoded picture
@@ -284,6 +293,23 @@ module disp_sched #(
     wire signed [33:0] late_max_s = LATE_MAX_TICKS;
     wire signed [33:0] frame_s    = $signed({18'd0, frame_ticks});
 
+    // ---- trick play cadence: 90 kHz ticks since the last pickup ----------------------
+    reg  [15:0] cad_cnt;
+    reg         cad_first;                // no pickup yet in this trick-play run
+    wire [16:0] cad_sum   = {1'b0, cad_cnt} + {1'b0, half_scan};   // the half-scan rounding
+    wire        cad_ready = (cad_sum >= {1'b0, CAD_TICKS});
+    always_ff @(posedge clk) begin
+        if (!rst_n || flush || !cad_en) begin
+            cad_cnt   <= 16'd0;
+            cad_first <= 1'b1;
+        end else if (pickup) begin
+            cad_cnt   <= 16'd0;
+            cad_first <= 1'b0;
+        end else if (tick && cad_cnt != 16'hFFFF) begin
+            cad_cnt   <= cad_cnt + 16'd1;
+        end
+    end
+
     // ---- stage D: the decisions (registered) --------------------------------
     // a tagged picture that does not belong to the current timeline
     reg  disc, disc_fwd, anchor_now, pic_due_r, next_due_r;
@@ -381,8 +407,10 @@ module disp_sched #(
         disc       <= disc_jump_w;   // backward-only: the audio re-phase qualifier
         disc_fwd   <= disc_fwd_w;    // instrument only
         anchor_now <= anchor_now_w;
-        pic_due_r  <= !sched_en || !pic_valid || anchor_now_w || (d_stc_want >= -half_s);
-        next_due_r <= !sched_en || (anchored && next_valid && (d_stc_next >= -half_s));
+        pic_due_r  <= cad_en ? (!pic_valid || cad_first || cad_ready)
+                             : (!sched_en || !pic_valid || anchor_now_w || (d_stc_want >= -half_s));
+        next_due_r <= !cad_en &&
+                      (!sched_en || (anchored && next_valid && (d_stc_next >= -half_s)));
     end
     wire [32:0] anchor_val = has_tag ? pic_pts_eff : (prov_seen ? stc : 33'd0);
     assign pic_due  = pic_due_r;
@@ -413,7 +441,7 @@ module disp_sched #(
         if (!rst_n || flush) begin
             cool <= 4'd0;
         end else if (pickup) begin
-            if (sched_en && anchored && next_valid && !anchor_now
+            if (sched_en && !cad_en && anchored && next_valid && !anchor_now
                 && (d_stc_want > LATE_DROP_S)) begin
                 if (cool == 4'd0) begin catchup_late <= 1'b1; cool <= DROP_COOL; end
                 else                    cool <= cool - 4'd1;
@@ -455,8 +483,8 @@ module disp_sched #(
                 else           next_q3  <= next_q3  + {18'd0, skip_dur_q3};
             end
 
-            // a pickup
-            if (pickup) begin
+            // a pickup (none of it in trick play: see cad_en)
+            if (pickup && !cad_en) begin
                 cc_credit_valid <= 1'b1;
                 cc_credit       <= pic_fields;   // pairs owed to this picture
                 dbg_flags      <= {frame_rate_code, pic_ps, pic_pf, pic_tff, pic_rff};

@@ -111,7 +111,7 @@ module trick_decode_tb;
     .clk(clk), .mem_clk(mem_clk), .dot_clk(dot_clk), .dot_ce(1'b1), .rst(rst),
     .stream_data(sd), .stream_valid(sv), .stream_mark(1'b0),
     .pts_in(33'd0), .pts_in_valid(1'b0),
-    .stc_tick(1'b0), .sched_en(1'b0), .half_scan(16'd0),
+    .stc_tick(1'b0), .sched_en(1'b0), .trick_cad(1'b0), .half_scan(16'd0),
     .stc(), .stc_anchored(), .disp_anchored(), .anchor_req(), .anchor_disc(),
     .cc_credit_valid(), .cc_credit(), .anchor_delta(), .disp_lag(), .disp_lag_valid(),
     .sched_dbg_flags(), .sched_dbg_dur(),

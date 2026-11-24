@@ -2,7 +2,8 @@
 
 Status: 🔧 design, offline model, the splice through our RTL decoder in simulation, the ES
 filter (`dvd/trick_es_filter.sv`) and the reader's trick walk (`dvd/dvd_iso_reader.sv`),
-both bench-proven and not wired in yet. `feature/trick-play`, 2026-11-24.
+the audio drop (`ps_demux` `aud_drop`) and the display cadence (`disp_sched` `cad_en`),
+all bench-proven and not wired in yet. `feature/trick-play`, 2026-11-24.
 The background is `docs/dvd_nav.md` §2d, which records why this is not a seek mode.
 
 ## Decisions (maintainer, 2026-11-22)
@@ -278,13 +279,37 @@ a full ring stalls the demux. One RED mutation per discard site (MP2 and
 private_stream_1). Every bench that instantiates `ps_demux` ties `aud_drop` low;
 `dvd/emu.sv` ties it, and the reader's trick inputs, low until the controller exists.
 
+## The display cadence
+
+`dvd/disp_sched.sv` `cad_en` (through `rtl/mpeg2/mpeg2video.v` `trick_cad`). While high,
+each picture is due `CAD_TICKS` (22,500 ticks, 250 ms) after the previous pickup, with the
+usual half-scan rounding onto the raster's pickup grid; the first is due at once. PTS is
+ignored, and `cad_en` overrides A/V Sync Off.
+- **A late picture** (a slow physical read) is shown at the first opportunity after it
+  arrives: the previous frame simply holds longer, which is decision 4's only visible
+  difference between a drive and an image.
+- **Nothing is late:** `next_due` stays low, so neither `frame_late` nor the frame-drop
+  governor ever acts on a trick frame, and there is no catch-up drop.
+- **A pickup does not anchor or move the timeline.** Every trick I-frame is a PTS jump;
+  on the normal path each one would re-anchor the clock and pulse `anchor_disc`, which
+  re-phases audio. Leaving trick play is a seek, whose flush restarts the timeline.
+  Caption credits (`cc_credit_valid`) stop with the pickup branch, so no line-21 data is
+  paced out of trick frames.
+
+**Gate: `bench/dvd/run_disp_sched.sh`, scenarios [15a]-[15c], mutations M15-M18.**
+[15a]: 8 ready pictures with PTS jumping 30 s forward and back: the first at the first
+opportunity, then 22,522 ticks apart (15 NTSC scans), 0 anchors, 0 catch-up drops. [15b]:
+a picture ready 60,000 ticks after the previous pickup is shown at 60,080, and the wait
+counts no late (run with A/V Sync off, where `next_due` would otherwise be forced high).
+[15c]: the cadence holds with A/V Sync off. Mutations: the cadence ignored, a wait counted
+late, a pickup anchoring, the first picture waiting.
+
 ## Next step
 
-In order, each with a bench and `--red` arms:
-1. **The `disp_sched` cadence mode:** show each I-frame for 250 ms, ignoring PTS.
-2. **The controller** (`scrub_ctrl`): hold-FF/REW enters trick play with a seek to the
-   playhead, steps the tier, drives `trick_go` at 250 ms and `aud_drop`, gates
-   `sp_enable`/`pci_enable`, and leaves with a seek to `trick_nav`; the HUD clock follows
-   `trick_eltm`. Then wire the reader ports, `aud_drop` and `dvd/trick_es_filter.sv` in
-   `dvd/emu.sv` and `DVD.qsf`, with a `check_*_wiring.py` for each seam, and build for
-   the rig.
+**The controller**, then the first build. `scrub_ctrl`'s hold-FF/REW becomes trick play:
+enter with a seek to the playhead, step the tier on each further press (2×, 8×, 40×,
+120×), drive `trick_go` every 250 ms, `aud_drop`, `trick_cad` and the ES filter's `en`,
+gate `sp_enable`/`pci_enable`, show the HUD clock from `trick_eltm`, and leave with a seek
+to `trick_nav` (or to the PGC's edge, `trick_edge`). Then wire it all in `dvd/emu.sv` and
+`DVD.qsf` (the filter is not named there yet), add a `check_*_wiring.py` for each seam
+(reader, demux, filter, decoder), and build for the rig.

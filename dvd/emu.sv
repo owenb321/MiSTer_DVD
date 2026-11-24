@@ -5821,6 +5821,7 @@ mpeg2video mpeg2video_inst (
     .pts_in_valid (dec_pts_in_valid),
     .stc_tick     (stc_tick_dec),      // DVD-FORK (PTS scheduling): the 90 kHz tick, clk_sys/300 crossed into clk_dec
     .sched_en     (sched_en_dec),      // DVD-FORK (PTS scheduling): 0 = free-run (O[13] A/V Sync Off diagnostic)
+    .trick_cad    (1'b0),              // trick play cadence: tied off until the controller drives it
     .half_scan    (half_scan_dec),     // DVD-FORK (PTS scheduling): half the raster's image-scan period, ticks
     .stc          (core_stc),          // DVD-FORK (PTS scheduling): the clock (clk_dec)
     .stc_anchored (core_stc_anchored),
