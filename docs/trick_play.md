@@ -367,8 +367,45 @@ DSP.** About 2,760 ALM and 32 M10K remain. The first attempt failed elaboration:
 rejects the ES filter's `z[i+1]`/`o[i+2]` on a 6-bit vector even where the guard never
 selects them (error 10232); Icarus and Verilator accept it. The vectors are 8 bits now.
 
+## The first hardware round (2026-11-24)
+
+Rig .236, `releases/DVD_trickplay_20261124_1606.rbf` (`d59bd8a`, SEED 7, timing PASS; fit
+97 % ALMs needed, packing difficulty High with ~1,100 ALM recoverable by dense packing; the
+two `kbd_hold` instances are ~115 ALM of it, the rest is this fit's packing). Holds sent as
+keyboard Tab / Backspace through the HIL key daemon (`key 15 <ms>`), which is what the
+keyboard path made possible. HUD read from screenshots, pacing from 2 Hz telemetry.
+
+| Run | Result |
+|---|---|
+| Men in Black 3 image, FF held 10 s from 0:22 | trick play for 9.5 s; **4.0 pictures/s**, audio 0, 0 re-anchors, 0 drops; HUD `►►►►` mid-hold; landed ~6:06 (≈ 364 s; the ladder predicts 404) and played on with audio |
+| Same, REW held 6 s from ~6:57 | trick play the full 6 s; landed ~6:02 and played on |
+| Same, REW held 14 s from ~6:51 | the **edge**: trick play ended after ~10.5 s while still held, play resumed at 0:00, no re-entry while held |
+| Same, a 50 ms Tab tap | **+10 s jump**, as before |
+| The Force Awakens, **physical** DW316, FF held 10 s from ~1:37 | 3.63 pictures/s (min 2.0); landed ~3:43 (≈ 126 s) |
+| The Force Awakens **image**, FF held 10 s from ~1:45 | 3.91 pictures/s (min 1.9); landed ~3:47 (≈ 122 s) |
+
+**Decision 4 holds on the same film:** an image and the physical drive travel the same
+distance in the same hold; the drive shows a picture a little longer now and then. Normal
+playback on this build: 0 lates, 0 drops, audio at rate; the keyboard 10 s jump unchanged.
+MIB3 travels farther than TFA in the same hold because of the discs' structure (cells and
+rung validity), not the source.
+
+**Found:**
+- `lates` ticks 1-2 per half second during trick play. Not the decode-miss term (that needs
+  `sched_next_due`, low in the cadence mode): it is `par_late_r`, the field-parity
+  corrector slipping a field as the picture changes abruptly. Nothing was dropped (no
+  B-frames to drop), but it banks into `frame_drop_ctl`; gate it with the cadence mode.
+- The ladder's distances fall ~10 % short of prediction (entry re-lock before the first
+  frame, rung fallbacks at cell ends). Not a defect; worth a closer measurement if the
+  speeds feel wrong.
+
 ## Next step
 
-A hardware round on the rig:
+1. Gate `par_late_r` (or the whole `frame_late`) with `trick_cad` in `resample_addrgen`.
+2. The maintainer's call on a gamepad tap (enters and leaves at once).
+3. Angle blocks: a walk inside one; and a disc whose title is an angle film.
+4. The fit's ALM margin (97 %): a seed sweep, or trimming `kbd_hold`'s counters.
+
+Earlier plan, kept for reference: a hardware round on the rig:
 an image and the physical drive, both directions, every tier, the edge both ways, release
 landing on the picture on screen, audio back after release, a disc with angle blocks.
