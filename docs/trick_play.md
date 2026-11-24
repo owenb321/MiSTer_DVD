@@ -337,8 +337,17 @@ cycle. After an exit both buttons must be released before trick play can start a
 once and lands back on the VOBU on screen; on `scrub_ctrl` a tap nudged ~1 s. The manual
 (`site/content/playback/controls.md`) documents the hold only.
 
+## The first fit (2026-11-24)
+
+`releases/DVD_trickplay_20261124_1513.rbf`, SEED 7, timing PASS: clk_dec 96.4 / 91.6 MHz
+(100 / −40 °C, floor 86), clk_mem 99.8 / 102.7 (floor 90). Against v0.11.0 on the same
+seed: **+866 ALM (91 % → 93 %), +1 M10K (`cell_lv_mem`, inferred as an altsyncram), +0
+DSP.** About 2,760 ALM and 32 M10K remain. The first attempt failed elaboration: Quartus 17
+rejects the ES filter's `z[i+1]`/`o[i+2]` on a 6-bit vector even where the guard never
+selects them (error 10232); Icarus and Verilator accept it. The vectors are 8 bits now.
+
 ## Next step
 
-The first Quartus fit (the resource cost is unmeasured), then a hardware round on the rig:
+A hardware round on the rig:
 an image and the physical drive, both directions, every tier, the edge both ways, release
 landing on the picture on screen, audio back after release, a disc with angle blocks.

@@ -38,9 +38,10 @@ measurements and gates: `docs/trick_play.md`.
 - **Found on the way:** Icarus `$fseek` cannot pass 2 GB in one step; the model's "2 s" rung
   was the 1.5 s entry; a mid-sector entry armed on a stale NAV signature (`tk_sec_ok`);
   holding Rewind at a PGC's start re-entered for ever (`need_rel`).
+- **First fit:** SEED 7, timing PASS (clk_dec ≥ 91.6, clk_mem ≥ 99.8 MHz), +866 ALM / +1 M10K /
+  +0 DSP against v0.11.0. Quartus rejected an out-of-range bit select Icarus accepted (10232).
 - **Open:** a tap on a DVD now enters and leaves at once (it used to nudge the scrub; a
-  UX question for the maintainer); angle blocks beyond the play-order step; the first
-  Quartus fit (resource cost unmeasured).
+  UX question for the maintainer); angle blocks beyond the play-order step.
 
 ## ascal Bob resync: a mid-stream switch to Bob on Interlaced HDMI (2026-11-22)
 
