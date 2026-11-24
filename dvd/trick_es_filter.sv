@@ -85,7 +85,9 @@ module trick_es_filter (
     // Packed vectors throughout: Icarus runs unpacked arrays written through a variable
     // index ~10x slower, and the real-disc gate streams tens of MB.
     reg [47:0] a;
-    reg  [5:0] am, ak, z, o;
+    reg  [5:0] am, ak;
+    reg  [7:0] z, o;                  // a[k]==00 / a[k]==01; bits 6-7 stay 0 (the scan's
+                                      // i+1 / i+2 reach them: Quartus error 10232 at 6 bits)
     reg  [2:0] L, nd, base, cut;
     reg  [1:0] nst, nnpic;
     reg        nfld, keep_now, skip_inc, pair_inc, reduce, sc;
@@ -97,6 +99,8 @@ module trick_es_filter (
         ak = hk;
         a[8*hl +: 8] = in_byte;       // hl <= 5 whenever a byte is taken (see S_PCT)
         am[hl]       = in_mark;
+        z = 8'd0;
+        o = 8'd0;
         for (i = 0; i < 6; i = i + 1) begin
             z[i] = (a[8*i +: 8] == 8'h00);
             o[i] = (a[8*i +: 8] == 8'h01);
