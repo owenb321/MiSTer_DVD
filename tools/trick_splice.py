@@ -12,7 +12,7 @@ The ES filter (the rule the RTL must implement):
   picture start code to the end of the read. A VOBU with 1stref_ea == 0 is skipped.
 
   tools/trick_splice.py disc.iso                       # every tier, forward + reverse
-  tools/trick_splice.py disc.iso --tier 2 --frames 60 --at 0.3 -o out.m2v
+  tools/trick_splice.py disc.iso --tier 2 --dir fwd --frames 60 --at 0.3 -o out.m2v
   tools/trick_splice.py disc.iso --raw                 # control: no filter (cut sectors)
 
 The --raw control feeds the decoder the cut sectors as read. It shows whether the filter
@@ -156,12 +156,13 @@ def main():
     ap.add_argument('--frames', type=int, default=40)
     ap.add_argument('--at', type=float, default=0.3, help='start, fraction into the feature')
     ap.add_argument('--raw', action='store_true', help='control: no ES filter')
+    ap.add_argument('--dir', choices=('fwd', 'rev', 'both'), default='both')
     ap.add_argument('-o', '--out')
     a = ap.parse_args()
     bad = 0
     for iso in a.isos:
         for tier in ([a.tier] if a.tier is not None else range(4)):
-            for fwd in (True, False):
+            for fwd in {'fwd': (True,), 'rev': (False,), 'both': (True, False)}[a.dir]:
                 kept, n, errs, why = run(iso, tier, fwd, a.frames, a.at, a.raw, a.out)
                 ok = n == kept and not errs and kept > 0
                 bad += not ok

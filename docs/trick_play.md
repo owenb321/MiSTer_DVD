@@ -1,6 +1,7 @@
 # Trick play (continuous fast-forward / rewind)
 
-Status: 🔧 design + offline model (`feature/trick-play`, 2026-11-22). Nothing in RTL yet.
+Status: 🔧 design, offline model, and the splice through our RTL decoder in simulation
+(`feature/trick-play`, 2026-11-23). Nothing of trick play itself in RTL yet.
 The background is `docs/dvd_nav.md` §2d, which records why this is not a seek mode.
 
 ## Decisions (maintainer, 2026-11-22)
@@ -138,6 +139,39 @@ jumps 0.5 / 1 / 2 / 10 / 30 / 60 / 120 s give 2× / 4× / 8× / 40× / 120× / 2
 - Entering: title domain only, playing, no buttons armed, no still.
 - `.mpg` and VCD have no nav packs: out of scope (they keep scrub-to-target).
 
+## The splice through our decoder
+
+`bench/dvd/run_trick_decode.sh` (gate, `--red`) runs the spliced stream through the WHOLE
+video decoder, `rtl/mpeg2/mpeg2video.v` as `dvd/emu.sv` instantiates it, behind a memory
+model (`bench/dvd/trick_decode_tb.sv`, the tree's first full-decoder bench).
+`bench/dvd/trick_decode_score.py` rebuilds each reconstructed picture from the framestore
+writes and compares it with ffmpeg's decode.
+
+**2026-11-23, Men in Black 3, 8× forward:** every complete picture matches ffmpeg to within
+one code value (Y 67.3–67.5 dB, Cb/Cr 65.7–66.7 dB, max |diff| 1; 5 of 5 on a 6-VOBU walk,
+3 of 3 in the gate), no watchdog, no decoder error. The RED arm feeds the raw cut sectors
+and scores them against the filtered pictures: the decoder raises `error` twice and the arm
+fails, so the filter is load-bearing in our decoder, not only in ffmpeg.
+
+What the bench taught, for whoever extends it:
+- **The decoder holds a picture's last 8 words until the next picture starts** (388,792 of
+  388,800 words for 6 pictures). The stream's final picture never completes, so the runner
+  splices one VOBU more than it scores. In trick play there is always a next picture, but
+  the *exit* path must not assume the last shown I-frame is fully written: leaving is an
+  ordinary seek, which flushes, so this is not expected to matter. Note it if it ever does.
+- Framestore pixels are stored signed (pixel − 128), and **Cb is the plane after luma, then
+  Cr**.
+- `mem_req_prefetch` is a standard FIFO, not first-word-fall-through: `valid` follows
+  `rd_en` by a cycle.
+- Icarus speed: ~1,750 `clk_dec` cycles/s, ~8 min per 720×480 picture. The gate scores 3.
+- A preloaded 8 MB `reg` array read through `always @*` hung Icarus's compile for 18 h; the
+  bench reads the `.m2v` with `$fgetc`.
+- `rtl/mpeg2/mpeg2video.v` used eight signals before declaring them (Quartus accepts it,
+  Icarus does not); the declarations moved up, no logic changed (`DVD-FORK FIX`).
+
 ## Next step
 
-Feed the splice model's stream through the RTL decoder in simulation (the bench the quant-matrix gate uses is the starting point), so the claim "the decoder handles a spliced I-frame stream" is checked on our decoder and not only on ffmpeg. Then the RTL: the ES filter first, since it is self-contained.
+The RTL, in order, each with a bench and `--red` arms: the ES filter (self-contained; this
+gate's fixture is its golden), then the reader's trick FSM (fetch, fwda/bwda jump, PGC cell
+edges, prefetch, the cadence gate for images), dropping audio/subpicture packs, the
+`disp_sched` cadence mode, and the `scrub_ctrl`/HUD wiring with its `check_*_wiring.py`.
