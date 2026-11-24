@@ -1,8 +1,8 @@
 # Trick play (continuous fast-forward / rewind)
 
-Status: 🔧 design, offline model, the splice through our RTL decoder in simulation, and the
-ES filter in RTL (`dvd/trick_es_filter.sv`, bench-proven, not wired in yet).
-`feature/trick-play`, 2026-11-23.
+Status: 🔧 design, offline model, the splice through our RTL decoder in simulation, the ES
+filter (`dvd/trick_es_filter.sv`) and the reader's trick walk (`dvd/dvd_iso_reader.sv`),
+both bench-proven and not wired in yet. `feature/trick-play`, 2026-11-24.
 The background is `docs/dvd_nav.md` §2d, which records why this is not a seek mode.
 
 ## Decisions (maintainer, 2026-11-22)
@@ -91,7 +91,7 @@ every `bwda` entry and `prev_vobu` say END_OF_CELL:
 | Jump | forward reached 30 | reverse reached 30 |
 |---|---|---|
 | 0.5 s | 24 / 24 | 24 / 24 |
-| 2 s | 24 / 24 | 20 / 24 |
+| 2 s (really 1.5 s, see below) | 24 / 24 | 20 / 24 |
 | 10 s | 24 / 24 | 6 / 24 (median 14) |
 | 30 s | 24 / 24 | 1 / 24 (median 7) |
 
@@ -149,7 +149,7 @@ model (`bench/dvd/trick_decode_tb.sv`, the tree's first full-decoder bench).
 `bench/dvd/trick_decode_score.py` rebuilds each reconstructed picture from the framestore
 writes and compares it with ffmpeg's decode.
 
-**2026-11-23, Men in Black 3, 8× forward:** every complete picture matches ffmpeg to within
+**2026-11-23, Men in Black 3, 6× forward** (the model's "2 s" rung was the 1.5 s entry; see "The reader"): every complete picture matches ffmpeg to within
 one code value (Y 67.3–67.5 dB, Cb/Cr 65.7–66.7 dB, max |diff| 1; 5 of 5 on a 6-VOBU walk,
 3 of 3 in the gate), no watchdog, no decoder error. The RED arm feeds the raw cut sectors
 and scores them against the filtered pictures: the decoder raises `error` twice and the arm
@@ -206,10 +206,68 @@ picture_coding_type, cutting at the first picture, and the `en` = 0 wire.
 Icarus moves only ~18 KB/s through this bench, so the runner keeps walks to 3 reads and
 runs cases 6 at a time.
 
+## The reader
+
+`dvd/dvd_iso_reader.sv`, the TRICK PLAY note in the file. Ports `trick_en`, `trick_tier`
+(0.5 / 2 / 10 / 30 s), `trick_rev`, `trick_go` (the cadence gate) in; `trick_vobu`,
+`trick_nav`, `trick_eltm`, `trick_edge`, `trick_xcell_n` out. **Not wired into
+`dvd/emu.sv` yet**: every reader bench ties the inputs off.
+
+- **It rides the ILVU jump.** The reader already snoops each NAV pack's DSI as the sector
+  streams (for angle blocks) and has a jump that moves the fetch pointer **without a
+  flush** (`seek_rbn_l` + `rbn_override` + `S_CELL_LOAD`). Trick play adds fields to that
+  snoop (`vobu_1stref_ea`, `c_eltm`, `prev_vobu` and the four tier rungs for the current
+  direction) and arms a jump at every NAV pack: the fetch ends at `nv + 1stref_ea`, then
+  jumps.
+- **Target:** the tier's rung, then each shorter tier rung, then `next_vobu`/`prev_vobu`.
+  An entry is usable when its low 30 bits are neither 0 nor `0x3FFFFFFF` (END_OF_CELL)
+  **and** the target lies in the current cell. Otherwise the neighbouring cell in play
+  order: its first sector going forward, its last VOBU going back (a new
+  `cell_lv_mem`, 256 × 32 bits, one M10K, holding each cell's `last_vobu_start_sector`).
+  Past the PGC's first or last cell, `trick_edge` rises and the reader holds. Cell
+  commands never run.
+- **Only the four tier rungs are captured,** not all 19 + 19 entries (≈ 128 flops
+  rather than 1,216). The fallback therefore steps down through the tiers' rungs, not
+  every rung; the model does the same.
+- **The cadence gate:** at the end sector, the jump waits until `trick_go` has been seen
+  since the last jump (a one-pulse credit), and no further sector is read meanwhile.
+  Free-running (`trick_go` held high) is one VOBU after another.
+- **Trick play ending without a seek** (the controller is expected to seek; this is the
+  floor): the reader carries on from the sector after the reference picture.
+- **A whole-sector guard (`tk_sec_ok`):** only a sector whose first byte arrived with
+  `trick_en` high can arm. Without it, trick play re-entered partway through a video
+  sector armed on it, because the snoop still held the last session's NAV signature.
+- **⚠ The 2 s rung is fwda[15], not [16].** The vobu_sri table runs 120, 60, 30, 10, 7.5,
+  7, 6.5 … 1, 0.5 s. `tools/trick_splice.py` had 16 (1.5 s) until 2026-11-24, so the
+  splice-model and decoder runs labelled 2 s or 8× above were 1.5 s and 6×. Neither result
+  depends on the exact jump. The library sweep's per-rung figures were always labelled
+  correctly.
+- **Not handled yet:** angle blocks beyond the play-order step (a crossing uses
+  `cell_after` and `block_first - 1`, so it steps over an angle block as one cell, but a
+  walk inside one follows `fwda` and may leave the chosen angle). Measuring that is the
+  ILVU open question above.
+
+**Gate: `bench/dvd/run_trick_reader.sh` (`--red`).** `bench/dvd/iso_reader_trick_tb.sv`
+serves the reader sectors from the real `.iso` (`$fseek` in steps: Icarus's offset is a
+signed 32-bit integer, and title VOBs sit past 2 GB), seeks into the title and turns
+trick play on. `bench/dvd/trick_reader_check.py` walks `walk_cells` over the cell table
+the reader itself parsed and requires the same VOBUs, the same end sectors and exactly
+those sectors streamed. Six arms on Men in Black 3: forward and backward at 2 s and 30 s
+(the 30 s walks cross cells both ways), the PGC's edge, and the cadence gate. Every arm
+also checks that each armed sector is a NAV pack, that the reader keeps reading when trick
+play ends without a seek, and a second session entered at sector byte 0x500. Seven RED
+mutations, each failing its own arm: the 2 s rung, cell crossing, the backward landing,
+the gate, 1stref_ea, the whole-sector guard and the edge hold. With trick play off,
+`bench/dvd/run_reader_regress.sh` is bit-identical to the previous reader on every arm.
+
 ## Next step
 
-The RTL, in order, each with a bench and `--red` arms: the reader's trick FSM (fetch, fwda/bwda jump, PGC cell
-edges, prefetch, the cadence gate for images), dropping audio/subpicture packs, the
-`disp_sched` cadence mode, and the `scrub_ctrl`/HUD wiring with its `check_*_wiring.py`.
-Wiring `dvd/trick_es_filter.sv` into `dvd/emu.sv` (and `DVD.qsf`) goes with the reader FSM,
-with a wiring checker for the `ps_demux` -> filter -> `es_stuff` seam.
+In order, each with a bench and `--red` arms:
+1. **Drop audio and subpicture packs** while trick play runs (the audio ring would
+   back-pressure the demux) and mute.
+2. **The `disp_sched` cadence mode:** show each I-frame for 250 ms, ignoring PTS.
+3. **The controller** (`scrub_ctrl`): hold-FF/REW enters trick play with a seek to the
+   playhead, steps the tier, drives `trick_go` at 250 ms, and leaves with a seek to
+   `trick_nav`; the HUD clock follows `trick_eltm`. Then wire the reader ports and
+   `dvd/trick_es_filter.sv` into `dvd/emu.sv` and `DVD.qsf`, with `check_*_wiring.py` for
+   each seam, and build for the rig.

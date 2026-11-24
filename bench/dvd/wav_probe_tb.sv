@@ -70,6 +70,7 @@ module wav_probe_tb;
     wire        seek_ack_w;
 
     dvd_iso_reader dut (
+        .trick_en(1'b0), .trick_tier(2'd0), .trick_rev(1'b0), .trick_go(1'b0),   // trick play off (a new input floats Z)
         .cc_btns(1'b0),   // issue #176 hold off: a new input floats Z unless tied
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size), .title_sel(4'd0), .vbuf_empty(1'b0), 
         .jump_ttn(7'd0), .jump_pgn(8'd0),

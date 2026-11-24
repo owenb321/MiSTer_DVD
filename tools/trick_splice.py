@@ -74,7 +74,10 @@ def es_filter(es):
 
 def walk(f, lo, hi, start, step_s, fwd, frames):
     """Yield (nav_lbn, es_chunk) along a fwda/bwda walk from `start`."""
-    STEP = {0.5: 18, 1.0: 17, 2.0: 16, 10.0: 3, 30.0: 2, 60.0: 1, 120.0: 0}
+    # fwda index per jump: the table runs 120, 60, 30, 10, 7.5, 7, 6.5 ... 1, 0.5 s.
+    # (2.0 was 16 until 2026-11-24, which is the 1.5 s entry: the first decoder and
+    # splice runs at "8x" were really 6x.)
+    STEP = {0.5: 18, 1.0: 17, 2.0: 15, 10.0: 3, 30.0: 2, 60.0: 1, 120.0: 0}
     ridx = STEP[step_s]
     pos, got, guard = start, 0, 0
     while lo <= pos < hi and got < frames and guard < frames * 20:
@@ -108,6 +111,52 @@ def walk(f, lo, hi, start, step_s, fwd, frames):
                 pos += be32(d, 0x08) + 1
             else:
                 return                             # backward dead end
+
+
+# ---- the reader's walk (dvd/dvd_iso_reader.sv TRICK PLAY), for bench/dvd/run_trick_reader.sh
+# The four tier rungs per direction: fwda index / bwda index (bwda runs short to long).
+RUNG_FWD = [18, 15, 3, 2]          # 0.5, 2, 10, 30 s
+RUNG_REV = [0, 3, 15, 16]
+
+
+def _usable(e):
+    return (e & 0x3FFFFFFF) not in (0x3FFFFFFF, 0)
+
+
+def walk_cells(read_rbn, cells, cell, nav, tier, rev, frames):
+    """The reader's trick walk. read_rbn(rbn, n) -> bytes; cells = [(first, last, lvobu)]
+    in play order; starts at NAV pack `nav` inside cells[cell]. Yields
+    (nav_rbn, last_rbn, crossed) per VOBU: the reader reads nav..last, then jumps.
+    Target: the tier rung, each shorter tier rung, then next/prev_vobu; usable when
+    neither 0 nor END_OF_CELL and inside the current cell. Else the neighbouring
+    cell: its first sector forward, its last VOBU back; past the PGC's ends, stop."""
+    crossed = False
+    for _ in range(frames):
+        sec = read_rbn(nav, 1)
+        if not is_nav_pack(sec):
+            raise ValueError('rbn %d is not a NAV pack' % nav)
+        d = sec[DSI:]
+        yield nav, nav + be32(d, 0x0C), crossed
+        crossed = False
+        first, last, _ = cells[cell]
+        cand = []
+        for t in range(tier, -1, -1):
+            cand.append(be32(d, 0x142 + 4 * RUNG_REV[t]) if rev else be32(d, 0xEE + 4 * RUNG_FWD[t]))
+        cand.append(be32(d, 0x13E if rev else 0x13A))
+        tgt = None
+        for e in cand:
+            if _usable(e):
+                off = e & 0x3FFFFFFF
+                tgt = nav - off if rev else nav + off
+                break
+        if tgt is not None and (tgt >= first if rev else tgt <= last):
+            nav = tgt
+            continue
+        cell = cell - 1 if rev else cell + 1
+        if cell < 0 or cell >= len(cells):
+            return
+        nav = cells[cell][2] if rev else cells[cell][0]
+        crossed = True
 
 
 def decode(path):
