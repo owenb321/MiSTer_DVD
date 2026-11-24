@@ -6,8 +6,8 @@ standard numbering — whatever you mapped B1 to in the MiSTer menu is what "B1"
 
 | Button | Action | | Button | Action |
 |---|---|---|---|---|
-| B1 | Pause — and Play, when stopped or on a [still](#still-pictures) | | B10 | Fast Fwd (hold to scrub) |
-| B2 | Prev Chapter | | B11 | Rewind (hold to scrub) |
+| B1 | Pause — and Play, when stopped or on a [still](#still-pictures) | | B10 | Fast Fwd (hold) |
+| B2 | Prev Chapter | | B11 | Rewind (hold) |
 | B3 | Next Chapter | | B12 | Title menu |
 | B4 | Select | | B13 | Return (go up) |
 | B5 | Menu | | B14 | Stop |
@@ -330,12 +330,24 @@ With [Video Output = Interlaced](../video/interlaced.md), pausing on video-sourc
 holds **one field** of the picture rather than alternating between its two, so the still
 does not flicker. See [Pausing interlaced video](../video/interlaced.md#pausing-interlaced-video).
 
-**B2 / B3** step chapters. **B10 / B11** (`Fast Fwd` / `Rewind`) tapped step forward and back; **held**, they
-scrub — a seek bar appears showing where you are and where you will land, and the seek
-happens when you release. The time shown counts from the time on screen, and on a DVD the
-seek goes to that exact time through the disc's own time map, so you land where it said. The
-target accelerates the longer you hold, so a brief hold nudges
-you along and a long one crosses the whole disc.
+**B2 / B3** step chapters.
+
+**B10 / B11** (`Fast Fwd` / `Rewind`) **held in a DVD film** play it forwards or backwards
+at speed: a new picture every quarter of a second, faster the longer you hold — **2×**, then
+**8×** after 2 seconds, **40×** after 4½ and **120×** after 8. The status line stays up
+with the clock running and two to five arrows for the speed. Let go and the film carries on
+playing from the picture on screen. Sound and subtitles are off while it runs. Reaching the
+end of the film lets it finish as normal; rewinding to its start resumes playing there.
+
+A physical disc and a disc image run at the same speeds. The core paces both to what a DVD
+drive can keep up with, so the only difference a slow drive makes is that a picture now and
+then stays up a little longer.
+
+**Held anywhere else** — a VCD, SVCD, `.mpg` or `.VOB` file, or a DVD scene with on-screen
+buttons or a still picture — they **scrub** instead: a seek bar appears showing where you are
+and where you will land, and the seek happens when you release. The time shown counts from
+the time on screen. The target accelerates the longer you hold, so a brief hold nudges you
+along and a long one crosses the whole disc.
 
 **B9 (Display)** toggles the status line — the elapsed/total time and chapter readout along
 the bottom. It also appears by itself for a couple of seconds whenever something changes.

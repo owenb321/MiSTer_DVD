@@ -399,6 +399,7 @@ otherwise; `--red` runs its mutation arms).
 | Remote buttons: Stop, Aspect, Chapter Menu, A-B, Frame Step, Eject, Volume | ✅ | `dvd_nav.md`, `screensaver.md` | `run_frame_step.sh`, `check_frame_step_wiring.py` |
 | Still off (UOP18): Play/Pause or Select ends a still with no buttons armed or pending (audit 5); a jump no longer leaves a stale still timer | ✅ HW (timed stills, Play + Select, A/B vs `main`; SEED 7), MERGED PR #159 | `dvd_nav.md` "Still off" | `run_still_off.sh --red`, `check_still_off_wiring.py`, `check_select_noop.py` |
 | Frame step as a pause route; unbounded steps; clock follows the step | ✅ | `dvd_nav.md` | `run_frame_step.sh` |
+| Trick play: hold FF/REW in a DVD film = 2×/8×/40×/120×, one I-frame per 250 ms paced to a drive (`trick_ctrl`, reader walk, `trick_es_filter`, `aud_drop`, `disp_sched` cadence) | 🔧 sim-proven + wired, ⏳ HW | `trick_play.md` | `run_trick_{reader,es_filter,demux,ctrl,decode}.sh --red`, `run_disp_sched.sh`, `check_trick_wiring.py --red` |
 | Screensaver, and overlays blanked with the picture | ✅ | `screensaver.md` | `run_screensaver.sh`, `check_saver_overlay_wiring.py` |
 | Launch feedback: config versioning, startup OSD, idle logo | ✅ | `idle_screen.md` | — |
 | MGL launch (issue #48) and the drive's slot ownership | 🔧 mostly ✅ | `mgl_launch.md` | `run_mgl.sh`, `main/tests/run_tests.sh` |
@@ -495,7 +496,6 @@ otherwise; `--red` runs its mutation arms).
 - ⏳ Audio dead until a reboot after ~25 core loads in one boot, v0.10.0 too (`dts_ok` 0, cause unknown; `standard_convert.md`). `dts_ok` 0 voids a HIL run.
 - ❌ UDF-only images, parental control.
 - ⏳ 3rd-ed. audit tail (1–8 and 10b shipped): `docs/roadmap.md` "2026-10-01 spec-audit".
-- ❌ Trick play (continuous 2×/4×): needs a flush-free I-frame splice (`docs/dvd_nav.md` §2d).
 - ⚠ `lates` counts one per refresh while a PGC still is held, so boot/menu windows
   over-report (`docs/decode_pacing.md` §2c). Real lates are 0 on the census set since F1 +
   F2, bar one accepted ROGER late on Progressive from PR #142 (F3 is its structural fix).

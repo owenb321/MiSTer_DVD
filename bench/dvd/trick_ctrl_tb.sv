@@ -10,13 +10,14 @@ module trick_ctrl_tb;
     wire [1:0] tier;
     wire [31:0] seek_rbn;
     wire [15:0] n_entries;
+    wire owns;
 
     trick_ctrl #(.GO_PERIOD(10), .T1(100), .T2(200), .T3(300)) dut (
         .clk(clk), .rst_n(rst_n),
         .held_ff(held_ff), .held_rew(held_rew), .allowed(allowed), .cur_rbn(cur_rbn),
         .trick_vobu(trick_vobu), .trick_nav(trick_nav), .trick_edge(trick_edge),
         .active(active), .tier(tier), .rev(rev), .go(go),
-        .seek_pulse(seek_pulse), .seek_rbn(seek_rbn), .n_entries(n_entries));
+        .seek_pulse(seek_pulse), .seek_rbn(seek_rbn), .n_entries(n_entries), .owns(owns));
 
     integer errors = 0, n_seek = 0, n_go = 0, i;
     reg [31:0] last_seek = 0;
@@ -89,8 +90,11 @@ module trick_ctrl_tb;
         @(negedge clk) trick_edge = 1; repeat (2) @(posedge clk); trick_edge = 0;
         if (n_seek != 1 || last_seek != 32'd10) fail("[7] the edge did not exit to the edge VOBU");
         if (active) fail("[7] still active at the edge");
+        repeat (20) @(posedge clk);
+        if (!owns) fail("[7] the gesture not owned while the button is still held after the exit");
         @(negedge clk) held_rew = 0; repeat (20) @(posedge clk);
         if (n_seek != 1) fail("[7] releasing after the edge seeked again");
+        if (owns) fail("[7] the gesture still owned after the release");
 
         // [8] not allowed: a press does nothing; allowed falling mid-run exits
         allowed = 0; n_seek = 0;

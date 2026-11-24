@@ -10,6 +10,7 @@
 #   M4 entry without the flushing seek                          -> [1]
 #   M5 8x only from T2                                          -> [3]
 #   M6 the cadence gate never pulses                            -> [2]
+#   M7 the gesture released at the exit (scrub takes a held button) -> [7]
 #
 #   ./bench/dvd/run_trick_ctrl.sh [--red]
 set -uo pipefail
@@ -44,6 +45,7 @@ EOF
                 seek_pulse <= 1'b1;" "                seek_rbn   <= cur_rbn;"
   mut M5 3 "(held_cnt >= T1) ? 2'd1" "(held_cnt >= T2) ? 2'd1"
   mut M6 2 "                    go     <= 1'b1;" "                    go     <= 1'b0;"
+  mut M7 7 "assign owns = active || need_rel;" "assign owns = active;"
 fi
 [ $rc = 0 ] && echo "run_trick_ctrl: PASS" || echo "run_trick_ctrl: FAIL"
 exit $rc

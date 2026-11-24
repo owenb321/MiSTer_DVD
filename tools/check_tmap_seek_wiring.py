@@ -80,10 +80,14 @@ def check(path):
         bad.append('mode_realign .scrub_pulse/.scrub_rbn must be seek_any_pulse/seek_any_rbn')
     m1 = re.search(r'wire\s+seek_any_pulse\s*=\s*([^;]*);', src)
     m2 = re.search(r'wire\s+\[31:0\]\s+seek_any_rbn\s*=\s*([^;]*);', src)
-    if not m1 or ' '.join(m1.group(1).split()) != 'scrub_seek_pulse | rst_seek_pulse':
-        bad.append('seek_any_pulse must be scrub_seek_pulse | rst_seek_pulse')
-    if not m2 or ' '.join(m2.group(1).split()) != 'rst_seek_pulse ? rst_seek_rbn : scrub_seek_rbn':
-        bad.append('seek_any_rbn must be rst_seek_pulse ? rst_seek_rbn : scrub_seek_rbn')
+    # trick play's entry/exit seeks (dvd/trick_ctrl.sv) are a third producer: SECTOR
+    # seeks to NAV packs, so not ORed into seek_tm_req (tools/check_trick_wiring.py)
+    if not m1 or ' '.join(m1.group(1).split()) != 'scrub_seek_pulse | rst_seek_pulse | trick_seek_pulse':
+        bad.append('seek_any_pulse must be scrub_seek_pulse | rst_seek_pulse | trick_seek_pulse')
+    if not m2 or ' '.join(m2.group(1).split()) != \
+            'rst_seek_pulse ? rst_seek_rbn : trick_seek_pulse ? trick_seek_rbn : scrub_seek_rbn':
+        bad.append('seek_any_rbn must be rst_seek_pulse ? rst_seek_rbn : '
+                   'trick_seek_pulse ? trick_seek_rbn : scrub_seek_rbn')
     m3 = re.search(r'wire\s+hud_user_evt\s*=\s*([^;]*);', src)
     if not m3 or 'rst_seek_pulse' in m3.group(1) or 'seek_any_pulse' in m3.group(1):
         bad.append('hud_user_evt must not include the restore\'s seek (not a user press)')
@@ -151,7 +155,8 @@ def red():
          '.seek_tm_secs   (dpad_tm_v ? dpad_tm_s : scrub_tgt_secs),'),
         ('R11 the restore bypasses mode_realign', '.scrub_pulse     (seek_any_pulse),',
          '.scrub_pulse     (scrub_seek_pulse),'),
-        ('R12 the restore pops the HUD', '                  | scrub_seek_pulse\n                  | dpad_pend_evt;',
+        ('R12 the restore pops the HUD',
+         '                  | scrub_seek_pulse\n                  | trick_seek_pulse\n                  | dpad_pend_evt;',
          '                  | seek_any_pulse\n                  | dpad_pend_evt;'),
         ('R2 the time is not seek_time\'s', 'dpad_tm_s     <= seek_prev_secs_w;', 'dpad_tm_s     <= 17\'d0;'),
         ('R3 time seeks outside a DVD title', 'dpad_tm_v     <= cell_ready && !menu_active && seek_prev_ok_w;',

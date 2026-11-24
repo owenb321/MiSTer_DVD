@@ -2,8 +2,9 @@
 
 Status: 🔧 design, offline model, the splice through our RTL decoder in simulation, the ES
 filter (`dvd/trick_es_filter.sv`) and the reader's trick walk (`dvd/dvd_iso_reader.sv`),
-the audio drop (`ps_demux` `aud_drop`) and the display cadence (`disp_sched` `cad_en`),
-all bench-proven and not wired in yet. `feature/trick-play`, 2026-11-24.
+the audio drop (`ps_demux` `aud_drop`), the display cadence (`disp_sched` `cad_en`) and the
+controller (`dvd/trick_ctrl.sv`), all bench-proven and wired into `dvd/emu.sv`; ⏳ the first
+hardware round. `feature/trick-play`, 2026-11-24.
 The background is `docs/dvd_nav.md` §2d, which records why this is not a seek mode.
 
 ## Decisions (maintainer, 2026-11-22)
@@ -304,12 +305,40 @@ counts no late (run with A/V Sync off, where `next_due` would otherwise be force
 [15c]: the cadence holds with A/V Sync off. Mutations: the cadence ignored, a wait counted
 late, a pickup anchoring, the first picture waiting.
 
+## The controller and the wiring
+
+`dvd/trick_ctrl.sv` (gate `bench/dvd/run_trick_ctrl.sh --red`: 9 scenarios, 7 mutations).
+A press in a DVD title that trick play `allowed` (cell mode, not a menu or in-title menu,
+no armed buttons, not a still, not stopped) enters with ONE seek to the playhead: its flush
+throws away the normal video buffered ahead, so the first trick frame comes at once, and the
+reader (trick_en already high) arms at the landing's first NAV pack. The tier steps at 2 /
+4.5 / 8 s held (`scrub_ctrl`'s dwells); `trick_go` pulses every 250 ms. Release, the other
+button, `allowed` falling or the reader's edge exit with ONE seek to the VOBU on screen (the
+one armed before the latest: the reader fetches one ahead), and `active` drops in the same
+cycle. After an exit both buttons must be released before trick play can start again
+(`owns` covers that gap, so `scrub_ctrl` does not pick the held button up either).
+
+`dvd/emu.sv` (gate `tools/check_trick_wiring.py --red`, 15 RED arms):
+- `scrub_ctrl` sees FF/REW only through `~trick_claim` (= `trick_allowed | trick_owns`): it
+  keeps `.mpg`/VCD and the DVD states trick play refuses;
+- trick play's seeks join `seek_any_*` (mode_realign's arbitration) and are SECTOR seeks to
+  NAV packs, so not part of `seek_tm_req` (`tools/check_tmap_seek_wiring.py` updated);
+- the reader's ports, `ps_demux` `aud_drop`, `sp_enable` and `pci_enable` gated off;
+- `dvd/trick_es_filter.sv` between `ps_demux` and `es_stuff`, reset by `pipe_rst_n`
+  (`tools/check_es_stuff_wiring.py` follows the chain through it);
+- `trick_cad` = `trick_active` through two `clk_dec` flops;
+- the HUD: the status line stays up (`bar_active | trick_active`, not the seek bar, whose
+  base and target are the scrub's) and the speed arrows are the tier. The clock needs
+  nothing: `nav_dsi` parses each spliced VOBU's DSI as it passes the demux;
+- `DVD.qsf` names `dvd/trick_ctrl.sv` and `dvd/trick_es_filter.sv`.
+`tools/lint_undriven.sh` passes.
+
+**Open, for the maintainer:** a tap of FF/REW on a DVD now enters and leaves trick play at
+once and lands back on the VOBU on screen; on `scrub_ctrl` a tap nudged ~1 s. The manual
+(`site/content/playback/controls.md`) documents the hold only.
+
 ## Next step
 
-**The controller**, then the first build. `scrub_ctrl`'s hold-FF/REW becomes trick play:
-enter with a seek to the playhead, step the tier on each further press (2×, 8×, 40×,
-120×), drive `trick_go` every 250 ms, `aud_drop`, `trick_cad` and the ES filter's `en`,
-gate `sp_enable`/`pci_enable`, show the HUD clock from `trick_eltm`, and leave with a seek
-to `trick_nav` (or to the PGC's edge, `trick_edge`). Then wire it all in `dvd/emu.sv` and
-`DVD.qsf` (the filter is not named there yet), add a `check_*_wiring.py` for each seam
-(reader, demux, filter, decoder), and build for the rig.
+The first Quartus fit (the resource cost is unmeasured), then a hardware round on the rig:
+an image and the physical drive, both directions, every tier, the edge both ways, release
+landing on the picture on screen, audio back after release, a disc with angle blocks.

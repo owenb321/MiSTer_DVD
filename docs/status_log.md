@@ -20,6 +20,28 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ---
 
+## Trick play: hold FF/REW in a DVD film (2026-11-24, `feature/trick-play`)
+
+🔧 Built, sim-proven and wired into `dvd/emu.sv`; ⏳ the first hardware round. Full design,
+measurements and gates: `docs/trick_play.md`.
+
+- **Decisions** (maintainer, 2026-11-22): hold FF/REW becomes trick play; only speeds that
+  reliably pull I-frames; no slow motion; a disc image gets no advantage over a physical
+  disc. Then T = 250 ms and 2× / 8× / 40× / 120× (jumps of 0.5 / 2 / 10 / 30 s).
+- **Measured first:** 150-disc sweep (every VOBU with video starts with an I-frame, 0 field
+  pairs, the cut sector holds the next picture in 99.6 %); a DW316 drive over 1,152 reads
+  (transfer dominates, ~1× DVD speed); the splice model 192/192 clean in ffmpeg; the spliced
+  stream through the whole RTL decoder in simulation, within one code value of ffmpeg.
+- **The pieces:** the reader's walk (no-flush jumps on the ILVU path, cell crossing both ways,
+  the edge, the `trick_go` gate), `dvd/trick_es_filter.sv`, `ps_demux` `aud_drop`,
+  `disp_sched` `cad_en`, `dvd/trick_ctrl.sv`, and the HUD reusing the scrub's speed arrows.
+- **Found on the way:** Icarus `$fseek` cannot pass 2 GB in one step; the model's "2 s" rung
+  was the 1.5 s entry; a mid-sector entry armed on a stale NAV signature (`tk_sec_ok`);
+  holding Rewind at a PGC's start re-entered for ever (`need_rel`).
+- **Open:** a tap on a DVD now enters and leaves at once (it used to nudge the scrub; a
+  UX question for the maintainer); angle blocks beyond the play-order step; the first
+  Quartus fit (resource cost unmeasured).
+
 ## ascal Bob resync: a mid-stream switch to Bob on Interlaced HDMI (2026-11-22)
 
 **State:** ✅ HW, MERGED (PR #204; `dev-bobresync`); fit

@@ -49,7 +49,11 @@ module trick_ctrl #(
     output reg         go,                 // one clk: the next jump may fire
     output reg         seek_pulse,         // one clk: a raw-RBN seek (entry or exit)
     output reg  [31:0] seek_rbn,
-    output reg  [15:0] n_entries           // trick-play sessions (telemetry)
+    output reg  [15:0] n_entries,          // trick-play sessions (telemetry)
+    // The gesture is trick play's: active, or exited and waiting for the release.
+    // dvd/emu.sv keeps scrub_ctrl off FF/REW while this is high, so a button still
+    // held after an exit does not start a scrub.
+    output wire        owns
 );
     reg [27:0] held_cnt;
     reg [22:0] go_cnt;
@@ -57,6 +61,7 @@ module trick_ctrl #(
     reg [1:0]  n_armed;                    // 0, 1, 2+ (saturating)
     reg        need_rel;                   // exited: both buttons must be let go first
 
+    assign owns = active || need_rel;
     wire held_dir = rev ? held_rew : held_ff;
     wire other    = rev ? held_ff  : held_rew;
 
