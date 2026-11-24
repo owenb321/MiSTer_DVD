@@ -43,26 +43,32 @@ def pic_starts(es):
 
 
 def es_filter(es):
-    """Cut one VOBU's ES to [first sequence header .. end of the first reference frame].
-    Returns (bytes, why) - bytes is None when the VOBU must be skipped."""
+    """Cut one VOBU's ES the way dvd/trick_es_filter.sv does (byte-exact; the RTL bench
+    bench/dvd/run_trick_es_filter.sh compares the two). Returns (bytes, why); bytes is
+    None when nothing of the read is passed.
+
+    - nothing before the first sequence header;
+    - through the end of the first picture (frame), or of the second picture when the
+      first is field-structured (the pair); the cut is the next picture start code;
+    - a first picture that is not an I-picture: its headers pass and the picture does
+      not. (A streaming filter has already passed the headers when it learns the type.
+      A sequence header with no picture after it is harmless to the vld, which
+      dispatches on whichever start code comes next. 0 such VOBUs in the 150-disc sweep.)
+    - a read with no picture start code after the header passes whole;
+    - a dangling 00 00 01 at the read's end is dropped."""
     s = es.find(b'\x00\x00\x01\xb3')
     if s < 0:
         return None, 'no_seq'
-    pics = [p for p in pictures(es) if p[0] > s]
-    if not pics or pics[0][1] != 1:
-        return None, 'first_not_I'
-    n = 1
-    if pics[0][2] in (1, 2):                       # field picture: keep its pair
-        if len(pics) < 2 or pics[1][2] not in (1, 2) or pics[1][2] == pics[0][2]:
-            return None, 'field_pair_incomplete'
-        n = 2
     starts = [p for p in pic_starts(es) if p > s]
+    pics = [p for p in pictures(es) if p[0] > s]
+    if starts and pics and pics[0][1] != 1:
+        return es[s:starts[0]], 'first_not_I'
+    n = 2 if (pics and pics[0][2] in (1, 2)) else 1
     if len(starts) > n:
-        return es[s:starts[n]], 'cut'
+        return es[s:starts[n]], 'cut' if n == 1 else 'cut_pair'
     out = es[s:]                                   # the read ends inside or at the frame
     if out.endswith(b'\x00\x00\x01'):              # a start code split by the read's end
-        out = out[:-3]
-        return out, 'whole_strip'
+        return out[:-3], 'whole_strip'
     return out, 'whole'
 
 
@@ -138,7 +144,7 @@ def run(iso, tier, fwd, frames, at, raw, out=None):
             why[w] = why.get(w, 0) + 1
             if cut is not None:
                 es += cut
-                kept += 1
+                kept += w not in ('first_not_I',)
     es += b'\x00\x00\x01\xb7'                      # sequence_end_code
     path = out or tempfile.mktemp(suffix='.m2v')
     open(path, 'wb').write(es)

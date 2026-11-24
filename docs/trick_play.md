@@ -1,7 +1,8 @@
 # Trick play (continuous fast-forward / rewind)
 
-Status: 🔧 design, offline model, and the splice through our RTL decoder in simulation
-(`feature/trick-play`, 2026-11-23). Nothing of trick play itself in RTL yet.
+Status: 🔧 design, offline model, the splice through our RTL decoder in simulation, and the
+ES filter in RTL (`dvd/trick_es_filter.sv`, bench-proven, not wired in yet).
+`feature/trick-play`, 2026-11-23.
 The background is `docs/dvd_nav.md` §2d, which records why this is not a seek mode.
 
 ## Decisions (maintainer, 2026-11-22)
@@ -76,7 +77,8 @@ partial B-frame each read carries is real, and the filter is what removes it.
 
 **The filter rule, as the RTL must implement it:**
 - drop until the VOBU's first sequence header (`00 00 01 B3`);
-- pass the reference frame: one frame picture, or two complementary field pictures;
+- pass the reference frame: one frame picture, or the first two pictures when the first is
+  field-structured (the pair; the second field is not checked, `pair_n` counts pairs);
 - cut at the next **picture start code, recognised from its 4 bytes alone** (`00 00 01 00`).
   The first model needed 6 bytes of header and let a picture start split by the read's end
   through: 6 of 193 runs failed with "ignoring seq ext after 100";
@@ -169,9 +171,45 @@ What the bench taught, for whoever extends it:
 - `rtl/mpeg2/mpeg2video.v` used eight signals before declaring them (Quartus accepts it,
   Icarus does not); the declarations moved up, no logic changed (`DVD-FORK FIX`).
 
+## The ES filter in RTL
+
+`dvd/trick_es_filter.sv`: the rule above, streamed. It goes between `ps_demux`'s video
+output and `es_stuff`, and is a wire when `en` = 0. **Not wired into `dvd/emu.sv` or
+named in `DVD.qsf` yet** (that comes with the reader's trick FSM, which drives `en`).
+
+- **Holding, not buffering.** A byte leaves as soon as no later byte can change its fate.
+  Only a tail that might begin a start code (`00`, `00 00`, `00 00 01`) is held, plus the
+  first picture's code and two header bytes until `picture_coding_type` is known: never
+  more than 6 bytes. A picture's last bytes therefore never wait for the next read, which
+  would hold a whole frame for one cadence period.
+- **The dangling `00 00 01`.** It arrives followed by the next read's `00 00 01 B3`, so the
+  wire carries `00 00 01 00 00 01 B3`. The first four bytes form a picture start code and
+  make the cut, and its last byte stays held as the first byte of the header. In a valid
+  ES `00 00 01 00 00 01` cannot occur (it would be picture_coding_type 0, forbidden).
+- **A first picture that is not an I-picture:** the read's headers have already passed
+  when the type is known, so they stay and the picture is dropped (`skip_n` counts it).
+  The model (`tools/trick_splice.py` es_filter) was changed to do the same, so the two
+  stay byte-exact. A sequence header with no picture before the next one is harmless to
+  the vld, which dispatches on whichever start code comes next. 0 such VOBUs in the sweep.
+- **Field pairs** pass both fields (`pair_n` counts them); `picture_structure` is read from
+  the first picture's coding extension, and MPEG-1 (no extension) is always a frame.
+- **Rate:** one byte per two `clk_sys` cycles in trick play (13.5 MB/s; a trick read is
+  ~0.5 MB/s).
+
+**Gate: `bench/dvd/run_trick_es_filter.sh` (`--red`).** It is byte-exact against the model
+on 8 discs drawn with a fixed seed from `$DVD_ISO_DIR` (every tier, both directions), with
+random input gaps and output backpressure. Six synthetic streams cover what no disc in the
+sweep contains: a field pair, a first picture that is not an I, MPEG-1, a dangling
+`00 00 01`, trailing zero stuffing, and junk with start-code-like bytes around the
+headers. One RED mutation per rule fails its own case: the held byte, picture_structure,
+picture_coding_type, cutting at the first picture, and the `en` = 0 wire.
+Icarus moves only ~18 KB/s through this bench, so the runner keeps walks to 3 reads and
+runs cases 6 at a time.
+
 ## Next step
 
-The RTL, in order, each with a bench and `--red` arms: the ES filter (self-contained; this
-gate's fixture is its golden), then the reader's trick FSM (fetch, fwda/bwda jump, PGC cell
+The RTL, in order, each with a bench and `--red` arms: the reader's trick FSM (fetch, fwda/bwda jump, PGC cell
 edges, prefetch, the cadence gate for images), dropping audio/subpicture packs, the
 `disp_sched` cadence mode, and the `scrub_ctrl`/HUD wiring with its `check_*_wiring.py`.
+Wiring `dvd/trick_es_filter.sv` into `dvd/emu.sv` (and `DVD.qsf`) goes with the reader FSM,
+with a wiring checker for the `ps_demux` -> filter -> `es_stuff` seam.
