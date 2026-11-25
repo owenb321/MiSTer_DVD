@@ -1739,6 +1739,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .blend_en(blend_en),                                     // DVD-FORK (field blend)
     .scan_blend(blend_scan_w),
     .bob_en(bob_en),
+    .trick_cad(trick_cad),                                   // DVD-FORK (trick play): field-parity corrector off
     .std_cad(std_cad),                                       // DVD-FORK (Standard Convert): synthetic 3:2                                         // DVD-FORK (progressive bob)
     .scan_bob(bob_scan_w),
     .scan_bob_bot(bob_bot_w)

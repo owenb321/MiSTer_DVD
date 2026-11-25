@@ -52,7 +52,8 @@ module resample_addrgen (
   still_en, scan_start, scan_half,                 // DVD-FORK (pause field still): enable + per-scan sideband to disp_vscale
   blend_en, scan_blend,                            // DVD-FORK (field blend): enable + per-scan sideband to field_blend
   bob_en, scan_bob, scan_bob_bot,                  // DVD-FORK (progressive bob): enable + per-scan kernel select
-  std_cad                                          // DVD-FORK (Standard Convert): synthetic 3:2 on the field raster
+  std_cad,                                         // DVD-FORK (Standard Convert): synthetic 3:2 on the field raster
+  trick_cad                                        // DVD-FORK (trick play): the field-parity corrector is off
   );
 
   input              clk;                      // clock
@@ -316,6 +317,7 @@ module resample_addrgen (
    * windows measured film-like); a true 50i picture's third field repeats its first, a
    * one-field step back in time on motion, accepted. */
   input              std_cad;
+  input              trick_cad;
   output             scan_bob;
   output             scan_bob_bot;
 
@@ -688,7 +690,14 @@ module resample_addrgen (
    * between PR #40 and that fix because the ungated feedback arm repeated a field
    * several times a second on real content; bench/dvd/field_phase_tb.sv scenario [6]
    * is the regression guard (it starves the pixel queue and budgets the repeats). */
-  wire       par_ins  = alt_break ^ par_fb;                       // insert one field instead of picking up
+  /* ★ OFF IN TRICK PLAY (trick_cad, maintainer 2026-11-24). Trick play shows one unrelated
+   * I-frame per 250 ms: every new picture is an "alternation break", so the corrector
+   * slipped a field on nearly every one, and each slip pulsed frame_late (par_late_r),
+   * banking drop debt for frames nothing was late on (HW: lates ticking 1-2 per half
+   * second through every hold, 0 drops). The phase of a 250 ms slideshow does not matter;
+   * after the exit seek the corrector runs as before (its counters keep watching). Gated
+   * by bench/dvd/field_phase_tb.sv [T] and run_field_phase.sh's mutation. */
+  wire       par_ins  = (alt_break ^ par_fb) && ~trick_cad;         // insert one field instead of picking up
   wire       par_slip = (state == STATE_INIT) && ofv_pickup && par_ins;  // the insertion event
   /* Qualified pickup: every pickup-conditioned latch below consumes THIS instead of
    * ofv_pickup, so on an insertion cycle the pending frame stays unconsumed (picked up
@@ -740,7 +749,7 @@ module resample_addrgen (
    * Same par_fb budget as the pickup arm, and the counters are SHARED, so the two arms
    * can never double-correct one verdict. */
   wire       par_hold_ins = (state == STATE_REPEAT) && (next == STATE_NEXT_IMG) &&
-                            (repeat_cnt == 5'd0) && ~hold_freeze && par_fb;
+                            (repeat_cnt == 5'd0) && ~hold_freeze && par_fb && ~trick_cad;
   /* No combinational loop: next's cone is {state, repeat_cnt, ofv_paced, persistence,
    * last_image, image_0..5} and par_fb's is {interlaced, raster_par_err, par_cnt,
    * par_age, last_image} — all registers and inputs, none of them fed by this wire.
