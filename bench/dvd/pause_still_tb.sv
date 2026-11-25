@@ -63,13 +63,14 @@ module pause_still_tb;
   reg dot_clk = 0; always #10 dot_clk = ~dot_clk;
   reg rst = 0;
 
-  integer pfr = 0, pin = 0, still_en_i = 1, lb = 0;
+  integer pfr = 0, pin = 0, still_en_i = 1, lb = 0, trick = 0;   // +trick=1: trick_cad holds, not pause
   reg        progressive_frame = 1'b0;
   reg        top_field_first   = 1'b1;
   reg  [2:0] output_frame = 3'd2;
   reg        output_frame_valid = 1'b0;
   wire       output_frame_rd;
   reg        pause = 1'b0;
+  reg        trick_cad_r = 1'b0;
   reg        step_req = 1'b0;
   reg        still_en = 1'b1;
 
@@ -102,7 +103,7 @@ module pause_still_tb;
     .video_live(), .pickup_hold(1'b0), .pause(pause), .step_req(step_req),
     .raster_par_err(1'b0), .vscale_mode(2'd0), .hcrop_en(1'b0),
     .sched_due(1'b1), .sched_next_due(1'b1),
-    .still_en(still_en), .blend_en(1'b0), .bob_en(1'b0), .std_cad(1'b0), .trick_cad(1'b0), .scan_start(scan_start), .scan_half(scan_half)
+    .still_en(still_en), .blend_en(1'b0), .bob_en(1'b0), .std_cad(1'b0), .trick_cad(trick_cad_r), .scan_start(scan_start), .scan_half(scan_half)
   );
 
   wire [7:0] vs_y, vs_u, vs_v, vs_osd;
@@ -350,9 +351,10 @@ module pause_still_tb;
     void'($value$plusargs("still_en=%d", still_en_i));
     void'($value$plusargs("verbose=%d", verbose));
     void'($value$plusargs("lb=%d", lb));
+    void'($value$plusargs("trick=%d", trick));
     progressive_frame = pfr[0];
     still_en = still_en_i[0];
-    $display("==== pause_still_tb  pfr=%0d pin=%0d still_en=%0d lb=%0d ====", pfr, pin, still_en_i, lb);
+    $display("==== pause_still_tb  pfr=%0d pin=%0d still_en=%0d lb=%0d trick=%0d ====", pfr, pin, still_en_i, lb, trick);
 
     repeat (8) @(posedge clk); rst = 1; repeat (8) @(posedge clk);
 
@@ -365,7 +367,8 @@ module pause_still_tb;
     // lands on it (the lock pins last_image at the next scan start)
     wait (resample.resample_addrgen.state == 4'h7 &&
           resample.resample_addrgen.image == (pin ? BOT_I : TOP_I));
-    @(negedge clk) pause = 1'b1;
+    // +trick=1: trick play's hold (trick_cad), the decoder NOT paused
+    @(negedge clk) if (trick) trick_cad_r = 1'b1; else pause = 1'b1;
     // a film/progressive picture keeps its weave: expect NATIVE; else the still
     run_phase(pfr ? P_NATIVE : P_STILL, 3, NSCORE, n_still);
     $display("  [pause] %s        : %0d/%0d scans", pfr ? "woven still (control)" : "field still          ",
@@ -373,9 +376,10 @@ module pause_still_tb;
 
     // frame step while paused: one new picture, then the still again
     p_before_step = pickups;
+    // (trick play: the next picture is an ordinary pickup, no step request)
     fork
       present_one;
-      begin @(negedge clk) step_req = 1'b1; @(negedge clk) step_req = 1'b0; end
+      begin if (!trick) begin @(negedge clk) step_req = 1'b1; @(negedge clk) step_req = 1'b0; end end
     join
     run_phase(pfr ? P_NATIVE : P_STILL, 3, NSCORE, n_step);
     $display("  [step]  after a frame step       : %0d/%0d scans (pickups +%0d)",
@@ -386,7 +390,7 @@ module pause_still_tb;
     end
 
     // resume
-    @(negedge clk) pause = 1'b0;
+    @(negedge clk) begin pause = 1'b0; trick_cad_r = 1'b0; end
     present_one;
     run_phase(P_NATIVE, 3, NSCORE, n_post);
     $display("  [post]  native after resume      : %0d/%0d scans", n_post, NSCORE);

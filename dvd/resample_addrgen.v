@@ -828,7 +828,12 @@ module resample_addrgen (
    * each picture, steady). ~sif2x: the SIF walk owns the vertical path (MPEG-1 is
    * progressive anyway). */
   wire       img0_field = (image_0 == TOP) || (image_0 == BOTTOM);
-  wire       still_want = still_en && pause && ~step_arm && interlaced && ~deinterlace &&
+  /* ★ TRICK PLAY TOO (trick_cad, maintainer 2026-11-25: "the held images during trick play
+   * ... flicker between fields"). Trick play holds each I-frame ~15 refreshes, so the
+   * persistence loop alternated its two fields exactly as a pause used to. The pin
+   * carries across pickups (as across frame steps), so the walk shows one field of each
+   * picture, steady; trick_cad drops at the release and the lock with it. */
+  wire       still_want = still_en && (pause || trick_cad) && ~step_arm && interlaced && ~deinterlace &&
                           cur_ilace && img0_field && ~sif2x;
   /* pin_bot: the field held on screen — the one scanned LAST when the lock engages, so
    * the pause shows what was on screen rather than jumping back half a frame. Held for

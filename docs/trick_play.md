@@ -540,9 +540,30 @@ the share, keyboard keys through the harness (it has no gamepad):
   `scrub_ctrl`; `joy_eff` masks them), and the manual now says so; the gamepad scrubs.
 - ⏳ Not measurable here: the gamepad tap and the gamepad's scrub with Off (maintainer).
 
+## Trick pictures are field stills (maintainer, 2026-11-25)
+
+Maintainer on `dev-trickplay6`: "the held images during trick play look like they have a
+similar issue we used to have with paused video where it flickers between fields". Each
+trick picture is held ~15 refreshes, and on the interlaced raster the persistence loop
+re-scans its two fields alternately -- the pre-2026-09-18 pause flicker, because the pause
+field still (`still_want`, `dvd/resample_addrgen.v`) engaged only on `pause`. Now
+`still_want` takes `(pause || trick_cad)`: the pin carries across pickups as it does
+across frame steps, so the walk shows one field of each picture, steady; film pictures
+keep their weave (`cur_ilace`). `trick_cad` drops at the release, the lock with it.
+
+Gate: `run_pause_still.sh --red` gains `trick_pin_top`/`_bottom`/`trick_film` (+trick=1:
+trick_cad, not pause, holds; the next picture is an ordinary pickup) and M9 (the trick term
+dropped): M9 scores 4/8 still scans, the alternation the maintainer saw. Every other bench
+ties `still_en` or `trick_cad` off, so nothing else moves.
+
+⚠ The progressive raster is not this path: Weave shows a trick picture combed but static,
+and Bob keeps the first field on the pickup scan and the second after, so a held picture
+shifts once, half a line, as it lands.
+
 ## Next step
 
-1. The maintainer's hands-on: gamepad tap, gamepad hold, Trick Play = Off on the pad.
+1. The maintainer's hands-on: gamepad tap, gamepad hold, Trick Play = Off on the pad, and
+   the field still on the interlaced raster.
 2. Angle blocks: a walk inside one; and a disc whose title is an angle film.
 3. The fit's ALM margin (97 %): a seed sweep, or trimming `kbd_hold`'s counters.
 
