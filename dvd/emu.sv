@@ -734,7 +734,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-trickplay5"
+`define CORE_VERSION "dev-trickplay6"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -7489,7 +7489,11 @@ seek_bar #(.BAR_QX_ADJ(4)) seek_bar_inst (
     // track table spans the CURRENT TRACK instead (user decision 2026-09-10,
     // reversing the earlier whole-disc bar) -- matching its track-relative
     // clock, and matching the per-track FF/REW clamp above.
-    .force_show (cdda_mode_w && hud_persist_w), // shown/hidden WITH the status line
+    // Trick play: the LIVE playhead for the whole gesture (bar_active stays the
+    // scrub's alone, so there is no stale base/cursor: fill = cur_rbn, the demux's
+    // NAV pack, which is each trick picture's own VOBU). Maintainer, 2026-11-24:
+    // "why is there no progress bar when scrubbing?"
+    .force_show ((cdda_mode_w && hud_persist_w) | trick_active), // shown/hidden WITH the status line
     .menu_active(menus_on && menu_active),
     .cur_rbn    (cell_ready ? dsi_nv_pck_lbn : lin_blk_w),
     .pgc_loaded (pgc_loaded),

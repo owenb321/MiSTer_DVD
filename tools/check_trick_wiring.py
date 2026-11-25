@@ -230,6 +230,8 @@ def check(emu_src, qsf_src):
     if sb is not None:
         want('trick' not in (port(sb, 'active') or port(sb, 'bar_active') or ''),
              'seek_bar shows in trick play (it is the scrub\'s bar: base and target are stale)')
+        want(re.search(r'\|\s*trick_active\s*\)?\s*$', (port(sb, 'force_show') or '').strip()),
+             f"seek_bar .force_show lacks trick_active (no progress bar in trick play): {port(sb, 'force_show')!r}")
 
     # the HUD clock: cell start and cell-elapsed from the SAME NAV pack (latched
     # together at dsi_commit), else a cell crossing reads a cell ahead, then back
@@ -283,6 +285,8 @@ RED = [
     ('R20 the pair not latched at a NAV pack', 'end else if (dsi_commit) begin\n        hud_pair_v',
      'end else if (1\'b0) begin\n        hud_pair_v'),
     ('R21 the pair survives a flush', "hud_pair_v <= 1'b0; hud_cs_l <= 32'd0;", "hud_cs_l <= 32'd0;"),
+    ('R22 no progress bar in trick play', '.force_show ((cdda_mode_w && hud_persist_w) | trick_active),',
+     '.force_show ((cdda_mode_w && hud_persist_w)),'),
     ('R12 connection only in a comment', '.trick_go       (trick_go),', ".trick_go       (1'b0), // (trick_go)"),
 ]
 RED_QSF = ('R13 Quartus does not see the filter',

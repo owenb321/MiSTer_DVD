@@ -481,6 +481,13 @@ slow. **Instrument:** `mister.py snap` returns in ~0.22 s and carries the HUD cl
   while `angle_active`, and a trick crossing clears it. Harmless here (each sibling is
   one picture), but a walk inside an angle block is not designed yet.
 
+- **Progress bar (maintainer: "why is there no progress bar when scrubbing?").** The
+  wiring kept the seek bar's SCRUB mode off (its base/target are scrub_ctrl's and stale in
+  trick play) and never turned on its LIVE mode. Now `seek_bar .force_show` includes
+  `trick_active`: with `bar_active` low the bar fills from `cur_rbn` = `dsi_nv_pck_lbn`
+  (each trick picture's VOBU) with chapter notches and no cursor
+  (`check_trick_wiring.py` R22).
+
 ## Next step
 
 1. Gate `par_late_r` (or the whole `frame_late`) with `trick_cad` in `resample_addrgen`.
