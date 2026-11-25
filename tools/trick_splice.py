@@ -127,10 +127,11 @@ def walk_cells(read_rbn, cells, cell, nav, tier, rev, frames):
     """The reader's trick walk. read_rbn(rbn, n) -> bytes; cells = [(first, last, lvobu)]
     in play order; starts at NAV pack `nav` inside cells[cell]. Yields
     (nav_rbn, last_rbn, crossed) per VOBU: the reader reads nav..last, then jumps.
-    Target: the tier rung, each shorter tier rung, then next/prev_vobu (only when the
-    shortest rung is not END_OF_CELL: the cell ends within it, so cross); usable when
-    neither 0 nor END_OF_CELL and inside the current cell. Else the neighbouring
-    cell: its first sector forward, its last VOBU back; past the PGC's ends, stop."""
+    The tier's rung decides: a usable offset inside the cell is the jump; END_OF_CELL
+    (or a target outside the cell) crosses; only a rung left 0 falls through to the next
+    shorter one, and an all-zero table to next/prev_vobu. Crossing: the neighbouring cell,
+    its first sector forward, its last VOBU back. Past the PGC's ends: land on this
+    cell's boundary VOBU (first back, last forward), then stop."""
     crossed = False
     for _ in range(frames):
         sec = read_rbn(nav, 1)
@@ -139,25 +140,33 @@ def walk_cells(read_rbn, cells, cell, nav, tier, rev, frames):
         d = sec[DSI:]
         yield nav, nav + be32(d, 0x0C), crossed
         crossed = False
-        first, last, _ = cells[cell]
-        cand = []
+        first, last, lvobu = cells[cell]
+        tgt, decided = None, False
         for t in range(tier, -1, -1):
-            cand.append(be32(d, 0x142 + 4 * RUNG_REV[t]) if rev else be32(d, 0xEE + 4 * RUNG_FWD[t]))
-        r0 = be32(d, 0x142 + 4 * RUNG_REV[0]) if rev else be32(d, 0xEE + 4 * RUNG_FWD[0])
-        if (r0 & 0x3FFFFFFF) != 0x3FFFFFFF:     # END_OF_CELL on the shortest rung: cross
-            cand.append(be32(d, 0x13E if rev else 0x13A))
-        tgt = None
-        for e in cand:
+            e = be32(d, 0x142 + 4 * RUNG_REV[t]) if rev else be32(d, 0xEE + 4 * RUNG_FWD[t])
+            low = e & 0x3FFFFFFF
+            if low == 0:
+                continue                           # not authored: the next shorter rung
+            decided = True
+            if low != 0x3FFFFFFF:                  # END_OF_CELL: cross (tgt stays None)
+                tgt = nav - low if rev else nav + low
+            break
+        if not decided:
+            e = be32(d, 0x13E if rev else 0x13A)
             if _usable(e):
                 off = e & 0x3FFFFFFF
                 tgt = nav - off if rev else nav + off
-                break
         if tgt is not None and (tgt >= first if rev else tgt <= last):
             nav = tgt
             continue
-        cell = cell - 1 if rev else cell + 1
-        if cell < 0 or cell >= len(cells):
+        ncell = cell - 1 if rev else cell + 1
+        if ncell < 0 or ncell >= len(cells):
+            bnd = first if rev else lvobu
+            if nav != bnd:
+                nav = bnd                          # land on the boundary VOBU, then hold
+                continue
             return
+        cell = ncell
         nav = cells[cell][2] if rev else cells[cell][0]
         crossed = True
 

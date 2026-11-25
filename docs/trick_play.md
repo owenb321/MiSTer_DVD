@@ -221,7 +221,9 @@ runs cases 6 at a time.
   snoop (`vobu_1stref_ea`, `c_eltm`, `prev_vobu` and the four tier rungs for the current
   direction) and arms a jump at every NAV pack: the fetch ends at `nv + 1stref_ea`, then
   jumps.
-- **Target:** the tier's rung, then each shorter tier rung, then `next_vobu`/`prev_vobu`.
+- **Target:** the tier's rung; END_OF_CELL crosses; a 0 rung falls through to a shorter
+  one, an all-zero table to `next_vobu`/`prev_vobu` (rule revised 2026-11-24, see "Second
+  hardware round").
   An entry is usable when its low 30 bits are neither 0 nor `0x3FFFFFFF` (END_OF_CELL)
   **and** the target lies in the current cell. Otherwise the neighbouring cell in play
   order: its first sector going forward, its last VOBU going back (a new
@@ -446,7 +448,20 @@ slow. **Instrument:** `mister.py snap` returns in ~0.22 s and carries the HUD cl
   live time read the same clock and get the consistent pair too.
 - The top tier on TFA: +120 s jumps did fire (two samples of +120), and a 12 s hold
   travelled 25 s -> 8:11 (~466 s) against the Matrix image's 22:42 -> 32:01 (~560 s).
-- ⏳ Re-measure both discs on the fixed build.
+- **Re-measured on `dev-trickplay3`:** TFA from the drive, no jump-back in the hold, 0:26 ->
+  9:08 in 12 s (was 0:25 -> 8:11). The one dip after release (9:18 -> 9:08) is the exit
+  seek to the picture on screen (the walk had read one more VOBU), by design. The Matrix
+  image: no jump-back, but the 40x/120x tiers still sat at +3/+4 s for several pictures.
+- **So the rule was wrong one level up too:** END_OF_CELL on ANY rung stepped down to the
+  next shorter one, and the walk crept to the cell's end in 4 s steps. **Rule now: the
+  tier's own rung decides.** A usable offset in the cell is the jump; END_OF_CELL (or a
+  target outside the cell) crosses now, skipping less than one jump; only a rung the disc
+  left 0 falls through to a shorter one, and an all-zero table to next/prev_vobu.
+  `tk_c3..tk_c0` in the reader, `walk_cells` in the model, `run_trick_reader.sh` R8.
+- **The PGC's edge lands on its boundary VOBU** (the cell's first going back, `cf_rd`; its
+  last going forward, `lv_rd`) and then holds (R9). Crossing on END_OF_CELL would
+  otherwise stop up to one jump short of the edge: a rewind to the start ending ~2 min in
+  at 480x.
 
 ## Next step
 

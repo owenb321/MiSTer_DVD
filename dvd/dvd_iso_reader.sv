@@ -2348,12 +2348,13 @@ wire        snoop_nv_ok  = snoop_nvvalid && (snoop_nvtgt <= cl_rd);
 // =========================================================================
 // TRICK PLAY (docs/trick_play.md "The reader"). At each NAV pack the snoop has
 // captured this VOBU's 1stref_ea and its four tier rungs. The jump target is the
-// tier's rung, else each SHORTER tier rung in turn, else next_vobu / prev_vobu
-// (the adjacent VOBU) unless the shortest rung is END_OF_CELL; an entry is usable when its low 30 bits are neither 0 nor
-// the 0x3FFFFFFF END_OF_CELL sentinel AND the target lies inside the current cell.
-// Nothing usable = the cell's edge: the next cell in play order going forward (its
-// first sector), the previous one going back (its last VOBU, cell_lv_mem). Past the
-// PGC's first or last cell: trick_edge, and the reader holds. tools/trick_splice.py
+// tier's rung when it is a usable offset inside the current cell; a rung the disc left
+// 0 falls through to the next shorter one, and an all-zero table to next_vobu /
+// prev_vobu. END_OF_CELL (or a target outside the cell) = the cell's edge: the next
+// cell in play order going forward (its first sector), the previous one going back (its
+// last VOBU, cell_lv_mem). Past the PGC's first or last cell: land on that cell's
+// boundary VOBU (first going back, last going forward), then trick_edge and the reader
+// holds. tools/trick_splice.py
 // walk_cells is the model, byte for byte (bench/dvd/run_trick_reader.sh).
 // =========================================================================
 reg        trick_armed;               // a VOBU's read is armed: stop at trick_end
@@ -2366,31 +2367,49 @@ reg        trick_wait;                // reached trick_end, waiting for the gate
 reg        trick_lv;                  // the next cell load starts at lv_rd (backwards)
 reg        trick_credit;              // trick_go seen since the last jump
 wire [31:0] tk_adj = trick_rev ? snoop_prevv : snoop_nextv;
-// usable entry (plain wires, not a function: CLAUDE.md, Quartus 17 and new functions)
-wire        tk_v3  = (snoop_r3[29:0] != 30'h3FFFFFFF) && (snoop_r3[29:0] != 30'd0);
-wire        tk_v2  = (snoop_r2[29:0] != 30'h3FFFFFFF) && (snoop_r2[29:0] != 30'd0);
-wire        tk_v1  = (snoop_r1[29:0] != 30'h3FFFFFFF) && (snoop_r1[29:0] != 30'd0);
-wire        tk_v0  = (snoop_r0[29:0] != 30'h3FFFFFFF) && (snoop_r0[29:0] != 30'd0);
+// Entry classes (plain wires, not a function: CLAUDE.md, Quartus 17 and new functions):
+// z = 0 (not authored), e = 0x3FFFFFFF END_OF_CELL (the cell ends within that jump),
+// v = a usable offset.
+wire        tk_z3  = (snoop_r3[29:0] == 30'd0),  tk_e3 = (snoop_r3[29:0] == 30'h3FFFFFFF);
+wire        tk_z2  = (snoop_r2[29:0] == 30'd0),  tk_e2 = (snoop_r2[29:0] == 30'h3FFFFFFF);
+wire        tk_z1  = (snoop_r1[29:0] == 30'd0),  tk_e1 = (snoop_r1[29:0] == 30'h3FFFFFFF);
+wire        tk_z0  = (snoop_r0[29:0] == 30'd0),  tk_e0 = (snoop_r0[29:0] == 30'h3FFFFFFF);
 wire        tk_vA  = (tk_adj[29:0]   != 30'h3FFFFFFF) && (tk_adj[29:0]   != 30'd0);
-wire        tk_u3  = (trick_tier == 2'd3) && tk_v3;
-wire        tk_u2  = !tk_u3 && (trick_tier >= 2'd2) && tk_v2;
-wire        tk_u1  = !tk_u3 && !tk_u2 && (trick_tier >= 2'd1) && tk_v1;
-wire        tk_u0  = !tk_u3 && !tk_u2 && !tk_u1 && tk_v0;
-// The adjacent VOBU only when the table says NOTHING (a zero shortest rung, no SRI
-// authored). A shortest rung of END_OF_CELL means the cell ends within that jump:
-// cross now instead of crawling its last seconds one VOBU per picture (2026-11-24,
-// with a 4 s shortest rung that crawl was ~2 s at every cell end).
-wire        tk_e0  = (snoop_r0[29:0] == 30'h3FFFFFFF);
-wire        tk_uA  = !tk_u3 && !tk_u2 && !tk_u1 && !tk_u0 && !tk_e0 && tk_vA;
+// ★ THE TIER'S OWN RUNG DECIDES (2026-11-24, second HW round). A usable rung is the
+// jump; END_OF_CELL means the cell ends within this tier's jump, so CROSS now (skipping
+// less than one jump keeps the tier's speed). Only a rung the disc left ZERO falls
+// through to the next shorter one, and only an all-zero table to the adjacent VOBU.
+// Stepping down on END_OF_CELL instead crawled every cell end in 4 s steps (Matrix: 30 s
+// tier at +3/+4 s for ~1.5 s at a time; with the old 0.5 s rung, one VOBU at a time).
+// tk_c<n> = still undecided after rung n (the tier is below it, or it was zero).
+wire        tk_c3  = (trick_tier != 2'd3) || tk_z3;
+wire        tk_r2  = (trick_tier >= 2'd2) && tk_c3;
+wire        tk_c2  = tk_c3 && ((trick_tier < 2'd2) || tk_z2);
+wire        tk_r1  = (trick_tier >= 2'd1) && tk_c2;
+wire        tk_c1  = tk_c2 && ((trick_tier < 2'd1) || tk_z1);
+wire        tk_c0  = tk_c1 && tk_z0;
+wire        tk_u3  = !tk_c3 && !tk_e3;
+wire        tk_u2  = tk_r2 && !tk_z2 && !tk_e2;
+wire        tk_u1  = tk_r1 && !tk_z1 && !tk_e1;
+wire        tk_u0  = tk_c1 && !tk_z0 && !tk_e0;
+wire        tk_uA  = tk_c0 && tk_vA;
 wire [29:0] tk_off = tk_u3 ? snoop_r3[29:0] : tk_u2 ? snoop_r2[29:0] :
                      tk_u1 ? snoop_r1[29:0] : tk_u0 ? snoop_r0[29:0] : tk_adj[29:0];
 wire [31:0] tk_tgt = trick_rev ? (snoop_rbn - {2'b0, tk_off}) : (snoop_rbn + {2'b0, tk_off});
-wire        tk_in  = (tk_u3 || tk_u2 || tk_u1 || tk_u0 || tk_uA) &&
+wire        tk_ok  = (tk_u3 || tk_u2 || tk_u1 || tk_u0 || tk_uA) &&
                      (trick_rev ? (tk_tgt >= cf_rd) : (tk_tgt <= cl_rd));
 // the neighbouring cell in play order (an angle block counts as one cell)
 wire [7:0]  tk_prev_base = angle_active ? block_first : cell_i;
 wire        tk_edge = trick_rev ? (tk_prev_base == 8'd0) : (cell_after >= cell_count);
 wire [7:0]  tk_xcell = trick_rev ? (tk_prev_base - 8'd1) : cell_after;
+// ★ THE PGC'S EDGE LANDS ON THE CELL'S BOUNDARY VOBU before it holds: its first VOBU
+// going back (cf_rd: a cell starts with a NAV pack), its last going forward (lv_rd).
+// Crossing on END_OF_CELL would otherwise hold up to one jump short: a rewind to the
+// start stopping two minutes in at 480x.
+wire [31:0] tk_bnd  = trick_rev ? cf_rd : lv_rd;
+wire        tk_land = !tk_ok && tk_edge && (snoop_rbn != tk_bnd);
+wire        tk_in   = tk_ok || tk_land;
+wire [31:0] tk_dst  = tk_ok ? tk_tgt : tk_bnd;
 
 // =========================================================================
 // cell list write (from the P_CELL walker: first_sector completes at entry
@@ -3047,7 +3066,7 @@ always @(posedge clk or negedge rst_n) begin
                      snoop_sig == 32'h000001BF && snoop_sub == 8'h01) begin
             trick_armed <= 1'b1;
             trick_end   <= snoop_rbn + snoop_ref;
-            trick_tgt   <= tk_tgt;
+            trick_tgt   <= tk_dst;
             trick_x     <= !tk_in;
             trick_cell  <= tk_xcell;
             trick_hold  <= !tk_in && tk_edge;

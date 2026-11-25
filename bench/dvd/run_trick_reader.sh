@@ -25,7 +25,8 @@
 #   [R5] the whole VOBU read (vobu_ea, not 1stref_ea)     -> f1
 #   [R6] the whole-sector guard removed                   -> f1 (session 2)
 #   [R7] the edge not held                                -> edge
-#   [R8] crawl a cell's end one VOBU at a time (END_OF_CELL) -> f3
+#   [R8] END_OF_CELL on the top rung steps down (the crawl) -> f3
+#   [R9] the PGC's edge holds short of its boundary VOBU   -> edge
 #
 # Needs a disc: TRICK_ISO, else the first MEN_IN_BLACK_3*.iso under DVD_ISO_DIR (the
 # disc docs/trick_play.md measures). Without one: SKIP, loudly. ~2-4 min per arm in
@@ -94,13 +95,14 @@ if [ "$RED" = 1 ]; then
   # red <id> <target arm> <perl substitution>
   REDS=(
     "R1|f1|s/\(trick_rev \? 11'h585 : 11'h501\)/(trick_rev ? 11'h585 : 11'h505)/"
-    "R2|f3|s/wire        tk_in  = \(/wire        tk_in  = 1'b1 || (/"
+    "R2|f3|s/wire        tk_ok  = \(/wire        tk_ok  = 1'b1 || (/"
     "R3|r3|s/: trick_lv     \? lv_rd /: trick_lv     ? cf_rd /"
     "R4|gate|s/\(trick_credit \|\| trick_go\)/(1'b1)/g"
     "R5|f1|s/trick_end   <= snoop_rbn \+ snoop_ref;/trick_end   <= snoop_rbn + snoop_ea;/"
     "R6|f1|s/        tk_sec_ok <= trick_en;/        tk_sec_ok <= 1'b1;/"
     "R7|edge|s/trick_hold  <= !tk_in && tk_edge;/trick_hold  <= 1'b0;/"
-    "R8|f3|s/!tk_u0 && !tk_e0 && tk_vA/!tk_u0 \&\& tk_vA/"
+    "R8|f3|s/wire        tk_c3  = \(trick_tier != 2'd3\) \|\| tk_z3;/wire        tk_c3  = (trick_tier != 2'd3) || tk_z3 || tk_e3;/"
+    "R9|edge|s/wire        tk_land = !tk_ok && tk_edge && \(snoop_rbn != tk_bnd\);/wire        tk_land = 1'b0;/"
   )
   for r in "${REDS[@]}"; do
     IFS='|' read -r id tgt sub <<<"$r"
