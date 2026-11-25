@@ -150,6 +150,7 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/scrub_ctrl.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/trick_ctrl.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/trick_es_filter.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/kbd_hold.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/pad_hold.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/dpad_seek.sv
 # DVD-remote buttons (2026-09-13): Stop + screensaver, the Aspect button's
 # OSD-override/settle, and A-B repeat. Extracted from emu.sv rather than written

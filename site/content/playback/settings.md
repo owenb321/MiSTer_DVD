@@ -124,6 +124,7 @@ In **Passthru** your receiver does its own compression, usually under a "night m
 | Setting | Options | What it does |
 |---|---|---|
 | **D-Pad Seek** | **Off** / On | Puts fixed-time seeking on the D-pad — see [Controls](controls.md#d-pad-seek). |
+| **Trick Play** | **On** / Off | Holding Fast Fwd / Rewind in a DVD film plays it at speed. Off scrubs instead, with one seek when you let go — gentler on a physical drive. See [Controls](controls.md). |
 | **Screensaver** | **5min** / Off / 2min / 10min | How long a paused or stopped disc sits still before the bouncing idle logo takes over. The picture goes with it, and so do the status line, the seek bar and any subtitle or disc menu highlight — nothing is left standing still, which is the whole point. Any button or key brings it all straight back, exactly as it was. It protects CRTs from burn-in and changes nothing about playback — your place is kept. |
 
 ## Save State page

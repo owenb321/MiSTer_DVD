@@ -6,8 +6,8 @@ standard numbering — whatever you mapped B1 to in the MiSTer menu is what "B1"
 
 | Button | Action | | Button | Action |
 |---|---|---|---|---|
-| B1 | Pause — and Play, when stopped or on a [still](#still-pictures) | | B10 | Fast Fwd (hold) |
-| B2 | Prev Chapter | | B11 | Rewind (hold) |
+| B1 | Pause — and Play, when stopped or on a [still](#still-pictures) | | B10 | Fast Fwd (tap: 10 s; hold) |
+| B2 | Prev Chapter | | B11 | Rewind (tap: 10 s; hold) |
 | B3 | Next Chapter | | B12 | Title menu |
 | B4 | Select | | B13 | Return (go up) |
 | B5 | Menu | | B14 | Stop |
@@ -348,6 +348,13 @@ end of the film lets it finish as normal; rewinding to its start resumes playing
 A physical disc and a disc image run at the same speeds. The core paces both to what a DVD
 drive can keep up with, so the only difference a slow drive makes is that a picture now and
 then stays up a little longer.
+
+A quick **tap** of B10 / B11 in a DVD film jumps 10 seconds, like the keyboard and remote;
+it takes a hold of about half a second to start playing at speed.
+
+Trick play reads the disc four times a second. To spare a physical drive, set
+[**Trick Play**](settings.md) to **Off**: holding the buttons then scrubs instead, as
+below, with a single seek when you let go.
 
 **Held anywhere else** — a VCD, SVCD, `.mpg` or `.VOB` file, or a DVD scene with on-screen
 buttons or a still picture — they **scrub** instead: a seek bar appears showing where you are

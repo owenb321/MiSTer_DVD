@@ -1047,6 +1047,13 @@ parameter CONF_STR = {
     // wherever the nav layer claims the D-pad (menus, in-title game menus).
     // See docs/dvd_nav.md 2b.
     "P5O[45],D-Pad Seek,Off,On;",
+    // Trick Play: ON by default (index 0, so status[30] = 0 = On; bit 30 was never
+    // allocated in either CONF_STR syntax, so no saved config can carry a stale 1 and
+    // no "v,N" bump is needed). Off = a held Fast Fwd / Rewind in a DVD film scrubs
+    // as before (seek bar, one seek on release) instead of playing at speed: a
+    // physical drive then seeks once, not four times a second (maintainer,
+    // 2026-11-24). Gates trick_allowed below; docs/trick_play.md.
+    "P5O[30],Trick Play,On,Off;",
     // Screensaver: after this long PAUSED or STOPPED, the bouncing idle logo
     // takes over and any button/key dismisses it (burn-in protection -- this
     // core drives real CRTs). dvd/stop_ctl.sv owns the timer; the verdict is a
@@ -1976,6 +1983,17 @@ wire joy_disp  = joy_eff[12];                      // B9 "Display"   (Phase 11 H
 // go to dpad_seek instead (see the joy_eff comment above).
 wire joy_ff    = joy_eff[13];                      // B10 "Fast Fwd" (held scrub fwd)
 wire joy_rew   = joy_eff[14];                      // B11 "Rewind"   (held scrub bwd)
+// GAMEPAD FAST FWD AND REWIND in trick play: a TAP or a HOLD (dvd/pad_hold.sv). A tap
+// jumps 10 s through dpad_seek, like the keyboard and remote; a hold of 400 ms enters
+// trick play (maintainer, 2026-11-24: "quick tap should nudge 10s like the other
+// modes"). Where trick play does not claim the buttons the raw levels still drive
+// scrub_ctrl, as before.
+wire pad_ff_tap, pad_rew_tap, pad_ff_held, pad_rew_held;
+pad_hold pad_hold_inst (.clk(clk_sys), .rst_n(reset_n), .ff(joy_ff), .rew(joy_rew),
+                        .tap_ff(pad_ff_tap), .tap_rew(pad_rew_tap),
+                        .held_ff(pad_ff_held), .held_rew(pad_rew_held));
+wire pad_ff_jump  = trick_claim & pad_ff_tap;
+wire pad_rew_jump = trick_claim & pad_rew_tap;
 wire joy_title = joy_eff[15];                      // B12 "Title"    (VMGM Top Menu)
 wire joy_ret   = joy_eff[16];                      // B13 "Return"   (GoUp)
 // DVD-remote additions. All PRESS edges (never levels): kbd_map emits one-cycle
@@ -2768,13 +2786,14 @@ scrub_ctrl scrub_ctrl_inst (
 // changes: the reader never parks on a still in trick play, and PCI is gated off
 // (ps_demux .pci_enable below) so no buttons arm over trick frames.
 assign trick_allowed = cell_ready && !menu_active && !in_title_menu && !menu_nav &&
-                       !hl_btns_armed && !still_active && !stopped_w;
+                       !hl_btns_armed && !still_active && !stopped_w &&
+                       !status[30];             // O[30] Trick Play = Off: FF/REW scrub
 assign trick_claim   = trick_allowed || trick_owns;
 trick_ctrl trick_ctrl_inst (
     .clk        (clk_sys),
     .rst_n      (reset_n),
-    .held_ff    (joy_ff  | kbd_ff_held),    // the gamepad, or a keyboard / remote hold
-    .held_rew   (joy_rew | kbd_rew_held),
+    .held_ff    (pad_ff_held  | kbd_ff_held),   // a gamepad or keyboard / remote HOLD
+    .held_rew   (pad_rew_held | kbd_rew_held),
     .allowed    (trick_allowed),
     .cur_rbn    (dsi_nv_pck_lbn),
     .trick_vobu (trick_vobu_w),
@@ -2855,8 +2874,8 @@ dpad_seek dpad_seek_inst (
     // held button into ~9 complete seek gestures a second, and a swallowed
     // release freezes the picture. Here the same burst builds ONE jump.
     // (dvd/kbd_map.sv header carries the measurements.)
-    .lf_edge        ((dpad_seek_en & lf_edge) | kbd_rew_jump),  // Rewind   key = -10 s (a TAP, kbd_hold)
-    .rt_edge        ((dpad_seek_en & rt_edge) | kbd_ff_jump),   // Fast Fwd key = +10 s (a TAP, kbd_hold)
+    .lf_edge        ((dpad_seek_en & lf_edge) | kbd_rew_jump | pad_rew_jump),  // Rewind   = -10 s (a TAP: kbd_hold, pad_hold)
+    .rt_edge        ((dpad_seek_en & rt_edge) | kbd_ff_jump  | pad_ff_jump),   // Fast Fwd = +10 s (a TAP: kbd_hold, pad_hold)
     .cancel         (jump_ack | chap_pulse | start_streaming | hold_freeze),
     .nav_flush      (load_flush),               // nav_dsi's own reset condition
     .dsi_commit     (dsi_commit),

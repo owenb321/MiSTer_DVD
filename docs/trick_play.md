@@ -488,6 +488,40 @@ slow. **Instrument:** `mister.py snap` returns in ~0.22 s and carries the HUD cl
   (each trick picture's VOBU) with chapter notches and no cursor
   (`check_trick_wiring.py` R22).
 
+## Maintainer review and three follow-ups (2026-11-24)
+
+The maintainer tried `dev-trickplay5` hands-on: "this looks good with both a physical disc
+and iso image", apart from the missing progress bar (above). Then decided:
+
+- **A gamepad tap jumps 10 s** ("quick tap should nudge 10s like the other modes").
+  `dvd/pad_hold.sv`: B10/B11 released before 400 ms = one `tap_*` pulse at the release,
+  routed to `dpad_seek` while trick play claims the buttons (`pad_*_jump = trick_claim &
+  pad_*_tap`); down for 400 ms = `held_*` to `trick_ctrl`. No bridge (the pad is a level,
+  never repeats); the other button joining aborts the run. One shared 24-bit counter.
+  Where trick play does not claim the buttons the raw levels still drive `scrub_ctrl`.
+  Gates: `run_pad_hold.sh --red` (M1-M4), `check_trick_wiring.py` R23-R25.
+- **The field-parity corrector is off in trick play.** Every new trick picture is an
+  alternation break, so the pickup arm slipped a field on nearly each one and
+  `par_late_r` pulsed `frame_late` (the `lates` ticking in round 1, 0 drops). `trick_cad`
+  (already in `clk_dec` for `disp_sched`) now reaches `dvd/resample_addrgen.v` through
+  `rtl/mpeg2/resample.v`, and gates `par_ins` and `par_hold_ins`. The counters keep
+  watching, so the corrector acts normally after the exit seek. Every bench instantiating
+  `resample`/`resample_addrgen` ties it off. Gate: `field_phase_tb` [T-trick] (the [2]/[4]
+  break seeks and an [8] misaligned hold under `trick_cad`: triggers seen, 0 insertions,
+  0 late pulses) and [T-after] (the corrector heals again); `run_field_phase.sh --red`
+  T1/T2.
+- **An OSD option, `Trick Play` On/Off** (`O[30]`, Playback page): "users might not want
+  to seek so often on a physical disc". Off clears `trick_allowed`, so a held FF/REW
+  scrubs as before (one seek on release), keyboard/remote taps jump 10 s on the press,
+  and a pad tap nudges the scrub. Bit 30 was never allocated (checked in both CONF_STR
+  syntaxes), so no saved config carries a stale 1 and no `"v,N"` bump. On is index 0.
+  `check_trick_wiring.py` R26; manual: settings + controls.
+- **Angle blocks:** Castle in the Sky's film has three 2-angle blocks (0:00 12 s, 3:52
+  99 s, 121:07 184 s). Backward entry lands on the block's last sibling without an angle
+  resolve and walks both siblings; forward entry resolves. ⏳ Next: enter a block
+  backwards at `block_first + angle - 1` and skip the siblings; check forward jumps
+  inside an interleaved block on Castle in the bench.
+
 ## Next step
 
 1. Gate `par_late_r` (or the whole `frame_late`) with `trick_cad` in `resample_addrgen`.

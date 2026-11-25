@@ -132,7 +132,7 @@ def check(emu_src, qsf_src):
         return bad
 
     # the controller
-    for p, net in (('held_ff', 'joy_ff | kbd_ff_held'), ('held_rew', 'joy_rew | kbd_rew_held'),
+    for p, net in (('held_ff', 'pad_ff_held | kbd_ff_held'), ('held_rew', 'pad_rew_held | kbd_rew_held'),
                    ('allowed', 'trick_allowed'),
                    ('cur_rbn', 'dsi_nv_pck_lbn'), ('trick_vobu', 'trick_vobu_w'),
                    ('trick_nav', 'trick_nav_w'), ('trick_edge', 'trick_edge_w'),
@@ -142,7 +142,7 @@ def check(emu_src, qsf_src):
         want(port(tc, p) == net, f'trick_ctrl .{p} is {port(tc, p)!r}, must be {net}')
     al = assign_rhs(src, 'trick_allowed') or ''
     for need in ('cell_ready', '!menu_active', '!in_title_menu', '!menu_nav',
-                 '!hl_btns_armed', '!still_active', '!stopped_w'):
+                 '!hl_btns_armed', '!still_active', '!stopped_w', '!status[30]'):
         want(need in al.replace(' ', ''), f'trick_allowed lacks {need}: {al!r}')
     want(assign_rhs(src, 'trick_claim') == 'trick_allowed || trick_owns',
          f"trick_claim must be trick_allowed || trick_owns, is {assign_rhs(src, 'trick_claim')!r}")
@@ -213,6 +213,21 @@ def check(emu_src, qsf_src):
              f"dpad_seek .rt_edge is not the keyboard FF tap: {port(ds, 'rt_edge')!r}")
         want(re.search(r'\bkbd_rew_jump\b', port(ds, 'lf_edge') or '') and 'kbd_joy' not in (port(ds, 'lf_edge') or ''),
              f"dpad_seek .lf_edge is not the keyboard REW tap: {port(ds, 'lf_edge')!r}")
+        want(re.search(r'\bpad_ff_jump\b', port(ds, 'rt_edge') or ''),
+             f"dpad_seek .rt_edge lacks the gamepad FF tap: {port(ds, 'rt_edge')!r}")
+        want(re.search(r'\bpad_rew_jump\b', port(ds, 'lf_edge') or ''),
+             f"dpad_seek .lf_edge lacks the gamepad REW tap: {port(ds, 'lf_edge')!r}")
+    # the gamepad: a tap is the 10 s jump, a hold is trick play (pad_hold)
+    ph = inst(src, 'pad_hold')
+    want(ph is not None, 'pad_hold is not instantiated')
+    if ph is not None:
+        for p_, net in (('ff', 'joy_ff'), ('rew', 'joy_rew'), ('tap_ff', 'pad_ff_tap'), ('tap_rew', 'pad_rew_tap'),
+                        ('held_ff', 'pad_ff_held'), ('held_rew', 'pad_rew_held')):
+            want(port(ph, p_) == net, f'pad_hold .{p_} is {port(ph, p_)!r}, must be {net}')
+    want(assign_rhs(src, 'pad_ff_jump') == 'trick_claim & pad_ff_tap',
+         f"pad_ff_jump is {assign_rhs(src, 'pad_ff_jump')!r}")
+    want(assign_rhs(src, 'pad_rew_jump') == 'trick_claim & pad_rew_tap',
+         f"pad_rew_jump is {assign_rhs(src, 'pad_rew_jump')!r}")
 
     # the HUD: the line stays up, the direction arrows show the tier
     th = inst(src, 'transport_hud')
@@ -250,7 +265,7 @@ def check(emu_src, qsf_src):
          'the HUD clock pair is not dropped by a flush (pipe_rst_n)')
 
     # Quartus sees the files
-    for f in ('dvd/trick_ctrl.sv', 'dvd/trick_es_filter.sv', 'dvd/kbd_hold.sv'):
+    for f in ('dvd/trick_ctrl.sv', 'dvd/trick_es_filter.sv', 'dvd/kbd_hold.sv', 'dvd/pad_hold.sv'):
         want(re.search(r'(?m)^set_global_assignment\s+-name\s+SYSTEMVERILOG_FILE\s+' + re.escape(f) + r'\s*$',
                        qsf_src), f'DVD.qsf does not name {f}')
     return bad
@@ -269,17 +284,21 @@ RED = [
     ('R8 the filter never reset', '.rst_n     (pipe_rst_n),\n    .en        (trick_active),',
      '.rst_n     (reset_n),\n    .en        (trick_active),'),
     ('R9 the cadence from clk_sys', '.trick_cad    (trick_cad_dec),', '.trick_cad    (trick_active),'),
-    ('R10 a still allowed', '!hl_btns_armed && !still_active && !stopped_w;', '!hl_btns_armed && !stopped_w;'),
+    ('R10 a still allowed', '!hl_btns_armed && !still_active && !stopped_w &&', '!hl_btns_armed && !stopped_w &&'),
     ('R11 the claim forgets an exit in progress', 'assign trick_claim   = trick_allowed || trick_owns;',
      'assign trick_claim   = trick_allowed;'),
     ('R14 the HUD line hides mid-gesture', '.bar_active   (bar_active_w | trick_active),', '.bar_active   (bar_active_w),'),
     ('R15 the arrows ignore the tier', '.scrub_tier   (trick_active ? trick_tier : hold_freeze ? hud_tier_w : 2\'d0),',
      '.scrub_tier   (hold_freeze ? hud_tier_w : 2\'d0),'),
-    ('R16 a keyboard hold never reaches trick play', '.held_ff    (joy_ff  | kbd_ff_held),', '.held_ff    (joy_ff),'),
+    ('R16 a keyboard hold never reaches trick play', '.held_ff    (pad_ff_held  | kbd_ff_held),', '.held_ff    (pad_ff_held),'),
+    ('R23 the raw pad level drives trick play (a tap enters and leaves)', '.held_ff    (pad_ff_held  | kbd_ff_held),',
+     '.held_ff    (joy_ff  | kbd_ff_held),'),
+    ('R24 a pad tap never jumps', '| kbd_ff_jump  | pad_ff_jump),', '| kbd_ff_jump),'),
+    ('R25 a pad tap jumps outside trick play too', 'wire pad_ff_jump  = trick_claim & pad_ff_tap;', 'wire pad_ff_jump  = pad_ff_tap;'),
     ('R17 a keyboard hold also jumps 10 s', 'wire kbd_ff_jump  = trick_claim ? kbd_ff_tap  : kbd_joy[13];',
      'wire kbd_ff_jump  = kbd_joy[13];'),
-    ('R18 the jump bypasses the tap', '.rt_edge        ((dpad_seek_en & rt_edge) | kbd_ff_jump),',
-     '.rt_edge        ((dpad_seek_en & rt_edge) | kbd_joy[13]),'),
+    ('R18 the jump bypasses the tap', '.rt_edge        ((dpad_seek_en & rt_edge) | kbd_ff_jump  | pad_ff_jump),',
+     '.rt_edge        ((dpad_seek_en & rt_edge) | kbd_joy[13]  | pad_ff_jump),'),
     ('R19 the HUD clock adds the reader-timed cell start', '.a   (hud_pair_v ? hud_cs_l   : cur_cell_start_w),',
      '.a   (cur_cell_start_w),'),
     ('R20 the pair not latched at a NAV pack', 'end else if (dsi_commit) begin\n        hud_pair_v',
@@ -287,6 +306,8 @@ RED = [
     ('R21 the pair survives a flush', "hud_pair_v <= 1'b0; hud_cs_l <= 32'd0;", "hud_cs_l <= 32'd0;"),
     ('R22 no progress bar in trick play', '.force_show ((cdda_mode_w && hud_persist_w) | trick_active),',
      '.force_show ((cdda_mode_w && hud_persist_w)),'),
+    ('R26 the OSD Trick Play option ignored', '!hl_btns_armed && !still_active && !stopped_w &&\n                       !status[30];',
+     '!hl_btns_armed && !still_active && !stopped_w;'),
     ('R12 connection only in a comment', '.trick_go       (trick_go),', ".trick_go       (1'b0), // (trick_go)"),
 ]
 RED_QSF = ('R13 Quartus does not see the filter',
