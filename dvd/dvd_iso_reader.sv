@@ -2349,7 +2349,7 @@ wire        snoop_nv_ok  = snoop_nvvalid && (snoop_nvtgt <= cl_rd);
 // TRICK PLAY (docs/trick_play.md "The reader"). At each NAV pack the snoop has
 // captured this VOBU's 1stref_ea and its four tier rungs. The jump target is the
 // tier's rung, else each SHORTER tier rung in turn, else next_vobu / prev_vobu
-// (the adjacent VOBU); an entry is usable when its low 30 bits are neither 0 nor
+// (the adjacent VOBU) unless the shortest rung is END_OF_CELL; an entry is usable when its low 30 bits are neither 0 nor
 // the 0x3FFFFFFF END_OF_CELL sentinel AND the target lies inside the current cell.
 // Nothing usable = the cell's edge: the next cell in play order going forward (its
 // first sector), the previous one going back (its last VOBU, cell_lv_mem). Past the
@@ -2376,7 +2376,12 @@ wire        tk_u3  = (trick_tier == 2'd3) && tk_v3;
 wire        tk_u2  = !tk_u3 && (trick_tier >= 2'd2) && tk_v2;
 wire        tk_u1  = !tk_u3 && !tk_u2 && (trick_tier >= 2'd1) && tk_v1;
 wire        tk_u0  = !tk_u3 && !tk_u2 && !tk_u1 && tk_v0;
-wire        tk_uA  = !tk_u3 && !tk_u2 && !tk_u1 && !tk_u0 && tk_vA;
+// The adjacent VOBU only when the table says NOTHING (a zero shortest rung, no SRI
+// authored). A shortest rung of END_OF_CELL means the cell ends within that jump:
+// cross now instead of crawling its last seconds one VOBU per picture (2026-11-24,
+// with a 4 s shortest rung that crawl was ~2 s at every cell end).
+wire        tk_e0  = (snoop_r0[29:0] == 30'h3FFFFFFF);
+wire        tk_uA  = !tk_u3 && !tk_u2 && !tk_u1 && !tk_u0 && !tk_e0 && tk_vA;
 wire [29:0] tk_off = tk_u3 ? snoop_r3[29:0] : tk_u2 ? snoop_r2[29:0] :
                      tk_u1 ? snoop_r1[29:0] : tk_u0 ? snoop_r0[29:0] : tk_adj[29:0];
 wire [31:0] tk_tgt = trick_rev ? (snoop_rbn - {2'b0, tk_off}) : (snoop_rbn + {2'b0, tk_off});

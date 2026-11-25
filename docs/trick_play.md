@@ -418,6 +418,36 @@ content-seconds per second; 2× / 8× / 40× / 120× was ~8× slower at every ti
 - ⏳ The physical drive's seek for a 120 s jump is longer than for 30 s; HIL to confirm the
   drive still holds ~4 pictures/s at the top tier.
 
+## Second hardware round: the cell-end crawl and the clock jump-back (2026-11-24)
+
+The maintainer, on the raised ladder: the HUD clock "goes up then jumps back to a lower
+number" during a hold, more on the physical drive than on a NAS image, and it still felt
+slow. **Instrument:** `mister.py snap` returns in ~0.22 s and carries the HUD clock
+(`eltm` = `whole_eltm_w`), `disp_secs` and the demux's `nv_pck_lbn`, so a hold is sampled at
+~4 Hz (screenshots now take ~5 s). There is no trick-play telemetry word.
+
+- **The crawl (image and drive).** The Matrix image, FF 12 s: 16x was +4 s per 0.25 s as
+  designed, but 0.5-1.5 s at a time the clock moved +0/+1 per sample: ~2.5 s of the 12 s.
+  Cell ends: inside a cell's last few seconds every rung is END_OF_CELL, and the walk fell
+  back to next_vobu, one VOBU (~0.5 s) per picture to the cell's end. Harmless with the old
+  0.5 s shortest rung; ~2 s per cell end with 4 s. **Fix:** the adjacent VOBU only when the
+  shortest rung is 0 (no SRI authored); END_OF_CELL there crosses to the next cell
+  (`tk_e0`, `walk_cells`; `run_trick_reader.sh` R8).
+- **The jump-back (drive >> image).** TFA from the drive, FF 12 s: five samples read a whole
+  cell ahead with an UNCHANGED NAV sector (1:41 -> 3:15 -> 1:42, +94 / -93 s). The HUD clock
+  was `cur_cell_start` (reader-timed: the cell it streams NOW) + `dsi_c_eltm` (demux-timed:
+  the last NAV pack parsed). At a crossing the reader moves first; until the new cell's
+  first NAV pack reaches the demux the clock read new start + old elapsed. A drive seek
+  makes that window ~0.1-0.2 s, a NAS image's much shorter. Normal play has the same race
+  for as long as the reader leads the demux, which is why nobody saw it. **Fix:** `emu.sv`
+  latches the pair together at `dsi_commit` (`hud_cs_l`, `hud_eltm_l`, dropped by
+  `pipe_rst_n`; before the first NAV pack after a flush the start follows the reader as
+  before). Gated by `check_trick_wiring.py` R19-R21. `vm_snap`'s `eltm` and `seek_time`'s
+  live time read the same clock and get the consistent pair too.
+- The top tier on TFA: +120 s jumps did fire (two samples of +120), and a 12 s hold
+  travelled 25 s -> 8:11 (~466 s) against the Matrix image's 22:42 -> 32:01 (~560 s).
+- ⏳ Re-measure both discs on the fixed build.
+
 ## Next step
 
 1. Gate `par_late_r` (or the whole `frame_late`) with `trick_cad` in `resample_addrgen`.

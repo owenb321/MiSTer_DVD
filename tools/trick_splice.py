@@ -127,7 +127,8 @@ def walk_cells(read_rbn, cells, cell, nav, tier, rev, frames):
     """The reader's trick walk. read_rbn(rbn, n) -> bytes; cells = [(first, last, lvobu)]
     in play order; starts at NAV pack `nav` inside cells[cell]. Yields
     (nav_rbn, last_rbn, crossed) per VOBU: the reader reads nav..last, then jumps.
-    Target: the tier rung, each shorter tier rung, then next/prev_vobu; usable when
+    Target: the tier rung, each shorter tier rung, then next/prev_vobu (only when the
+    shortest rung is not END_OF_CELL: the cell ends within it, so cross); usable when
     neither 0 nor END_OF_CELL and inside the current cell. Else the neighbouring
     cell: its first sector forward, its last VOBU back; past the PGC's ends, stop."""
     crossed = False
@@ -142,7 +143,9 @@ def walk_cells(read_rbn, cells, cell, nav, tier, rev, frames):
         cand = []
         for t in range(tier, -1, -1):
             cand.append(be32(d, 0x142 + 4 * RUNG_REV[t]) if rev else be32(d, 0xEE + 4 * RUNG_FWD[t]))
-        cand.append(be32(d, 0x13E if rev else 0x13A))
+        r0 = be32(d, 0x142 + 4 * RUNG_REV[0]) if rev else be32(d, 0xEE + 4 * RUNG_FWD[0])
+        if (r0 & 0x3FFFFFFF) != 0x3FFFFFFF:     # END_OF_CELL on the shortest rung: cross
+            cand.append(be32(d, 0x13E if rev else 0x13A))
         tgt = None
         for e in cand:
             if _usable(e):

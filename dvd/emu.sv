@@ -734,7 +734,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-trickplay2"
+`define CORE_VERSION "dev-trickplay3"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -7166,9 +7166,28 @@ wire [3:0]  hud_alpha_w;
 // when no cell list is loaded (linear .VOB fallback). Known Phase-7
 // characteristic: c_eltm is parse-front-timed, so the readout leads the
 // picture by the VBUF depth (~1 s). (whole_eltm_w is declared beside nav_pci.)
+// ★ ONE VOBU'S PAIR (2026-11-24, trick play on a physical drive): cur_cell_start is
+// READER-timed (the cell it streams now) and dsi_c_eltm DEMUX-timed (the last NAV
+// pack parsed). At a cell crossing the reader moves first, so for the time it takes
+// the new cell's first NAV pack to reach the demux the clock read new-start + old-
+// elapsed: about a whole cell AHEAD, then back. Trick play made it visible (one
+// VOBU per 250 ms, a drive seek before each new cell: +94 s for ~0.2 s on TFA).
+// So the pair is latched together at dsi_commit (scalars and table complete, see
+// nav_dsi's staleness contract). Before the first NAV pack after a flush there is
+// no pair: the start follows the reader live and c_eltm is nav_dsi's reset 0, as
+// before. gated by tools/check_trick_wiring.py.
+reg [31:0] hud_cs_l, hud_eltm_l;
+reg        hud_pair_v;
+always @(posedge clk_sys or negedge pipe_rst_n) begin
+    if (!pipe_rst_n) begin
+        hud_pair_v <= 1'b0; hud_cs_l <= 32'd0; hud_eltm_l <= 32'd0;
+    end else if (dsi_commit) begin
+        hud_pair_v <= 1'b1; hud_cs_l <= cur_cell_start_w; hud_eltm_l <= dsi_c_eltm;
+    end
+end
 bcd_time_add hud_time_add (
-    .a   (cur_cell_start_w),
-    .b   (dsi_c_eltm),
+    .a   (hud_pair_v ? hud_cs_l   : cur_cell_start_w),
+    .b   (hud_pair_v ? hud_eltm_l : dsi_c_eltm),
     .sum (whole_eltm_w)
 );
 // SEEK-PREVIEW CLOCK -- dvd/seek_time.sv. The HUD clock used to sit frozen at

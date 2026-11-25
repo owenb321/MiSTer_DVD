@@ -25,6 +25,7 @@
 #   [R5] the whole VOBU read (vobu_ea, not 1stref_ea)     -> f1
 #   [R6] the whole-sector guard removed                   -> f1 (session 2)
 #   [R7] the edge not held                                -> edge
+#   [R8] crawl a cell's end one VOBU at a time (END_OF_CELL) -> f3
 #
 # Needs a disc: TRICK_ISO, else the first MEN_IN_BLACK_3*.iso under DVD_ISO_DIR (the
 # disc docs/trick_play.md measures). Without one: SKIP, loudly. ~2-4 min per arm in
@@ -99,6 +100,7 @@ if [ "$RED" = 1 ]; then
     "R5|f1|s/trick_end   <= snoop_rbn \+ snoop_ref;/trick_end   <= snoop_rbn + snoop_ea;/"
     "R6|f1|s/        tk_sec_ok <= trick_en;/        tk_sec_ok <= 1'b1;/"
     "R7|edge|s/trick_hold  <= !tk_in && tk_edge;/trick_hold  <= 1'b0;/"
+    "R8|f3|s/!tk_u0 && !tk_e0 && tk_vA/!tk_u0 \&\& tk_vA/"
   )
   for r in "${REDS[@]}"; do
     IFS='|' read -r id tgt sub <<<"$r"

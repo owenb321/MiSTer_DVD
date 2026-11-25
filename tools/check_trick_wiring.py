@@ -21,7 +21,9 @@ Checked:
   * mpeg2video .trick_cad is trick_active crossed into clk_dec by two flops;
   * DVD.qsf names dvd/trick_ctrl.sv and dvd/trick_es_filter.sv (a file it does not
     name is invisible to Quartus);
-  * the HUD's user event includes trick play's seek.
+  * the HUD's user event includes trick play's seek;
+  * the HUD clock adds a cell start and a c_eltm latched TOGETHER at dsi_commit
+    (dropped by pipe_rst_n), not the reader-timed cell start.
 
     python3 tools/check_trick_wiring.py [emu.sv]
     python3 tools/check_trick_wiring.py --red    # each re-regression must FAIL
@@ -229,6 +231,22 @@ def check(emu_src, qsf_src):
         want('trick' not in (port(sb, 'active') or port(sb, 'bar_active') or ''),
              'seek_bar shows in trick play (it is the scrub\'s bar: base and target are stale)')
 
+    # the HUD clock: cell start and cell-elapsed from the SAME NAV pack (latched
+    # together at dsi_commit), else a cell crossing reads a cell ahead, then back
+    ta = inst(src, 'bcd_time_add')
+    want(ta is not None, 'bcd_time_add (the HUD clock) is not instantiated')
+    if ta is not None:
+        want(re.sub(r'\s+', ' ', port(ta, 'a') or '') == 'hud_pair_v ? hud_cs_l : cur_cell_start_w',
+             f"hud_time_add .a is not the latched cell start: {port(ta, 'a')!r}")
+        want(re.sub(r'\s+', ' ', port(ta, 'b') or '') == 'hud_pair_v ? hud_eltm_l : dsi_c_eltm',
+             f"hud_time_add .b is not the latched c_eltm: {port(ta, 'b')!r}")
+    want(re.search(r'else if \(dsi_commit\) begin\s*hud_pair_v <= 1\'b1; hud_cs_l <= cur_cell_start_w; '
+                   r'hud_eltm_l <= dsi_c_eltm;', src),
+         'the HUD clock pair is not latched together at dsi_commit')
+    want(re.search(r'always @\(posedge clk_sys or negedge pipe_rst_n\) begin\s*if \(!pipe_rst_n\) begin\s*'
+                   r'hud_pair_v <= 1\'b0;', src),
+         'the HUD clock pair is not dropped by a flush (pipe_rst_n)')
+
     # Quartus sees the files
     for f in ('dvd/trick_ctrl.sv', 'dvd/trick_es_filter.sv', 'dvd/kbd_hold.sv'):
         want(re.search(r'(?m)^set_global_assignment\s+-name\s+SYSTEMVERILOG_FILE\s+' + re.escape(f) + r'\s*$',
@@ -260,6 +278,11 @@ RED = [
      'wire kbd_ff_jump  = kbd_joy[13];'),
     ('R18 the jump bypasses the tap', '.rt_edge        ((dpad_seek_en & rt_edge) | kbd_ff_jump),',
      '.rt_edge        ((dpad_seek_en & rt_edge) | kbd_joy[13]),'),
+    ('R19 the HUD clock adds the reader-timed cell start', '.a   (hud_pair_v ? hud_cs_l   : cur_cell_start_w),',
+     '.a   (cur_cell_start_w),'),
+    ('R20 the pair not latched at a NAV pack', 'end else if (dsi_commit) begin\n        hud_pair_v',
+     'end else if (1\'b0) begin\n        hud_pair_v'),
+    ('R21 the pair survives a flush', "hud_pair_v <= 1'b0; hud_cs_l <= 32'd0;", "hud_cs_l <= 32'd0;"),
     ('R12 connection only in a comment', '.trick_go       (trick_go),', ".trick_go       (1'b0), // (trick_go)"),
 ]
 RED_QSF = ('R13 Quartus does not see the filter',

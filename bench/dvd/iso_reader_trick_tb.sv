@@ -196,6 +196,10 @@ module iso_reader_trick_tb;
             $fwrite(fo, "E\n");
             // The edge HOLDS: trick play still on and the gate open, nothing more may
             // be armed, and once the last VOBU's sectors are in, nothing more read.
+            // The arm that found the edge pulses trick_vobu in the SAME clock trick_edge
+            // rises; the logger above and this loop wake on that edge in either order.
+            // Count it first (half a clock), or it reads as an arm past the edge.
+            @(negedge clk);
             i = n_vobu;
             repeat (1_000_000) @(posedge clk);
             t = n_rd;
