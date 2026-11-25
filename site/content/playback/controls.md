@@ -353,8 +353,9 @@ A quick **tap** of B10 / B11 in a DVD film jumps 10 seconds, like the keyboard a
 it takes a hold of about half a second to start playing at speed.
 
 Trick play reads the disc four times a second. To spare a physical drive, set
-[**Trick Play**](settings.md) to **Off**: holding the buttons then scrubs instead, as
-below, with a single seek when you let go.
+[**Trick Play**](settings.md) to **Off**: holding B10 / B11 then scrubs instead, as
+below, with a single seek when you let go, and the keyboard and remote keys jump 10 seconds
+per press, as they do outside a DVD film.
 
 **Held anywhere else** — a VCD, SVCD, `.mpg` or `.VOB` file, or a DVD scene with on-screen
 buttons or a still picture — they **scrub** instead: a seek bar appears showing where you are

@@ -522,12 +522,29 @@ and iso image", apart from the missing progress bar (above). Then decided:
   backwards at `block_first + angle - 1` and skip the siblings; check forward jumps
   inside an interleaved block on Castle in the bench.
 
+## Third hardware round: `dev-trickplay6` (2026-11-25)
+
+SEED 9 fit: clk_dec 89.34 / clk_mem 92.46 MHz worst corner, `clock_check` PASS. TFA from
+the share, keyboard keys through the harness (it has no gamepad):
+
+- **Lates during a hold: 0.** A 10 s FF hold walked the whole ladder (4 → 10 → 30 → 120 s
+  rungs, HUD 14:53 → 31:47, never backwards) with no late and no drop until the release.
+  `dev-trickplay2` counted ~20-30 lates over the same hold (`fwd1`/`ifwd1`/`pfwd1`), so
+  the corrector was where they came from.
+- **The release costs 2-3 lates and at most one drop**, the same as an ordinary 10 s jump
+  measured right after (1-3 lates per jump): it is the landing seek, not trick play.
+- **Progress bar** up for the whole gesture, beside the arrows.
+- **Keyboard tap**: FF +10 s, REW −10 s, exactly.
+- **Trick Play = Off** with the keyboard: a hold is one 10 s jump at the press, then normal
+  play. That is the pre-trick-play keyboard behaviour (FF/REW keys never reached
+  `scrub_ctrl`; `joy_eff` masks them), and the manual now says so; the gamepad scrubs.
+- ⏳ Not measurable here: the gamepad tap and the gamepad's scrub with Off (maintainer).
+
 ## Next step
 
-1. Gate `par_late_r` (or the whole `frame_late`) with `trick_cad` in `resample_addrgen`.
-2. The maintainer's call on a gamepad tap (enters and leaves at once).
-3. Angle blocks: a walk inside one; and a disc whose title is an angle film.
-4. The fit's ALM margin (97 %): a seed sweep, or trimming `kbd_hold`'s counters.
+1. The maintainer's hands-on: gamepad tap, gamepad hold, Trick Play = Off on the pad.
+2. Angle blocks: a walk inside one; and a disc whose title is an angle film.
+3. The fit's ALM margin (97 %): a seed sweep, or trimming `kbd_hold`'s counters.
 
 Earlier plan, kept for reference: a hardware round on the rig:
 an image and the physical drive, both directions, every tier, the edge both ways, release
