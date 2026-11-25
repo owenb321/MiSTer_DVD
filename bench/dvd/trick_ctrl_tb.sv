@@ -118,8 +118,32 @@ module trick_ctrl_tb;
         if (active || n_seek != 1) fail("[9] the other button did not exit");
         @(negedge clk) begin held_ff = 0; held_rew = 0; end repeat (5) @(posedge clk);
 
+        // [10] the edge in the SAME clock as its VOBU's arm (the reader raises both
+        //      together): exit to THAT VOBU, not the one before (TFA rewind, 2026-11-24)
+        @(negedge clk) held_rew = 1; repeat (3) @(posedge clk);
+        arm(1339);
+        n_seek = 0;
+        @(negedge clk) begin trick_nav = 0; trick_vobu = 1; trick_edge = 1; end
+        @(negedge clk) begin trick_vobu = 0; trick_edge = 0; end
+        repeat (2) @(posedge clk);
+        if (n_seek != 1 || last_seek != 32'd0) begin
+            fail("[10] an edge with its own arm exited to the previous VOBU"); $display("  seek %0d", last_seek); end
+        @(negedge clk) held_rew = 0; repeat (5) @(posedge clk);
+
+        // [11] a release in the same clock as an arm: that arm is the latest, so the
+        //      exit goes to the one before it (the picture on screen)
+        @(negedge clk) held_ff = 1; repeat (3) @(posedge clk);
+        arm(400); arm(500);
+        n_seek = 0;
+        @(negedge clk) begin trick_nav = 600; trick_vobu = 1; held_ff = 0; end
+        @(negedge clk) trick_vobu = 0;
+        repeat (2) @(posedge clk);
+        if (n_seek != 1 || last_seek != 32'd500) begin
+            fail("[11] a release on an arm's clock did not exit to the VOBU before it"); $display("  seek %0d", last_seek); end
+        repeat (5) @(posedge clk);
+
         if (n_entries == 0) fail("n_entries never counted");
-        if (errors == 0) $display("PASS: trick_ctrl_tb -- 9 scenarios");
+        if (errors == 0) $display("PASS: trick_ctrl_tb -- 11 scenarios");
         else begin $display("FAIL: trick_ctrl_tb -- %0d error(s)", errors); $fatal(1); end
         $finish;
     end

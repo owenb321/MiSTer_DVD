@@ -463,6 +463,22 @@ slow. **Instrument:** `mister.py snap` returns in ~0.22 s and carries the HUD cl
   otherwise stop up to one jump short of the edge: a rewind to the start ending ~2 min in
   at 480x.
 
+- **Re-measured on `dev-trickplay4`:** TFA from the drive, FF 12 s: 0:26 -> 16:44 (was
+  9:08), 120 s jumps firing, no jump-back. REW 14 s from 16:12 reached the PGC's first
+  cell but resumed at 0:07 (sector 1339, cell 1's LAST VOBU), not 0:00. The reader was
+  right (`iso_reader_trick_tb` on the TFA image: 116429 -> 115707 -> 1339 -> 0, edge at
+  0). **The controller was not:** the reader arms the edge VOBU and raises `trick_edge` in
+  the same clock, and `trick_ctrl` exited on `nav_last` before that arm updated it. Same
+  off-by-one for a release landing on an arm's clock (`nav_prev`). Fix: the exit reads
+  `ex_last`/`ex_prev`/`ex_n`, the registers with this clock's arm applied
+  (`trick_ctrl_tb` [10]/[11], `run_trick_ctrl.sh` M8/M9). On MIB3 in round 1 it looked
+  right only because the edge VOBU there was one VOBU from the start.
+- Seen in passing, the angle walk (still ⏳): TFA's opening crawl is two 3-angle blocks
+  (cells 2-4 and 5-7). Rewinding through them the walk steps sibling to sibling (cell 6 ->
+  3 -> 2 -> 1) rather than skipping the block: `tk_prev_base` is `block_first` only
+  while `angle_active`, and a trick crossing clears it. Harmless here (each sibling is
+  one picture), but a walk inside an angle block is not designed yet.
+
 ## Next step
 
 1. Gate `par_late_r` (or the whole `frame_late`) with `trick_cad` in `resample_addrgen`.

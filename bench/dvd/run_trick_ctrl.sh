@@ -11,6 +11,8 @@
 #   M5 8x only from T2                                          -> [3]
 #   M6 the cadence gate never pulses                            -> [2]
 #   M7 the gesture released at the exit (scrub takes a held button) -> [7]
+#   M8 an edge on its own arm's clock exits to the VOBU before     -> [10]
+#   M9 a release on an arm's clock ignores that arm               -> [11]
 #
 #   ./bench/dvd/run_trick_ctrl.sh [--red]
 set -uo pipefail
@@ -37,7 +39,7 @@ EOF
     if grep -q "^FAIL \[$2\]" <<<"$log"; then echo "[$1] PASS ([$2] fails)"
     else echo "[$1] FAIL: survived"; rc=1; fi
   }
-  mut M1 4 "(n_armed == 2'd2)   ? nav_prev" "(n_armed == 2'd2)   ? nav_last"
+  mut M1 4 "(ex_n == 2'd2)      ? ex_prev" "(ex_n == 2'd2)      ? ex_last"
   mut M2 4 "                active     <= 1'b0;
                 need_rel   <= 1'b1;" "                need_rel   <= 1'b1;"
   mut M3 7 "if (allowed && !need_rel && (held_ff ^ held_rew))" "if (allowed && (held_ff ^ held_rew))"
@@ -46,6 +48,8 @@ EOF
   mut M5 3 "(held_cnt >= T1) ? 2'd1" "(held_cnt >= T2) ? 2'd1"
   mut M6 2 "                    go     <= 1'b1;" "                    go     <= 1'b0;"
   mut M7 7 "assign owns = active || need_rel;" "assign owns = active;"
+  mut M8 10 "wire [31:0] ex_last = trick_vobu ? trick_nav : nav_last;" "wire [31:0] ex_last = nav_last;"
+  mut M9 11 "wire [31:0] ex_prev = trick_vobu ? nav_last  : nav_prev;" "wire [31:0] ex_prev = nav_prev;"
 fi
 [ $rc = 0 ] && echo "run_trick_ctrl: PASS" || echo "run_trick_ctrl: FAIL"
 exit $rc

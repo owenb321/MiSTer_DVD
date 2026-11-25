@@ -65,6 +65,11 @@ module trick_ctrl #(
     wire held_dir = rev ? held_rew : held_ff;
     wire other    = rev ? held_ff  : held_rew;
 
+    // The armed VOBUs as of THIS clock, an arm arriving now included (the exit uses them).
+    wire [31:0] ex_last = trick_vobu ? trick_nav : nav_last;
+    wire [31:0] ex_prev = trick_vobu ? nav_last  : nav_prev;
+    wire [1:0]  ex_n    = trick_vobu ? ((n_armed == 2'd2) ? 2'd2 : n_armed + 2'd1) : n_armed;
+
     always @(posedge clk) begin
         go         <= 1'b0;
         seek_pulse <= 1'b0;
@@ -106,13 +111,18 @@ module trick_ctrl #(
                 if (n_armed != 2'd2) n_armed <= n_armed + 2'd1;
             end
             if (!held_dir || other || !allowed || trick_edge) begin
-                // EXIT: one seek to the picture on screen (see the header)
+                // EXIT: one seek to the picture on screen (see the header).
+                // ★ The reader arms the edge VOBU and raises trick_edge in the SAME
+                // clock, and a release can land on an arm's clock too: the exit must
+                // see that arm (ex_*), not the registers it is updating. Exiting on the
+                // stale nav_last stopped a rewind on TFA one VOBU short of the start
+                // (sector 1339 = 0:07, not 0; 2026-11-24 HW, trick_ctrl_tb [10]/[11]).
                 active     <= 1'b0;
                 need_rel   <= 1'b1;
                 seek_pulse <= 1'b1;
-                seek_rbn   <= trick_edge          ? nav_last  :
-                              (n_armed == 2'd2)   ? nav_prev  :
-                              (n_armed == 2'd1)   ? nav_last  : entry_rbn;
+                seek_rbn   <= trick_edge          ? ex_last  :
+                              (ex_n == 2'd2)      ? ex_prev  :
+                              (ex_n == 2'd1)      ? ex_last  : entry_rbn;
             end else begin
                 if (held_cnt != 28'hFFFFFFF) held_cnt <= held_cnt + 28'd1;
                 tier <= (held_cnt >= T3) ? 2'd3 : (held_cnt >= T2) ? 2'd2 :
