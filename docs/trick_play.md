@@ -473,6 +473,8 @@ slow. **Instrument:** `mister.py snap` returns in ~0.22 s and carries the HUD cl
   `ex_last`/`ex_prev`/`ex_n`, the registers with this clock's arm applied
   (`trick_ctrl_tb` [10]/[11], `run_trick_ctrl.sh` M8/M9). On MIB3 in round 1 it looked
   right only because the edge VOBU there was one VOBU from the start.
+- **Confirmed on `dev-trickplay5`** (TFA, drive): REW 13 s from 6:12 lands on 0:00 (first
+  picture shown 0:00, sector 105) and plays on while still held, no re-entry.
 - Seen in passing, the angle walk (still ⏳): TFA's opening crawl is two 3-angle blocks
   (cells 2-4 and 5-7). Rewinding through them the walk steps sibling to sibling (cell 6 ->
   3 -> 2 -> 1) rather than skipping the block: `tk_prev_base` is `block_first` only
