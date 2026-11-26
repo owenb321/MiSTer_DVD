@@ -18,12 +18,33 @@ from trick_splice import walk_cells                 # noqa: E402
 from trick_scan import title_extents, SEC           # noqa: E402
 
 
+def play_order(cells, angle):
+    """[(first, last, lvobu)] in play order: each angle block collapsed to its chosen
+    angle's cell, as the reader plays it (angle 0 or past the block's count = 1)."""
+    out, i = [], 0
+    while i < len(cells):
+        cat = cells[i][3]
+        if (cat >> 4) & 3 == 1 and cat >> 6 == 1:
+            j = i
+            while j + 1 < len(cells) and (cells[j + 1][3] >> 4) & 3 == 1 and cells[j + 1][3] >> 6 >= 2:
+                j += 1
+            n = j - i + 1
+            k = angle if 1 <= angle <= n else 1
+            out.append(cells[i + k - 1][:3])
+            i = j + 1
+        else:
+            out.append(cells[i][:3])
+            i += 1
+    return out
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('log')
     ap.add_argument('iso')
     ap.add_argument('--tier', type=int, required=True)
     ap.add_argument('--rev', type=int, required=True)
+    ap.add_argument('--angle', type=int, default=0, help='the angle each block plays (0 = 1)')
     a = ap.parse_args()
 
     cells, arms, reads, edge, tcell, xcn = [], [], [], False, None, []
@@ -32,7 +53,7 @@ def main():
         if not t:
             continue
         if t[0] == 'C':
-            cells.append((int(t[2]), int(t[3]), int(t[4])))
+            cells.append((int(t[2]), int(t[3]), int(t[4]), int(t[5]) if len(t) > 5 else 0))
         elif t[0] == 'T':
             tcell = int(t[1])
         elif t[0] == 'A':
@@ -75,17 +96,20 @@ def main():
             f.seek(lba_of(rbn) * SEC)
             return f.read(n * SEC)
 
+        # Play order: an angle block is ONE step, the chosen angle's cell (block_type 1 in
+        # the category byte's [5:4]; block_mode [7:6] 1 starts a block, 2/3 continue it).
+        play = play_order(cells, a.angle)
         nav0 = arms[0][0]
-        cell = next((i for i, (lo, hi, _) in enumerate(cells) if lo <= nav0 <= hi), None)
+        cell = next((i for i, (lo, hi, _) in enumerate(play) if lo <= nav0 <= hi), None)
         if cell is None:
             print('FAIL: the first armed NAV pack %d is in no cell' % nav0)
             return 1
-        walk = list(walk_cells(read_rbn, cells, cell, nav0, a.tier, bool(a.rev), len(arms) + 1))
+        walk = list(walk_cells(read_rbn, play, cell, nav0, a.tier, bool(a.rev), len(arms) + 1))
         model = [(n, e) for n, e, _ in walk]
         mcross = [c for _, _, c in walk]
 
-    print('cells %d (trick began in cell %s, first NAV in cell %d); armed %d, model %d, edge %s'
-          % (len(cells), tcell, cell, len(arms), len(model), edge))
+    print('cells %d, %d in play order (trick began in cell %s, first NAV in play step %d); armed %d, model %d, edge %s'
+          % (len(cells), len(play), tcell, cell, len(arms), len(model), edge))
     ok = True
     for i, (got, want) in enumerate(zip(arms, model)):
         if got != want:

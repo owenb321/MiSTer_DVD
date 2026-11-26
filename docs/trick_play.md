@@ -139,7 +139,8 @@ jumps 0.5 / 1 / 2 / 10 / 30 / 60 / 120 s give 2× / 4× / 8× / 40× / 120× / 2
 
 - The PGC's edges: at the last cell going forward, drop to normal play so POST runs; at the
   first cell going back, stop at its first VOBU and resume there.
-- Angle blocks and seamless-branch ILVUs: whether `fwda` stays inside the playing angle.
+- ~~Angle blocks: whether `fwda` stays inside the playing angle.~~ It does (41-disc sweep,
+  "Angle blocks: the walk stays in its angle"). So do seamless-branch cells (below).
 - Entering: title domain only, playing, no buttons armed, no still.
 - `.mpg` and VCD have no nav packs: out of scope (they keep scrub-to-target).
 
@@ -246,10 +247,10 @@ runs cases 6 at a time.
   splice-model and decoder runs labelled 2 s or 8× above were 1.5 s and 6×. Neither result
   depends on the exact jump. The library sweep's per-rung figures were always labelled
   correctly.
-- **Not handled yet:** angle blocks beyond the play-order step (a crossing uses
-  `cell_after` and `block_first - 1`, so it steps over an angle block as one cell, but a
-  walk inside one follows `fwda` and may leave the chosen angle). Measuring that is the
-  ILVU open question above.
+- **Angle blocks** (resolved 2026-11-25, see "Angle blocks: the walk stays in its angle"):
+  a crossing steps over a block as one cell (`cell_after`, `block_first - 1`), a walk
+  inside one stays in its angle (measured on 41 discs), and a backward entry now walks back
+  to the block's first cell so the chosen angle is picked.
 
 **Gate: `bench/dvd/run_trick_reader.sh` (`--red`).** `bench/dvd/iso_reader_trick_tb.sv`
 serves the reader sectors from the real `.iso` (`$fseek` in steps: Icarus's offset is a
@@ -560,11 +561,54 @@ ties `still_en` or `trick_cad` off, so nothing else moves.
 and Bob keeps the first field on the pickup scan and the second after, so a held picture
 shifts once, half a line, as it lands.
 
+## Angle blocks: the walk stays in its angle; a backward entry now picks it (2026-11-25)
+
+**The measurement (the open question "whether `fwda` stays inside the playing angle").**
+Every VOBU on every angle's chain of every angle block in the feature title set, on the 41
+library discs that have one (104,789 VOBUs; Castle in the Sky, TFA's crawl, Grave of the
+Fireflies, Beauty and the Beast ...): of the four trick rungs in each direction, 599,255
+usable entries land on a NAV pack of the SAME angle (`vobu_vob_idn`/`vobu_c_idn` equal), 0 on
+a sibling angle, 0 outside the block. A jump that would leave the angle is authored
+END_OF_CELL (239,038 entries), which crosses. 19 targets that are not NAV packs and 28 broken
+`next_vobu` chains sit on two discs (Closer, Beauty and the Beast) and are disc faults, not
+sibling landings. So a walk inside a block needed nothing.
+
+**Seamless-branch cells too** (interleaved, block_type 0: the Matrix's white-rabbit scenes,
+T2's extended cut). The same sweep over every such cell's `next_vobu` chain, 30 discs,
+133,863 VOBUs: 717,252 usable rungs land on the cell's own branch (`vobu_vob_idn`), 0 on the
+other branch, 0 outside the cell; 353,622 are END_OF_CELL. One disc (The Internship) has 30
+non-NAV targets and 5 broken chains. The reader needs nothing for these: a branch cell is
+one cell in play order, and its rungs never leave its branch.
+
+**The bug was the backward entry.** A backward crossing loads the cell before the one it
+leaves; for a block that is its LAST angle (block_mode 3). The angle pick runs only on a
+block's FIRST cell, so the reader streamed the last sibling with `angle_active` low, and its
+next backward crossing stepped to the sibling before it (TFA's crawl: cell 6 -> 3 -> 2 -> 1,
+one copy of the segment per angle). Forward entry always resolved: it lands on the first cell.
+
+**The fix** (`dvd/dvd_iso_reader.sv`, S_CELL_LOAD2 "TRICK PLAY, BACKWARDS INTO AN ANGLE
+BLOCK"): with `trick_lv` set and an angle cell that is not the block's first and not yet
+resolved, step `cell_i` back one cell per S_CELL_LOAD pass (the cell table's read latency;
+the 6-bit state space has no free code) until the first cell, where the normal scan and pick
+run. `trick_lv` survives, so the chosen angle's cell lands on its last VOBU with
+`angle_active` set; its next backward crossing then leaves from `block_first`, skipping the
+siblings. A malformed block (no block_mode 1) ends the walk on the title path; cell 0 bounds
+it.
+
+**Gate:** `run_trick_reader.sh --red` gains three arms on Castle in the Sky's last block
+(cells 33-34, 2 angles, 184 s): `ab1`/`ab2` backward at 10 s from cell 35 with angle 1 / 2,
+`af2` forward on angle 2 through the earlier block (cells 4-5, 99 s; the control). The checker's model
+(`trick_reader_check.py play_order`) collapses each block to the chosen angle, read from the
+cell category bytes the bench now logs; `+ANGLE=n` drives `agl_vm`/`agl_vm_en`. R10 (the walk
+removed) must fail `ab1`. Without Castle (`TRICK_ANGLE_ISO`, else `CASTLE_IN_THE_SKY*.iso`
+under `DVD_ISO_DIR`) the arms SKIP and the verdict line says so.
+
 ## Next step
 
 1. The maintainer's hands-on: gamepad tap, gamepad hold, Trick Play = Off on the pad, and
    the field still on the interlaced raster.
-2. Angle blocks: a walk inside one; and a disc whose title is an angle film.
+2. Angle blocks on the rig: TFA's crawl backwards (should show one copy per segment now), and
+   Castle in the Sky's blocks both ways with the disc's own angle (2).
 3. The fit's ALM margin (97 %): a seed sweep, or trimming `kbd_hold`'s counters.
 
 Earlier plan, kept for reference: a hardware round on the rig:

@@ -12,7 +12,8 @@
 //
 // Log (+OUT): what bench/dvd/run_trick_reader.sh compares with tools/trick_splice.py
 // walk_cells over the SAME cell table:
-//   C <i> <first> <last> <lvobu>   the reader's cell table (program order), at the seek
+//   C <i> <first> <last> <lvobu> <cat>  the reader's cell table (program order) and each
+//                                  cell's category byte (angle blocks), at the seek
 //   T <cell_i>                      the reader's cell when trick play began
 //   R <lba>                         every sector STREAMED once trick play is on
 //   P <lba>                         any other read (the seek's NAV-pack search)
@@ -45,6 +46,9 @@ module iso_reader_trick_tb;
     wire        cell_ready;
     wire [7:0]  cell_count;
 
+    // +ANGLE=n: the angle every block plays (0 = the reader's own default, angle 1)
+    reg  [3:0]  angle_r = 0;
+    integer     angle_a;
     reg         trick_en = 0;
     reg  [1:0]  trick_tier = 0;
     reg         trick_rev = 0;
@@ -68,7 +72,7 @@ module iso_reader_trick_tb;
         .seek_rbn_pulse(seek_rbn_pulse), .seek_rbn(seek_rbn), .seek_tm_req(1'b0), .seek_tm_secs(17'd0),
         .chap_pulse(1'b0), .chap_dir(1'b0), .chap_mag(5'd1), .chap_at_start(1'b0),
         .angle_pulse(1'b0), .cur_angle(), .angle_count(),
-        .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),
+        .agl_vm(angle_r), .agl_vm_en(angle_r != 4'd0), .vm_pre_done(1'b0),
         .keep_vbuf(),
         .cur_cell(), .cell_ready(cell_ready),
         .sd_lba(sd_lba), .sd_rd(sd_rd), .sd_ack(sd_ack),
@@ -147,6 +151,8 @@ module iso_reader_trick_tb;
         if (!$value$plusargs("REV=%d", rev_a)) rev_a = 0;
         if (!$value$plusargs("VOBUS=%d", vobus)) vobus = 12;
         if (!$value$plusargs("GOPER=%d", goper)) goper = 0;
+        if (!$value$plusargs("ANGLE=%d", angle_a)) angle_a = 0;
+        angle_r = angle_a[3:0];
         fi = $fopen(iso, "rb");
         if (fi == 0) $fatal(1, "cannot open %s", iso);
         fo = $fopen(outp, "w");
@@ -170,8 +176,8 @@ module iso_reader_trick_tb;
         if (!seek_ack) $fatal(1, "the seek was never acknowledged");
         repeat (2_000) @(posedge clk);
         for (i = 0; i < cell_count; i = i + 1)
-            $fwrite(fo, "C %0d %0d %0d %0d\n", i, dut.cell_first_mem[i], dut.cell_last_mem[i],
-                    dut.cell_lv_mem[i]);
+            $fwrite(fo, "C %0d %0d %0d %0d %0d\n", i, dut.cell_first_mem[i], dut.cell_last_mem[i],
+                    dut.cell_lv_mem[i], dut.cell_cat_mem[i]);
 
         // trick play
         trick_tier = tier_a[1:0];
@@ -222,7 +228,11 @@ module iso_reader_trick_tb;
         sess2 = 1;
         logging = 0;
         @(posedge clk);
-        while (!(m == 2 && bc == 12'h500)) @(posedge clk);
+        // bounded: an arm that ends at the PGC's last VOBU has nothing left to read, and
+        // this wait used to spin forever there (Castle's af2 at 27 VOBUs, 2026-11-25)
+        t = 0;
+        while (!(m == 2 && bc == 12'h500) && t < 50_000_000) begin @(posedge clk); t = t + 1; end
+        if (!(m == 2 && bc == 12'h500)) $fatal(1, "session 2: the reader read no further sector (an arm that ran to the PGC's end?)");
         trick_en = 1;
         trick_go = 1;
         t = 0;

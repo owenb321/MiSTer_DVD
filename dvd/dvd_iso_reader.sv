@@ -5256,6 +5256,26 @@ always @(posedge clk or negedge rst_n) begin
                                     : (cl_rd + 32'd1);
                         state    <= S_STREAM;
                     end
+                end else if (trick_lv && cc_is_angle && !cc_blk_first && !angle_resolved
+                             && cell_i != 8'd0) begin
+                    // ★ TRICK PLAY, BACKWARDS INTO AN ANGLE BLOCK (docs/trick_play.md "Angle blocks").
+                    // A backward crossing loads the cell before the one it leaves, which
+                    // for a block is its LAST angle (block_mode 3), not its first. The
+                    // pick below runs only on the first, so the reader streamed the last
+                    // sibling with angle_active low, and the next crossing stepped to the
+                    // sibling before it: TFA's opening crawl walked cell 6 -> 3 -> 2 -> 1,
+                    // one copy of the segment per angle. Walk the cell table back to the
+                    // block's first cell (one cell per S_CELL_LOAD pass, the table's read
+                    // latency) and fall into the normal pick there; trick_lv stays set,
+                    // so the chosen angle's cell then lands on its LAST VOBU.
+                    // Inside the block the walk needs nothing more: on the 41 library
+                    // discs with angle blocks in the feature (104,789 VOBUs) every usable
+                    // trick rung lands on the same angle; a jump that would leave it is
+                    // authored END_OF_CELL, which crosses. A cell with no angle category
+                    // (a malformed block) ends the walk on the title path; cell 0 bounds it.
+                    cell_i     <= cell_i - 8'd1;
+                    cell_raddr <= cell_i - 8'd1;
+                    state      <= S_CELL_LOAD;
                 end else if (cc_blk_first && !angle_resolved) begin
                     // MULTI-ANGLE (Phase 9): the first cell of an angle block.
                     // Count this block's angle cells, then load the cur_angle cell
