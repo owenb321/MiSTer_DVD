@@ -103,6 +103,17 @@ char is_dvd() { return 1; }
 int  dvd_video_probe(int) { probe_calls++; return fake_disc_is_dvd; }
 int  dvd_vcd_probe(int) { probe_calls++; return fake_disc_is_vcd; }
 int  cd_audio_probe(int) { probe_calls++; return fake_disc_is_cdda; }
+// The disc's volume label for the OSD load row ([18]). NULL = unusable (missing or
+// generic), so the module must fall back to naming the kind of disc.
+static const char *fake_label = "TEST_DISC";
+static int label_reads = 0;
+int  dvd_volume_label(int, char *out, size_t n)
+{
+    label_reads++;
+    if (!fake_label) { if (n) out[0] = 0; return 0; }
+    snprintf(out, n, "%s", fake_label);
+    return 1;
+}
 // Counted so [7] can assert the table is pushed for a CD and NOT for a DVD --
 // the core throws away any table that arrives before its mount.
 static int toc_uploads = 0;
@@ -119,6 +130,8 @@ int  dvd_ra_source_busy(void) { return fake_ra_busy; }
 const char *dvd_phys_device(void);
 static int  sentinel_mounts  = 0;
 static int  sentinel_no_dev  = 0;
+const char *dvd_phys_label(void);
+static char label_at_mount[64] = {0};   // what the load row would be told, AT the mount
 int user_io_file_mount(const char *name, unsigned char index = 0, char = 0, int = 0)
 {
     mount_calls++;
@@ -127,6 +140,7 @@ int user_io_file_mount(const char *name, unsigned char index = 0, char = 0, int 
         const char *d = dvd_phys_device();
         if (!d || !*d) sentinel_no_dev++;
     }
+    if (name && name[0] == '*') snprintf(label_at_mount, sizeof(label_at_mount), "%s", dvd_phys_label());
     if (name && name[0] == '*') clears_at_mount = clear_lock_calls;   // a drive sentinel
     snprintf(last_mount, sizeof(last_mount), "%s", name ? name : "");
     dvd_phys_note_mount(name, index);   // Main calls this at the top of the real one
@@ -455,6 +469,34 @@ int main(void)
     printf("=== [17] the mount hooks can see the drive ===\n");
     check("[17] sentinel mounts exercised (precondition)", sentinel_mounts > 0, 1);
     check("[17] mounts whose hooks saw no device", sentinel_no_dev, 0);
+
+    // ---------------------------------------------------------------- [18]
+    // The OSD load row names the disc in the drive (dvd_mountname.h). The name must
+    // be chosen BEFORE the mount, because the hook inside user_io_file_mount() reads
+    // it there; and an audio CD, which has no ISO9660 volume, is never read for one.
+    printf("=== [18] the load row's name for the disc, set before the mount ===\n");
+    struct { int dvd, vcd, cdda; const char *lab; const char *want; int reads; } lc[] = {
+        { 1, 0, 0, "TEST_DISC", "TEST_DISC",         1 },
+        { 1, 0, 0, 0,           "DVD in drive",      1 },
+        { 0, 1, 0, "MY_VCD",    "MY_VCD",            1 },
+        { 0, 1, 0, 0,           "Video CD in drive", 1 },
+        { 0, 0, 1, "IGNORED",   "Audio CD in drive", 0 },
+    };
+    for (unsigned i = 0; i < sizeof(lc) / sizeof(lc[0]); i++)
+    {
+        fake_disc_ready = 0; run_for(NOTICE_WINDOW_S);
+        fake_disc_is_dvd = lc[i].dvd; fake_disc_is_vcd = lc[i].vcd; fake_disc_is_cdda = lc[i].cdda;
+        fake_label = lc[i].lab; label_reads = 0; label_at_mount[0] = 0;
+        fake_disc_ready = 1; run_for(NOTICE_WINDOW_S);
+        char what[80];
+        snprintf(what, sizeof(what), "[18] %s, label %s: named at the mount",
+                 lc[i].dvd ? "DVD" : lc[i].vcd ? "VCD" : "CD-DA", lc[i].lab ? "usable" : "unusable");
+        check(what, !strcmp(label_at_mount, lc[i].want), 1);
+        if (strcmp(label_at_mount, lc[i].want)) printf("       got \"%s\", want \"%s\"\n", label_at_mount, lc[i].want);
+        snprintf(what, sizeof(what), "[18] %s: label reads", lc[i].dvd ? "DVD" : lc[i].vcd ? "VCD" : "CD-DA");
+        check(what, label_reads, lc[i].reads);
+    }
+    fake_disc_is_dvd = 1; fake_disc_is_vcd = 0; fake_disc_is_cdda = 0; fake_label = "TEST_DISC";
 
     printf("\n=== dvd_phys tests: %d error(s) ===\n", errs);
     if (errs) { printf("FAILED\n"); return 1; }

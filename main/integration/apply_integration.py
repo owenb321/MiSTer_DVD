@@ -862,6 +862,47 @@ u = insert_before(u, 'else if (x2trd_ext_supp(name))',
 write(uio_path, u)
 print("[integration] user_io.cpp patched (.cue sheets)")
 
+# 63-65. The OSD's "Load Video" row names what is mounted (support/dvd/dvd_mountname.*).
+# Stock draws a mounted S slot as "\x16" + the basename of sd_image[n].name, and only
+# FileOpen() writes that field -- which the drive, an .iso and a .cue never go through.
+# So the row read "\x16" and nothing else (or a stale .VOB's name). 64 fills the name in
+# for our sources and remembers whether the drive owns the slot; 65 draws the disc glyph
+# in place of the arrow for the drive. See INTEGRATION.md "Steps 63-65".
+u = read(uio_path)
+
+# 63. include
+u = insert_after(u, '#include "support/dvd/dvd_css.h"',
+    '#include "support/dvd/dvd_mountname.h"\n',
+    63, 'support/dvd/dvd_mountname.h')
+
+# 64. after the dispatch AND pc88_mount (which can still fail the mount), on EVERY
+# call: an unmount or a plain file must clear the drive mark as surely as the drive
+# sets it. sd_type[] is already final here (reset to DEFAULT at the top).
+u = insert_before(u, 'if (!index || is_cdi() || (is_saturn() && index==1)) use_save = pre;',
+    'dvd_mountname_note(index, name, ret,   // dvd:mountname\n'
+    '\tsd_type[index] == SD_TYPE_DVDCSS || sd_type[index] == SD_TYPE_VCD,\n'
+    '\tsd_image[index].name, sizeof(sd_image[index].name), dvd_phys_label());\n',
+    64, '// dvd:mountname')
+
+write(uio_path, u)
+print("[integration] user_io.cpp patched (load-row name)")
+
+m = read(m_path)
+
+# 65a. include
+m = insert_after(m, '#include "support.h"',
+    '#include "support/dvd/dvd_mountname.h"\n',
+    '65a', 'support/dvd/dvd_mountname.h')
+
+# 65b. the disc glyph instead of the arrow, only while the drive holds the slot
+m = replace_once(m,
+    'strcpy(s, "\\x16");\n',
+    'strcpy(s, dvd_mountname_is_drive(num) ? "\\x97" : "\\x16");   // dvd:loadrow (DVD_MOUNTNAME_GLYPH)\n',
+    '65b', '// dvd:loadrow')
+
+write(m_path, m)
+print("[integration] menu.cpp patched (load-row disc glyph)")
+
 # ------------------------------------------------------------------- IR remap
 # ⚠ KEEP THIS BLOCK LAST. tools/tests/test_ir_integration.py execs everything
 # from the marker above to 'print("[integration] done")' against scratch copies

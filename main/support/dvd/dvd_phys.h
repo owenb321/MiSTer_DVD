@@ -66,4 +66,9 @@ int dvd_phys_eject(void);
 // so a support bundle can be built straight off the drive with no decryption.
 const char *dvd_phys_device(void);
 
+// What the OSD's load row calls the disc in the drive: its volume label, or "DVD in
+// drive" / "Video CD in drive" / "Audio CD in drive" (dvd_mountname.h). Set just
+// before the mount, so the mount hook that names the slot already sees it.
+const char *dvd_phys_label(void);
+
 #endif

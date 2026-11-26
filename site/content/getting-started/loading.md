@@ -129,6 +129,11 @@ survives the reset.
 You can also load a new file directly from `Load Video` while something is playing — the
 core cuts to black and starts the new one cleanly.
 
+Once something is loaded, the `Load Video` row shows its name instead of the list of file
+types: the file name for an image or file, or a disc icon and the disc's label for a
+[disc in the drive](../formats/physical-discs.md#2-point-the-dvd-core-at-it). Selecting
+the row still opens the file picker.
+
 ## If nothing happens
 
 A black screen with the core sitting idle and **no message at all** is almost always a
