@@ -603,12 +603,22 @@ cell category bytes the bench now logs; `+ANGLE=n` drives `agl_vm`/`agl_vm_en`. 
 removed) must fail `ab1`. Without Castle (`TRICK_ANGLE_ISO`, else `CASTLE_IN_THE_SKY*.iso`
 under `DVD_ISO_DIR`) the arms SKIP and the verdict line says so.
 
-## Next step
+**On the rig (2026-11-26, `dev-trickplay8`, .236, TFA image, Disc Menus Off):** the nav event
+FIFO's CELL events (`/tmp/dvd_navtrace.jsonl`, 90 kHz `free` stamps), REW held through the
+crawl from the film (cell 8, 0-based):
+- angle 1: `8 -> 7 -> 6,5,4 -> 3,2,1 -> 0`, then play from the edge `-> 1`. Each `x,y,z` run
+  has one timestamp: that is the walk to `block_first` (no sector read), then the pick lands
+  on angle 1. One picture per block (~0.25 s apart), all the English crawl.
+- angle 2 (Angle key in the crawl; angle 2 is the French crawl): `8 -> 7 -> 6,5,4 -> 5 ->
+  3,2,1 -> 2 -> 0`, then `-> 1 -> 2` playing on. The picks land on cells 5 and 2, angle 2's
+  copies; no sibling is visited. On `dev-trickplay5` the same rewind stepped 6 -> 3 -> 2 -> 1.
+- A rewind started inside the block on angle 2 left from `block_first` straight to cell 0,
+  showing only French pictures.
 
 1. The maintainer's hands-on: gamepad tap, gamepad hold, Trick Play = Off on the pad, and
    the field still on the interlaced raster.
-2. Angle blocks on the rig: TFA's crawl backwards (should show one copy per segment now), and
-   Castle in the Sky's blocks both ways with the disc's own angle (2).
+2. ~~Angle blocks on the rig~~ done 2026-11-26 (above): TFA both angles. Castle on the rig
+   is optional; its blocks are covered by the bench arms.
 3. The fit's ALM margin (97 %): a seed sweep, or trimming `kbd_hold`'s counters.
 
 Earlier plan, kept for reference: a hardware round on the rig:
