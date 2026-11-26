@@ -22,8 +22,11 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## The `Load Video` row names what is mounted (2026-11-25)
 
-**State:** 🔧 Main-only (`feature/load-row-name`, `dev-loadrowname`); `main/tests --red`
-green, cross-compiles; ⏳ HW look at the OSD. **Field report** (maintainer, testing
+**State:** ✅ HW (maintainer, rig 236, 2026-11-25: THE_FORCE_AWAKENS in the drive shows
+the disc icon and its label; an `.iso` and a `.VOB` show the arrow and their names, with no
+stale name carried across; eject restores the extension list). Main-only
+(`feature/load-row-name`, `dev-loadrowname`); `main/tests --red` green. ⏳ an audio CD in the
+drive (`Audio CD in drive`) not yet looked at. **Field report** (maintainer, testing
 dev-trickplay7): the load row showed the arrow and no text. Stock Main `fed03e5` brought
 upstream `2dd3662`, which draws a mounted S slot from `sd_image[n].name`, and only
 `FileOpen()` writes that; our drive, `.iso` and `.cue` mounts bypass it. **Fix:** a mount hook
@@ -32,8 +35,7 @@ upstream `2dd3662`, which draws a mounted S slot from `sd_image[n].name`, and on
 drive` / `Audio CD in drive`), and the drive's row gets a disc glyph (`0x97`) in place of the
 arrow. Files keep the arrow (maintainer's choice). **Gate:** `main/tests/run_tests.sh --red`
 (`dvd_mountname_test`, `dvd_phys_test` [18]). **Detail:** `main/integration/INTEGRATION.md`
-"Steps 63-65". **Next:** deploy the Main on the rig and look at the row (the OSD is not in a
-screenshot) with an `.iso`, a `.VOB`, a DVD and an audio CD in the drive.
+"Steps 63-65". **Next:** look at the row with an audio CD in the drive; then merge.
 
 ## ascal Bob resync: a mid-stream switch to Bob on Interlaced HDMI (2026-11-22)
 
