@@ -671,12 +671,57 @@ them the seek's own delay (~0.3 s holding the last picture, which a clean cut to
 **Gates:** `run_trick_ctrl.sh --red` [12]-[16] (two ahead, nothing shown, a pickup on the
 release's clock, the tail, a lost queue) with M10-M15; [11] moved onto the fallback path.
 `run_pause_still.sh --red` gains a [tail] phase on the trick arms and M10.
-`check_trick_wiring.py --red` R27-R33. ⏳ The same capture on the rig as the A/B.
+`check_trick_wiring.py --red` R27-R33.
+
+### The rig A/B on `dev-trickplay9`, and the stale picture (2026-11-27)
+
+Same capture (The Matrix, 120x, MiSTer HDMI into the capture card, 60 fps), files in
+`tools/streams/trick_rel/` (gitignored):
+
+- ✅ **Landing.** Released on the cop at the window, play continued from that picture
+  (HUD 3:12 -> 3:13). The one-rung overshoot is gone.
+- ✅ **Clock after release.** Steady; no 7:48-style blip.
+- ❌ **A flash of a different scene, 5 of 6 releases** (`rel6_t9.mkv`: six 4 s holds; a
+  detector for "picture A -> something else -> A again within 8 frames"). The order on
+  screen: the held trick picture -> 3-5 frames of ANOTHER clean scene -> the held picture
+  again -> play. Not a leaked P/B and not a broken leading B (the seek realign, issue #45,
+  drops those: 24 D-pad seeks on both v0.11.0 and this build, same landings, 0 flashes
+  either side). It is the picture picbuf still holds. An anchor is emitted only when the
+  NEXT anchor arrives, so in I-only trick play the newest decoded trick I-frame is always
+  waiting, unshown, and the landing's first I-frame emits it once (the residual
+  `docs/seek_realign.md` §5.1 costs for every seek). After a plain seek that is one frame of
+  the same scene; after trick play it is the next trick picture, 30 s or more on.
+- ⚠ **The trick HUD clock leads the picture.** It read 3:56 while the 3:12 picture was on
+  screen: the HUD follows the NAV packs the demux parses, which are the reader's position,
+  not the screen's, so at the release the clock steps back by the lead (~2 rungs, 44 s at
+  120x). Not fixed; see "Next step".
+
+**Fix (`dev-trickplay10`), `dvd/resample_addrgen.v`:** `trick_pin_tail` now also SWALLOWS the
+pre-flush pictures. The flush strips every pre-flush picture's PTS tag
+(`motcomp_picbuf.v`), and the landing VOBU's first I-frame carries one; so while the pin is
+up and `trick_cad` is down, an untagged pickup is consumed (picbuf moves on) but
+`output_frame_sav` and `cur_ilace` keep the picture on screen. The first tagged pickup is
+shown and ends it; `TAIL_SWALLOW_MAX` = 3 bounds it, so a stream with no tags cannot freeze
+the display.
+⚠ Slot reuse, accepted: after the swallowed pickup picbuf may decode the landing I-frame
+into the slot still being scanned. On the normal exit the landing I-frame IS the picture on
+screen (identical pixels). On the fallback exits (lost queue, nothing shown) it is a
+different picture painting in over at most a field: a real cut, not a wrong scene.
+Rejected: the §5.1 "v2" in-order picbuf flag (a mvec FIFO bit, a decoder change on a 97 %
+fit, and it changes every seek); blanking (a black frame on every release is worse than a
+held one).
+
+**Gates:** `run_pause_still.sh --red` gains a [swallow] phase on the trick arms (an untagged
+picture in frame 3 is picked up, frame 2 stays on screen as a field still; the tagged landing
+in frame 1 is then shown) with M11 (no swallow -> fetches frame 3) and M12 (swallow ignores
+the tag -> never reaches frame 1). `field_phase_tb` ties the tag high. ⏳ The rig A/B.
 
 ## Next step
 
-0. The release fix above on the rig: the same HDMI capture, A/B against `dev-trickplay8`
-   (landing = the picture released on, no leaked frames, steady clock).
+0. `dev-trickplay10` on the rig: `rel6`'s six releases, flash count against
+   `dev-trickplay9`'s 5/6 (landing and clock already ✅ on `dev-trickplay9`).
+0b. Decide: the trick HUD clock leads the picture by the lead (above). A fix would queue
+   the HUD's time pair beside the VOBU in `trick_ctrl`'s on-screen queue.
 1. The maintainer's hands-on: gamepad tap, gamepad hold, Trick Play = Off on the pad, and
    the field still on the interlaced raster.
 2. ~~Angle blocks on the rig~~ done 2026-11-26 (above): TFA both angles. Castle on the rig

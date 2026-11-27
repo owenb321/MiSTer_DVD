@@ -68,6 +68,7 @@ module pause_still_tb;
   reg        top_field_first   = 1'b1;
   reg  [2:0] output_frame = 3'd2;
   reg        output_frame_valid = 1'b0;
+  reg        output_pts_valid   = 1'b1;   // the waiting picture's PTS tag (tagged unless a phase says not)
   wire       output_frame_rd;
   reg        pause = 1'b0;
   reg        trick_cad_r = 1'b0;
@@ -87,6 +88,7 @@ module pause_still_tb;
     .clk(clk), .rst(rst),
     .output_frame(output_frame), .output_frame_valid(output_frame_valid),
     .output_frame_rd(output_frame_rd),
+    .output_pts(33'd0), .output_pts_valid(output_pts_valid), .output_pts_2nd(1'b0),
     .progressive_sequence(1'b0), .progressive_frame(progressive_frame), .informative(1'b1),
     .top_field_first(top_field_first), .repeat_first_field(1'b0),
     .mb_width(MB_WIDTH), .mb_height(MB_HEIGHT),
@@ -327,6 +329,17 @@ module pause_still_tb;
     end
   endtask
 
+  // which framestore slot each scored scan fetched (the swallow phase must keep reading the
+  // held picture's slot while picbuf moves on). OSD_FRAME (4) reads are the OSD's own.
+  integer exp_frame = -1, bad_frame = 0;
+  always @(posedge clk) if (rst && resample.resample_addrgen.disp_valid_in && phase != P_IGNORE &&
+                            skip == 0 && exp_frame >= 0 &&
+                            resample.resample_addrgen.disp_frame != 3'd4 &&
+                            resample.resample_addrgen.disp_frame != exp_frame[2:0]) begin
+    if (bad_frame < 3) $display("  fetch from frame %0d, want %0d", resample.resample_addrgen.disp_frame, exp_frame);
+    bad_frame = bad_frame + 1;
+  end
+
   integer pickups = 0;
   always @(posedge clk) if (rst && output_frame_rd) pickups = pickups + 1;
 
@@ -342,7 +355,7 @@ module pause_still_tb;
   endtask
 
   localparam integer NSCORE = 8;
-  integer n_pre, n_still, n_step, n_post, n_tail = NSCORE, want_still_pass;
+  integer n_pre, n_still, n_step, n_post, n_tail = NSCORE, n_swal = NSCORE, want_still_pass;
   integer p_before_step;
   localparam [1:0] TOP_I = 2'd2, BOT_I = 2'd3;
   initial begin
@@ -396,15 +409,28 @@ module pause_still_tb;
     if (trick) begin
       run_phase(pfr ? P_NATIVE : P_STILL, 3, NSCORE, n_tail);
       $display("  [tail]  trick exit, no new pic   : %0d/%0d scans", n_tail, NSCORE);
+      // the pre-flush picture picbuf still emits (untagged by the flush), in another slot:
+      // consumed, NOT shown -- the held picture's slot stays on screen, still a field still
+      exp_frame = 2;
+      @(negedge clk) begin output_frame = 3'd3; output_pts_valid = 1'b0; end
+      present_one;
+      run_phase(pfr ? P_NATIVE : P_STILL, 3, NSCORE, n_swal);
+      $display("  [swallow] untagged pre-flush pic : %0d/%0d scans, %0d fetches off frame 2", n_swal, NSCORE, bad_frame);
+      if (bad_frame != 0) n_swal = 0;
+      // the landing's first picture: tagged, in a third slot -- shown, native
+      exp_frame = 1; bad_frame = 0;
+      @(negedge clk) begin output_frame = 3'd1; output_pts_valid = 1'b1; end
     end
     present_one;
     run_phase(P_NATIVE, 3, NSCORE, n_post);
+    if (trick && bad_frame != 0) begin $display("  [post] %0d fetches off frame 1", bad_frame); n_post = 0; end
     $display("  [post]  native after resume      : %0d/%0d scans", n_post, NSCORE);
 
     if (n_pre  != NSCORE) begin $display("  FAIL [pre]");   errors = errors + 1; end
     if (n_still != NSCORE) begin $display("  FAIL [pause]"); errors = errors + 1; end
     if (n_step != NSCORE) begin $display("  FAIL [step]");  errors = errors + 1; end
     if (n_tail != NSCORE) begin $display("  FAIL [tail]");  errors = errors + 1; end
+    if (n_swal != NSCORE) begin $display("  FAIL [swallow]"); errors = errors + 1; end
     if (n_post != NSCORE) begin $display("  FAIL [post]");  errors = errors + 1; end
     if (errors == 0) $display("RESULT: PASS");
     else begin $display("RESULT: FAIL (%0d)", errors); $fatal(1, "pause_still_tb failed"); end

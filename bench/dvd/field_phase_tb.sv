@@ -199,6 +199,7 @@ module field_phase_tb;
     .clk(clk), .rst(srst),
     .output_frame(output_frame), .output_frame_valid(output_frame_valid),
     .output_frame_rd(output_frame_rd),
+    .output_pts(33'd0), .output_pts_valid(1'b1), .output_pts_2nd(1'b0),   // every picture tagged: trick_pin_tail never swallows here (pause_still_tb covers it)
     .progressive_sequence(progressive_sequence), .progressive_frame(progressive_frame),
     .informative(1'b1),
     .top_field_first(top_field_first), .repeat_first_field(repeat_first_field),

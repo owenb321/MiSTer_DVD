@@ -86,6 +86,10 @@ if [ "${1:-}" = "--red" ]; then
   mut_run M9_no_trick       dvd/resample_addrgen.v 's/(pause || trick_cad || trick_pin_tail) \&\& ~step_arm/pause \&\& ~step_arm/' 0 +trick=1
   # M10: the lock dropped with trick_cad at the exit, before the landing's first picture
   mut_run M10_no_pin_tail   dvd/resample_addrgen.v 's/(pause || trick_cad || trick_pin_tail) \&\& ~step_arm/(pause || trick_cad) \&\& ~step_arm/' 0 +trick=1
+  # M11: no swallow -- the untagged pre-flush picture is shown (the release flash)
+  mut_run M11_no_swallow    dvd/resample_addrgen.v 's/pickup_go \&\& ~tail_swallow) output_frame_sav/pickup_go) output_frame_sav/' 0 +trick=1
+  # M12: the swallow ignores the tag -- the landing's own picture is swallowed too
+  mut_run M12_swallow_tagged dvd/resample_addrgen.v 's/trick_pin_tail \&\& ~trick_cad \&\& ~output_pts_valid \&\&/trick_pin_tail \&\& ~trick_cad \&\&/' 0 +trick=1
   # M5: the busy term dropped from routing (a scan can overtake a draining one)
   mut_run M5_no_busy_route  dvd/disp_vscale.sv 's/wire        ft_route = vscale_en | sb_half | path_busy;/wire        ft_route = vscale_en | sb_half;/' 0
   # M7: Letterbox's interpolated slot loses its half-line phase
