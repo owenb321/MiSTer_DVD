@@ -714,12 +714,20 @@ held one).
 **Gates:** `run_pause_still.sh --red` gains a [swallow] phase on the trick arms (an untagged
 picture in frame 3 is picked up, frame 2 stays on screen as a field still; the tagged landing
 in frame 1 is then shown) with M11 (no swallow -> fetches frame 3) and M12 (swallow ignores
-the tag -> never reaches frame 1). `field_phase_tb` ties the tag high. ⏳ The rig A/B.
+the tag -> never reaches frame 1). `field_phase_tb` ties the tag high.
+
+**Rig A/B (2026-11-27), `rel6_t10.mkv` vs `rel6_t9.mkv`**, the same script (Matrix, six 4 s
+holds at 120x, 60 fps capture): the A->X->A detector finds **0 of 6** flashes on
+`dev-trickplay10` against **5 of 6** on `dev-trickplay9`, and all six releases are present
+(audio back at the same points). Where each release lands is unchanged: the held picture to
++1 s picture difference matches build for build (11.9/11.9, 7.9/7.8, 5.0/6.6, 12.9/10.8; the
+37/26 one is a scene cut in the film, seen on both). ✅ HW.
+Fit: SEED 7 missed clk_mem (89.59 MHz at 100 C); SEED 9 closes (clk_dec 91.87/88.84, clk_mem
+90.14/94.02), 40,771 / 41,910 ALMs (97 %), `clock_check` PASS.
 
 ## Next step
 
-0. `dev-trickplay10` on the rig: `rel6`'s six releases, flash count against
-   `dev-trickplay9`'s 5/6 (landing and clock already ✅ on `dev-trickplay9`).
+0. ~~`dev-trickplay10` on the rig~~ done 2026-11-27: 0/6 flashes vs 5/6 (above).
 0b. Decide: the trick HUD clock leads the picture by the lead (above). A fix would queue
    the HUD's time pair beside the VOBU in `trick_ctrl`'s on-screen queue.
 1. The maintainer's hands-on: gamepad tap, gamepad hold, Trick Play = Off on the pad, and
