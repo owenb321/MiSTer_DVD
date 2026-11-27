@@ -342,7 +342,7 @@ module pause_still_tb;
   endtask
 
   localparam integer NSCORE = 8;
-  integer n_pre, n_still, n_step, n_post, want_still_pass;
+  integer n_pre, n_still, n_step, n_post, n_tail = NSCORE, want_still_pass;
   integer p_before_step;
   localparam [1:0] TOP_I = 2'd2, BOT_I = 2'd3;
   initial begin
@@ -391,6 +391,12 @@ module pause_still_tb;
 
     // resume
     @(negedge clk) begin pause = 1'b0; trick_cad_r = 1'b0; end
+    // +trick=1: the exit seek's gap (trick_cad gone, the landing's first picture not
+    // yet here): the last trick picture stays a field still until the next pickup
+    if (trick) begin
+      run_phase(pfr ? P_NATIVE : P_STILL, 3, NSCORE, n_tail);
+      $display("  [tail]  trick exit, no new pic   : %0d/%0d scans", n_tail, NSCORE);
+    end
     present_one;
     run_phase(P_NATIVE, 3, NSCORE, n_post);
     $display("  [post]  native after resume      : %0d/%0d scans", n_post, NSCORE);
@@ -398,6 +404,7 @@ module pause_still_tb;
     if (n_pre  != NSCORE) begin $display("  FAIL [pre]");   errors = errors + 1; end
     if (n_still != NSCORE) begin $display("  FAIL [pause]"); errors = errors + 1; end
     if (n_step != NSCORE) begin $display("  FAIL [step]");  errors = errors + 1; end
+    if (n_tail != NSCORE) begin $display("  FAIL [tail]");  errors = errors + 1; end
     if (n_post != NSCORE) begin $display("  FAIL [post]");  errors = errors + 1; end
     if (errors == 0) $display("RESULT: PASS");
     else begin $display("RESULT: FAIL (%0d)", errors); $fatal(1, "pause_still_tb failed"); end

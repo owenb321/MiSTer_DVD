@@ -23,7 +23,13 @@ Checked:
     name is invisible to Quartus);
   * the HUD's user event includes trick play's seek;
   * the HUD clock adds a cell start and a c_eltm latched TOGETHER at dsi_commit
-    (dropped by pipe_rst_n), not the reader-timed cell start.
+    (dropped by pipe_rst_n), not the reader-timed cell start; trick play's exit
+    keeps the last pair (hud_keep) until the landing's first NAV pack;
+  * THE EXIT (2026-11-27): trick_ctrl's on-screen queue hears every display pickup
+    (core_pickups bit 0, two flops into clk_sys), every ES-filter skip, and the
+    reader's seek_ack as the flush; the filter, audio drop, subpicture/PCI gates and
+    the cadence run on trick_hold = trick_active | trick_tail, so the tail between the
+    exit seek and its flush is still filtered; the reader keeps trick_active.
 
     python3 tools/check_trick_wiring.py [emu.sv]
     python3 tools/check_trick_wiring.py --red    # each re-regression must FAIL
@@ -138,7 +144,9 @@ def check(emu_src, qsf_src):
                    ('trick_nav', 'trick_nav_w'), ('trick_edge', 'trick_edge_w'),
                    ('active', 'trick_active'), ('tier', 'trick_tier'), ('rev', 'trick_rev'),
                    ('go', 'trick_go'), ('seek_pulse', 'trick_seek_pulse'),
-                   ('seek_rbn', 'trick_seek_rbn'), ('owns', 'trick_owns')):
+                   ('seek_rbn', 'trick_seek_rbn'), ('owns', 'trick_owns'),
+                   ('shown', 'trick_shown_w'), ('skipped', 'trick_skip_w'), ('flush', 'seek_ack'),
+                   ('tail', 'trick_tail')):
         want(port(tc, p) == net, f'trick_ctrl .{p} is {port(tc, p)!r}, must be {net}')
     al = assign_rhs(src, 'trick_allowed') or ''
     for need in ('cell_ready', '!menu_active', '!in_title_menu', '!menu_nav',
@@ -171,14 +179,24 @@ def check(emu_src, qsf_src):
         want(port(rd, p) == net, f'dvd_iso_reader .{p} is {port(rd, p)!r}, must be {net}')
 
     # the demux
-    want(port(pd, 'aud_drop') == 'trick_active', f"ps_demux .aud_drop is {port(pd, 'aud_drop')!r}")
-    want(re.search(r'&\s*~\s*trick_active\b', port(pd, 'sp_enable') or ''),
-         f"ps_demux .sp_enable is not gated by ~trick_active: {port(pd, 'sp_enable')!r}")
-    want(re.search(r'&\s*~\s*trick_active\b', port(pd, 'pci_enable') or ''),
-         f"ps_demux .pci_enable is not gated by ~trick_active: {port(pd, 'pci_enable')!r}")
+    want(port(pd, 'aud_drop') == 'trick_hold', f"ps_demux .aud_drop is {port(pd, 'aud_drop')!r}")
+    want(re.search(r'&\s*~\s*trick_hold\b', port(pd, 'sp_enable') or ''),
+         f"ps_demux .sp_enable is not gated by ~trick_hold: {port(pd, 'sp_enable')!r}")
+    want(re.search(r'&\s*~\s*trick_hold\b', port(pd, 'pci_enable') or ''),
+         f"ps_demux .pci_enable is not gated by ~trick_hold: {port(pd, 'pci_enable')!r}")
+    # the tail and the on-screen queue's inputs
+    want(re.search(r'wire\s+trick_hold\s*=\s*trick_active\s*\|\s*trick_tail\s*;', src),
+         'trick_hold is not trick_active | trick_tail')
+    want(re.search(r'always @\(posedge clk_sys\) pick_b0_s <= \{pick_b0_s\[1:0\], core_pickups\[0\]\};', src)
+         and assign_rhs(src, 'trick_shown_w') == 'pick_b0_s[2] ^ pick_b0_s[1]',
+         'trick_shown_w is not core_pickups[0] through two clk_sys flops, edge-detected')
+    want(re.search(r'always @\(posedge clk_sys\) tf_skip_b0_q <= tf_skip_n\[0\];', src)
+         and (assign_rhs(src, 'trick_skip_w') or '').replace(' ', '') == '(tf_skip_n[0]^tf_skip_b0_q)&&(|tf_skip_n)',
+         f"trick_skip_w is not the filter's skip count stepping: {assign_rhs(src, 'trick_skip_w')!r}")
+    want(port(rd, 'trick_en') == 'trick_active', f"the reader's trick_en is {port(rd, 'trick_en')!r}, must stay trick_active")
 
     # the ES filter between the demux and the shim
-    want(port(tf, 'en') == 'trick_active', f"trick_es_filter .en is {port(tf, 'en')!r}")
+    want(port(tf, 'en') == 'trick_hold', f"trick_es_filter .en is {port(tf, 'en')!r}")
     want(port(tf, 'rst_n') == 'pipe_rst_n', f"trick_es_filter .rst_n is {port(tf, 'rst_n')!r}, must be pipe_rst_n")
     for dp, fi, fo, sp in (('vid_byte', 'in_byte', 'out_byte', 'in_byte'),
                            ('vid_mark', 'in_mark', 'out_mark', 'in_mark'),
@@ -187,11 +205,11 @@ def check(emu_src, qsf_src):
         want(port(pd, dp) == port(tf, fi), f'ps_demux .{dp} ({port(pd, dp)!r}) != trick_es_filter .{fi} ({port(tf, fi)!r})')
         want(port(tf, fo) == port(sh, sp), f'trick_es_filter .{fo} ({port(tf, fo)!r}) != es_stuff .{sp} ({port(sh, sp)!r})')
 
-    # the cadence: trick_active, two flops into clk_dec
+    # the cadence: trick_hold, two flops into clk_dec
     want(port(mv, 'trick_cad') == 'trick_cad_dec', f"mpeg2video .trick_cad is {port(mv, 'trick_cad')!r}")
-    m = re.search(r'always\s*@\s*\(\s*posedge\s+clk_dec\s*\)\s*begin\s*trick_cad_s1\s*<=\s*trick_active\s*;'
+    m = re.search(r'always\s*@\s*\(\s*posedge\s+clk_dec\s*\)\s*begin\s*trick_cad_s1\s*<=\s*trick_hold\s*;'
                   r'\s*trick_cad_dec\s*<=\s*trick_cad_s1\s*;\s*end', src)
-    want(m, 'trick_cad_dec is not trick_active through two clk_dec flops')
+    want(m, 'trick_cad_dec is not trick_hold through two clk_dec flops')
 
     # keyboard / remote FF/REW: a tap is the 10 s jump, a hold is trick play (kbd_hold)
     km = inst(src, 'kbd_map')
@@ -253,16 +271,17 @@ def check(emu_src, qsf_src):
     ta = inst(src, 'bcd_time_add')
     want(ta is not None, 'bcd_time_add (the HUD clock) is not instantiated')
     if ta is not None:
-        want(re.sub(r'\s+', ' ', port(ta, 'a') or '') == 'hud_pair_v ? hud_cs_l : cur_cell_start_w',
+        want(re.sub(r'\s+', ' ', port(ta, 'a') or '') == 'hud_use_l ? hud_cs_l : cur_cell_start_w',
              f"hud_time_add .a is not the latched cell start: {port(ta, 'a')!r}")
-        want(re.sub(r'\s+', ' ', port(ta, 'b') or '') == 'hud_pair_v ? hud_eltm_l : dsi_c_eltm',
+        want(re.sub(r'\s+', ' ', port(ta, 'b') or '') == 'hud_use_l ? hud_eltm_l : dsi_c_eltm',
              f"hud_time_add .b is not the latched c_eltm: {port(ta, 'b')!r}")
-    want(re.search(r'else if \(dsi_commit\) begin\s*hud_pair_v <= 1\'b1; hud_cs_l <= cur_cell_start_w; '
-                   r'hud_eltm_l <= dsi_c_eltm;', src),
+    want(re.search(r'if \(dsi_commit\) begin hud_cs_l <= cur_cell_start_w; hud_eltm_l <= dsi_c_eltm; end', src),
          'the HUD clock pair is not latched together at dsi_commit')
-    want(re.search(r'always @\(posedge clk_sys or negedge pipe_rst_n\) begin\s*if \(!pipe_rst_n\) begin\s*'
-                   r'hud_pair_v <= 1\'b0;', src),
-         'the HUD clock pair is not dropped by a flush (pipe_rst_n)')
+    want(re.search(r'if \(!pipe_rst_n\)\s+hud_pair_v <= 1\'b0;\s*else if \(dsi_commit\) hud_pair_v <= 1\'b1;', src),
+         'the HUD clock pair is not dropped by a flush (pipe_rst_n) and taken at dsi_commit')
+    want(re.search(r'else if \(dsi_commit\) hud_keep <= 1\'b0;\s*else if \(trick_tail\) hud_keep <= 1\'b1;', src)
+         and assign_rhs(src, 'hud_use_l') == 'hud_pair_v | hud_keep',
+         "trick play's exit does not keep the HUD pair until the landing's NAV pack (hud_keep)")
 
     # Quartus sees the files
     for f in ('dvd/trick_ctrl.sv', 'dvd/trick_es_filter.sv', 'dvd/kbd_hold.sv', 'dvd/pad_hold.sv'):
@@ -277,12 +296,21 @@ RED = [
     ('R3 the seek bypasses the arbitration',
      'wire        seek_any_pulse = scrub_seek_pulse | rst_seek_pulse | trick_seek_pulse;',
      'wire        seek_any_pulse = scrub_seek_pulse | rst_seek_pulse;'),
-    ('R4 audio not dropped', '.aud_drop     (trick_active),', ".aud_drop     (1'b0),"),
-    ('R5 subtitles over trick frames', '.sp_enable    (sp_route_en & ~trick_active),', '.sp_enable    (sp_route_en),'),
-    ('R6 buttons over trick frames', '.pci_enable       (menus_on & ~trick_active),', '.pci_enable       (menus_on),'),
+    ('R4 audio not dropped', '.aud_drop     (trick_hold),', ".aud_drop     (1'b0),"),
+    ('R5 subtitles over trick frames', '.sp_enable    (sp_route_en & ~trick_hold),', '.sp_enable    (sp_route_en),'),
+    ('R6 buttons over trick frames', '.pci_enable       (menus_on & ~trick_hold),', '.pci_enable       (menus_on),'),
+    ('R27 no tail: the exit seek plays unfiltered until its flush', 'wire        trick_hold = trick_active | trick_tail;',
+     'wire        trick_hold = trick_active;'),
+    ('R28 the queue never hears a pickup', '.shown      (trick_shown_w),', ".shown      (1'b0),"),
+    ('R29 the pickup edge from an unsynchronised bit', 'assign trick_shown_w = pick_b0_s[2] ^ pick_b0_s[1];',
+     'assign trick_shown_w = core_pickups[0] ^ pick_b0_s[0];'),
+    ('R30 the tail never ends at the flush', '.flush      (seek_ack),', ".flush      (1'b0),"),
+    ('R31 a filter skip not reported', '.skipped    (trick_skip_w),', ".skipped    (1'b0),"),
+    ('R32 the exit forgets the HUD pair', 'wire hud_use_l = hud_pair_v | hud_keep;', 'wire hud_use_l = hud_pair_v;'),
+    ('R33 the reader kept in trick play through the tail', '.trick_en       (trick_active),', '.trick_en       (trick_hold),'),
     ('R7 the filter bypassed', '.in_byte    (tf_byte),', '.in_byte    (ps_vid_byte),'),
-    ('R8 the filter never reset', '.rst_n     (pipe_rst_n),\n    .en        (trick_active),',
-     '.rst_n     (reset_n),\n    .en        (trick_active),'),
+    ('R8 the filter never reset', '.rst_n     (pipe_rst_n),\n    .en        (trick_hold),',
+     '.rst_n     (reset_n),\n    .en        (trick_hold),'),
     ('R9 the cadence from clk_sys', '.trick_cad    (trick_cad_dec),', '.trick_cad    (trick_active),'),
     ('R10 a still allowed', '!hl_btns_armed && !still_active && !stopped_w &&', '!hl_btns_armed && !stopped_w &&'),
     ('R11 the claim forgets an exit in progress', 'assign trick_claim   = trick_allowed || trick_owns;',
@@ -299,11 +327,11 @@ RED = [
      'wire kbd_ff_jump  = kbd_joy[13];'),
     ('R18 the jump bypasses the tap', '.rt_edge        ((dpad_seek_en & rt_edge) | kbd_ff_jump  | pad_ff_jump),',
      '.rt_edge        ((dpad_seek_en & rt_edge) | kbd_joy[13]  | pad_ff_jump),'),
-    ('R19 the HUD clock adds the reader-timed cell start', '.a   (hud_pair_v ? hud_cs_l   : cur_cell_start_w),',
+    ('R19 the HUD clock adds the reader-timed cell start', '.a   (hud_use_l ? hud_cs_l   : cur_cell_start_w),',
      '.a   (cur_cell_start_w),'),
-    ('R20 the pair not latched at a NAV pack', 'end else if (dsi_commit) begin\n        hud_pair_v',
-     'end else if (1\'b0) begin\n        hud_pair_v'),
-    ('R21 the pair survives a flush', "hud_pair_v <= 1'b0; hud_cs_l <= 32'd0;", "hud_cs_l <= 32'd0;"),
+    ('R20 the pair not latched at a NAV pack', 'if (dsi_commit) begin hud_cs_l <= cur_cell_start_w;',
+     'if (1\'b0) begin hud_cs_l <= cur_cell_start_w;'),
+    ('R21 the pair survives a flush', "if (!pipe_rst_n)     hud_pair_v <= 1'b0;", "if (1'b0)     hud_pair_v <= 1'b0;"),
     ('R22 no progress bar in trick play', '.force_show ((cdda_mode_w && hud_persist_w) | trick_active),',
      '.force_show ((cdda_mode_w && hud_persist_w)),'),
     ('R26 the OSD Trick Play option ignored', '!hl_btns_armed && !still_active && !stopped_w &&\n                       !status[30];',

@@ -615,6 +615,55 @@ crawl from the film (cell 8, 0-based):
 - A rewind started inside the block on angle 2 left from `block_first` straight to cell 0,
   showing only French pictures.
 
+## The release: landing on the picture on screen (maintainer, 2026-11-27)
+
+Maintainer on `dev-trickplay8`: "there is a bit of a jarring transition from the trick play
+image to the video playback". An HDMI capture of an FF release on The Matrix at 120x
+(rig .236, MiSTer HDMI straight into the capture card, 60 fps) showed three faults, none of
+them the seek's own delay (~0.3 s holding the last picture, which a clean cut tolerates):
+
+1. **Playback resumed one rung past the picture on screen.** The HUD walked 7:25 -> 7:48 ->
+   8:18 -> 8:48; released on 8:48 (Neo asleep at his computer), play resumed at 9:19 in
+   the club scene. `trick_ctrl` exited to the VOBU armed before the latest, on the premise
+   that the reader runs exactly one VOBU ahead of the screen. It does not: the lead is
+   whatever sits between the reader and the screen (the stream FIFO, the VBUF, a decoded
+   picture waiting for its 250 ms slot), and here it was two. The dip after release seen
+   on `dev-trickplay3` (9:18 -> 9:08, above) was the same fault, then read as by design.
+2. **About 80 ms of wrong pictures.** Between the release and the landing, the screen
+   alternated Neo with the "Follow the white rabbit" monitor shot, then one blended frame:
+   `active` dropped with the exit seek, so the ES filter, the cadence and the field still
+   all switched off while the rest of the VOBU already past the reader was still reaching
+   the decoder. Its P/B pictures leaked, unpinned.
+3. **The clock read 7:48 for a few frames.** The exit flush drops the HUD's latched pair,
+   and until the landing's first NAV pack the fallback reads the landing cell's start + 0.
+
+**Fixes:**
+- `dvd/trick_ctrl.sv` **on-screen queue**: the arms queue up (4 deep) and each display
+  pickup (`core_pickups` bit 0, two flops into clk_sys: `trick_shown_w`) takes the oldest
+  off. The exit seeks to the last one taken off; with nothing shown yet, to the entry point
+  (the screen still holds the picture from before the entry). An overflow, or an ES-filter
+  skip (`trick_skip_w`: which queued VOBU it was cannot be told), marks the queue lost
+  (`shown_ovf`) and that session exits on the old one-ahead rule. The edge exit is
+  unchanged.
+- **The tail**: `trick_ctrl.tail` holds from the exit seek to the reader's `seek_ack` (or
+  2 s), and `dvd/emu.sv`'s `trick_hold = trick_active | trick_tail` keeps the ES filter,
+  `aud_drop`, the subpicture/PCI gates and the cadence (`trick_cad`) up through it. The
+  reader keeps `trick_active` (it leaves trick play at the seek itself).
+- `dvd/resample_addrgen.v` **`trick_pin_tail`**: the field still holds from `trick_cad`
+  falling to the landing's first pickup, so the last trick picture does not flicker
+  between its fields for the seek's ~0.3 s.
+- `dvd/emu.sv` **`hud_keep`**: set by the tail, cleared by the next NAV pack; the HUD keeps
+  the last pair through the exit flush.
+
+**Gates:** `run_trick_ctrl.sh --red` [12]-[16] (two ahead, nothing shown, a pickup on the
+release's clock, the tail, a lost queue) with M10-M15; [11] moved onto the fallback path.
+`run_pause_still.sh --red` gains a [tail] phase on the trick arms and M10.
+`check_trick_wiring.py --red` R27-R33. ⏳ The same capture on the rig as the A/B.
+
+## Next step
+
+0. The release fix above on the rig: the same HDMI capture, A/B against `dev-trickplay8`
+   (landing = the picture released on, no leaked frames, steady clock).
 1. The maintainer's hands-on: gamepad tap, gamepad hold, Trick Play = Off on the pad, and
    the field still on the interlaced raster.
 2. ~~Angle blocks on the rig~~ done 2026-11-26 (above): TFA both angles. Castle on the rig

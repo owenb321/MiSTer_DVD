@@ -833,7 +833,17 @@ module resample_addrgen (
    * persistence loop alternated its two fields exactly as a pause used to. The pin
    * carries across pickups (as across frame steps), so the walk shows one field of each
    * picture, steady; trick_cad drops at the release and the lock with it. */
-  wire       still_want = still_en && (pause || trick_cad) && ~step_arm && interlaced && ~deinterlace &&
+  /* ★ AND UNTIL THE LANDING'S FIRST PICTURE (2026-11-27, HDMI capture of a release).
+   * trick_cad drops at the exit seek's flush (trick play's tail), but the last trick
+   * picture stays on screen until the landing's first picture is picked up: released
+   * there, the loop alternated that picture's two fields for the ~0.3 s of the seek.
+   * trick_pin_tail carries the lock from trick_cad falling to the next real pickup. */
+  reg        trick_pin_tail;
+  always @(posedge clk)
+    if (~rst) trick_pin_tail <= 1'b0;
+    else if (trick_cad) trick_pin_tail <= 1'b1;
+    else if (clk_en && (state == STATE_INIT) && pickup_go) trick_pin_tail <= 1'b0;
+  wire       still_want = still_en && (pause || trick_cad || trick_pin_tail) && ~step_arm && interlaced && ~deinterlace &&
                           cur_ilace && img0_field && ~sif2x;
   /* pin_bot: the field held on screen — the one scanned LAST when the lock engages, so
    * the pause shows what was on screen rather than jumping back half a frame. Held for

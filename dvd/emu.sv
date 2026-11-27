@@ -734,7 +734,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-trickplay8"
+`define CORE_VERSION "dev-trickplay9"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -1763,6 +1763,14 @@ wire [31:0] trick_seek_rbn;
 wire        trick_vobu_w, trick_edge_w;
 wire [31:0] trick_nav_w, trick_eltm_w;
 wire [15:0] trick_xcell_w, trick_entries_w;
+// THE EXIT (2026-11-27, docs/trick_play.md "The release"): trick_tail holds from the exit
+// seek to its flush, and trick_hold = active | tail is what keeps the ES filter, audio
+// drop, cadence and field still up through it. trick_shown_w = a display pickup (clk_dec
+// pickup counter, bit 0 into clk_sys); trick_skip_w = the ES filter dropped a VOBU's
+// picture. Both feed trick_ctrl's on-screen queue.
+wire        trick_tail, trick_shown_ovf;
+wire        trick_hold = trick_active | trick_tail;
+wire        trick_shown_w, trick_skip_w;
 wire        seek_any_pulse = scrub_seek_pulse | rst_seek_pulse | trick_seek_pulse;
 wire [31:0] seek_any_rbn   = rst_seek_pulse   ? rst_seek_rbn :
                              trick_seek_pulse ? trick_seek_rbn : scrub_seek_rbn;
@@ -2799,6 +2807,11 @@ trick_ctrl trick_ctrl_inst (
     .trick_vobu (trick_vobu_w),
     .trick_nav  (trick_nav_w),
     .trick_edge (trick_edge_w),
+    .shown      (trick_shown_w),
+    .skipped    (trick_skip_w),
+    .flush      (seek_ack),
+    .tail       (trick_tail),
+    .shown_ovf  (trick_shown_ovf),
     .active     (trick_active),
     .tier       (trick_tier),
     .rev        (trick_rev),
@@ -4212,7 +4225,7 @@ ps_demux ps_demux_inst (
     .in_ready     (ps_demux_in_ready),
 
     // O[8:6]: which audio substream/track to forward (default 0 = substream 0x80).
-    .aud_drop     (trick_active),    // trick play: every audio PES discarded (the ring would stall the demux)
+    .aud_drop     (trick_hold),      // trick play: every audio PES discarded (the ring would stall the demux)
     .aud_track    (aud_track_eff),   // Phase 4: SetSTN (SPRM1) wins when set
     .aud_realign  (aud_switch | dmx_rlgn_go),   // new track, or the landing after a hard flush, starts on a real frame (see dmx_rlgn_go)
 
@@ -4223,7 +4236,7 @@ ps_demux ps_demux_inst (
     // enable - with subtitles Off it discarded the button subpicture PES
     // before spu_decode ever saw it (highlight only appeared if subs were on
     // at menu load). sp_en = O[15] | menu-up, defined at the transport block.
-    .sp_enable    (sp_route_en & ~trick_active),   // no subtitle units over trick frames
+    .sp_enable    (sp_route_en & ~trick_hold),     // no subtitle units over trick frames
 
     // Video ES -> decoder-clock CDC FIFO (vidfeed_dc below). The decoder now runs
     // on clk_dec (81 MHz) while ps_demux is on clk_sys (27 MHz), so the ES byte
@@ -4252,7 +4265,7 @@ ps_demux ps_demux_inst (
     .aud_frame_pts_valid (ps_aud_frame_pts_valid),
 
     // NAV-pack PCI payload -> nav_pci (Phase-3 disc-menu buttons)
-    .pci_enable       (menus_on & ~trick_active),   // no buttons arm over trick frames
+    .pci_enable       (menus_on & ~trick_hold),     // no buttons arm over trick frames
     .pci_byte         (ps_pci_byte),
     .pci_valid        (ps_pci_valid),
     .pci_frame_start  (ps_pci_frame_start),
@@ -5456,7 +5469,7 @@ reg  sched_en_s1, sched_en_dec;
 always @(posedge clk_dec) begin sched_en_s1 <= ~av_freerun; sched_en_dec <= sched_en_s1; end
 // trick play's display cadence (disp_sched cad_en): a level, two flops into clk_dec
 reg  trick_cad_s1, trick_cad_dec;
-always @(posedge clk_dec) begin trick_cad_s1 <= trick_active; trick_cad_dec <= trick_cad_s1; end
+always @(posedge clk_dec) begin trick_cad_s1 <= trick_hold; trick_cad_dec <= trick_cad_s1; end
 
 wire [32:0] core_stc;            wire core_stc_anchored;                 // clk_dec
 wire        core_disp_anchored;   // clk_dec: the clock is on the DISPLAY timeline, not the parse front
@@ -5553,10 +5566,15 @@ always @(posedge clk_sys)
 wire [7:0] tf_byte;
 wire       tf_mark, tf_valid, tf_ready;
 wire [15:0] tf_skip_n, tf_pair_n;
+reg        tf_skip_b0_q;
+always @(posedge clk_sys) tf_skip_b0_q <= tf_skip_n[0];
+// one clk per dropped first picture; |tf_skip_n so the pipe reset taking an odd count
+// back to 0 is not read as a drop
+assign trick_skip_w = (tf_skip_n[0] ^ tf_skip_b0_q) && (|tf_skip_n);
 trick_es_filter trick_es_filter_inst (
     .clk       (clk_sys),
     .rst_n     (pipe_rst_n),
-    .en        (trick_active),
+    .en        (trick_hold),
     .in_byte   (ps_vid_byte),
     .in_mark   (ps_vid_mark),
     .in_valid  (ps_vid_valid),
@@ -6058,6 +6076,11 @@ assign film_det_pal_sync  = film_det_pal_s2;
 // dvd_telem (tools/mister.py telem). See docs/motcomp_throughput.md.
 wire [15:0] core_frames_late, core_frames_dropped;
 wire [15:0] core_pickups;   // DVD-FORK (telemetry): content frames picked up for display (clk_dec, free-running)
+// Trick play's on-screen queue: each pickup toggles bit 0 (pickups are >= one refresh
+// apart, so a two-flop level sync and an edge cannot miss one).
+reg  [2:0] pick_b0_s;
+always @(posedge clk_sys) pick_b0_s <= {pick_b0_s[1:0], core_pickups[0]};
+assign trick_shown_w = pick_b0_s[2] ^ pick_b0_s[1];
 wire [15:0] core_pic_max, core_pic_n, core_pic_over;   // DVD-FORK DEBUG (dec_duty per picture): telemetry words 22..24
 wire [15:0] core_duty_disp, core_duty_starve, core_duty_back, core_duty_ref;   // DVD-FORK DEBUG (dec_duty): clk_dec cycles/4096, telemetry words 16..19
 wire [15:0] aud_play_cnt;   // DVD-FORK (telemetry): audio play ticks/16 (clk_sys, free-running)
@@ -7195,18 +7218,30 @@ wire [3:0]  hud_alpha_w;
 // nav_dsi's staleness contract). Before the first NAV pack after a flush there is
 // no pair: the start follows the reader live and c_eltm is nav_dsi's reset 0, as
 // before. gated by tools/check_trick_wiring.py.
+// ★ TRICK PLAY'S EXIT KEEPS THE LAST PAIR (2026-11-27, HDMI capture: 8:48 -> 7:48 ->
+// 9:18). The exit seek's flush drops the pair, and until the landing's first NAV pack the
+// reader-live fallback read the landing cell's start + 0. hud_keep, set by trick play's
+// tail and cleared by the next NAV pack, holds the last pair through that gap (the
+// landing is the VOBU on screen, so its time is the one already shown). The pair's data
+// registers therefore carry no pipe reset; only hud_pair_v does.
 reg [31:0] hud_cs_l, hud_eltm_l;
-reg        hud_pair_v;
+reg        hud_pair_v, hud_keep;
 always @(posedge clk_sys or negedge pipe_rst_n) begin
-    if (!pipe_rst_n) begin
-        hud_pair_v <= 1'b0; hud_cs_l <= 32'd0; hud_eltm_l <= 32'd0;
-    end else if (dsi_commit) begin
-        hud_pair_v <= 1'b1; hud_cs_l <= cur_cell_start_w; hud_eltm_l <= dsi_c_eltm;
-    end
+    if (!pipe_rst_n)     hud_pair_v <= 1'b0;
+    else if (dsi_commit) hud_pair_v <= 1'b1;
 end
+always @(posedge clk_sys) begin
+    if (dsi_commit) begin hud_cs_l <= cur_cell_start_w; hud_eltm_l <= dsi_c_eltm; end
+end
+always @(posedge clk_sys or negedge reset_n) begin
+    if (!reset_n)        hud_keep <= 1'b0;
+    else if (dsi_commit) hud_keep <= 1'b0;
+    else if (trick_tail) hud_keep <= 1'b1;
+end
+wire hud_use_l = hud_pair_v | hud_keep;
 bcd_time_add hud_time_add (
-    .a   (hud_pair_v ? hud_cs_l   : cur_cell_start_w),
-    .b   (hud_pair_v ? hud_eltm_l : dsi_c_eltm),
+    .a   (hud_use_l ? hud_cs_l   : cur_cell_start_w),
+    .b   (hud_use_l ? hud_eltm_l : dsi_c_eltm),
     .sum (whole_eltm_w)
 );
 // SEEK-PREVIEW CLOCK -- dvd/seek_time.sv. The HUD clock used to sit frozen at
