@@ -615,6 +615,19 @@ crawl from the film (cell 8, 0-based):
 - A rewind started inside the block on angle 2 left from `block_first` straight to cell 0,
   showing only French pictures.
 
+## VM timing unaffected: `hil_suite` vs v0.11.0 (2026-11-27)
+
+Maintainer's question: does trick play disturb the VM timing work (cell commands at the
+displayed cell end, button windows, stills)? By construction it cannot start where those
+run (`trick_allowed` excludes menus, in-title menus, armed buttons, stills, stop), and every
+datapath change is gated by the trick signals. Measured: `tools/hil_suite.py` (quick tier,
+7 scenarios, no FF/REW pressed), `dev-trickplay8` against v0.11.0 on rig .236:
+**14 checks, 0 FAIL, 0 regressions** (Mad Dog `arms_on_time` worst +0.0001 s on both,
+`shots_scored`, Thayer's route, Dragon's Lair moves, Weakest Link answers). Jump latency
+(`hil_jumps.py`) equal within the sample's noise (medians 0.085-0.167 s on both arms).
+Not covered: skipped cells' commands during a hold do not run (as for a time seek), and a
+hold cancels a natural transition already pending, as the scrub's seek did.
+
 ## The release: landing on the picture on screen (maintainer, 2026-11-27)
 
 Maintainer on `dev-trickplay8`: "there is a bit of a jarring transition from the trick play
