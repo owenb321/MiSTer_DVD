@@ -25,9 +25,10 @@ Checked:
   * the HUD clock adds a cell start and a c_eltm latched TOGETHER at dsi_commit
     (dropped by pipe_rst_n), not the reader-timed cell start; trick play's exit
     keeps the last pair (hud_keep) until the landing's first NAV pack;
-  * THE EXIT (2026-11-27): trick_ctrl's on-screen queue hears every display pickup
-    (core_pickups bit 0, two flops into clk_sys), every ES-filter skip, and the
-    reader's seek_ack as the flush; the filter, audio drop, subpicture/PCI gates and
+  * THE EXIT (2026-11-27): trick_ctrl's exit target is cur_rbn = dsi_nv_pck_lbn, the
+    NAV pack whose time the HUD shows (maintainer's decision: the release resumes at the
+    clock, not at the trick picture), and it hears the reader's seek_ack as the flush;
+    the filter, audio drop, subpicture/PCI gates and
     the cadence run on trick_hold = trick_active | trick_tail, so the tail between the
     exit seek and its flush is still filtered; the reader keeps trick_active.
 
@@ -145,7 +146,7 @@ def check(emu_src, qsf_src):
                    ('active', 'trick_active'), ('tier', 'trick_tier'), ('rev', 'trick_rev'),
                    ('go', 'trick_go'), ('seek_pulse', 'trick_seek_pulse'),
                    ('seek_rbn', 'trick_seek_rbn'), ('owns', 'trick_owns'),
-                   ('shown', 'trick_shown_w'), ('skipped', 'trick_skip_w'), ('flush', 'seek_ack'),
+                   ('flush', 'seek_ack'),
                    ('tail', 'trick_tail')):
         want(port(tc, p) == net, f'trick_ctrl .{p} is {port(tc, p)!r}, must be {net}')
     al = assign_rhs(src, 'trick_allowed') or ''
@@ -187,12 +188,8 @@ def check(emu_src, qsf_src):
     # the tail and the on-screen queue's inputs
     want(re.search(r'wire\s+trick_hold\s*=\s*trick_active\s*\|\s*trick_tail\s*;', src),
          'trick_hold is not trick_active | trick_tail')
-    want(re.search(r'always @\(posedge clk_sys\) pick_b0_s <= \{pick_b0_s\[1:0\], core_pickups\[0\]\};', src)
-         and assign_rhs(src, 'trick_shown_w') == 'pick_b0_s[2] ^ pick_b0_s[1]',
-         'trick_shown_w is not core_pickups[0] through two clk_sys flops, edge-detected')
-    want(re.search(r'always @\(posedge clk_sys\) tf_skip_b0_q <= tf_skip_n\[0\];', src)
-         and (assign_rhs(src, 'trick_skip_w') or '').replace(' ', '') == '(tf_skip_n[0]^tf_skip_b0_q)&&(|tf_skip_n)',
-         f"trick_skip_w is not the filter's skip count stepping: {assign_rhs(src, 'trick_skip_w')!r}")
+    want(port(tc, 'shown') is None and port(tc, 'skipped') is None,
+         'trick_ctrl still has the on-screen queue inputs (.shown/.skipped): the exit follows the HUD')
     want(port(rd, 'trick_en') == 'trick_active', f"the reader's trick_en is {port(rd, 'trick_en')!r}, must stay trick_active")
 
     # the ES filter between the demux and the shim
@@ -301,11 +298,10 @@ RED = [
     ('R6 buttons over trick frames', '.pci_enable       (menus_on & ~trick_hold),', '.pci_enable       (menus_on),'),
     ('R27 no tail: the exit seek plays unfiltered until its flush', 'wire        trick_hold = trick_active | trick_tail;',
      'wire        trick_hold = trick_active;'),
-    ('R28 the queue never hears a pickup', '.shown      (trick_shown_w),', ".shown      (1'b0),"),
-    ('R29 the pickup edge from an unsynchronised bit', 'assign trick_shown_w = pick_b0_s[2] ^ pick_b0_s[1];',
-     'assign trick_shown_w = core_pickups[0] ^ pick_b0_s[0];'),
+    ('R28 the exit follows the reader, not the HUD', '.cur_rbn    (dsi_nv_pck_lbn),\n    .trick_vobu (trick_vobu_w),',
+     '.cur_rbn    (trick_nav_w),\n    .trick_vobu (trick_vobu_w),'),
     ('R30 the tail never ends at the flush', '.flush      (seek_ack),', ".flush      (1'b0),"),
-    ('R31 a filter skip not reported', '.skipped    (trick_skip_w),', ".skipped    (1'b0),"),
+    ('R31 the on-screen queue back', '.flush      (seek_ack),', ".shown      (trick_shown_w),\n    .flush      (seek_ack),"),
     ('R32 the exit forgets the HUD pair', 'wire hud_use_l = hud_pair_v | hud_keep;', 'wire hud_use_l = hud_pair_v;'),
     ('R33 the reader kept in trick play through the tail', '.trick_en       (trick_active),', '.trick_en       (trick_hold),'),
     ('R7 the filter bypassed', '.in_byte    (tf_byte),', '.in_byte    (ps_vid_byte),'),

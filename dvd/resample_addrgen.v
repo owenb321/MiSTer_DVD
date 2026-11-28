@@ -835,10 +835,10 @@ module resample_addrgen (
    *     cur_ilace keep the picture on screen. The first TAGGED pickup shows and ends it.
    *     TAIL_SWALLOW_MAX bounds it: a stream with no tags never freezes the display.
    *  ⚠ Slot reuse: once the stale picture is picked up, picbuf may decode the landing
-   *     I-frame INTO the slot still being scanned. On a normal exit (trick_ctrl's queue)
-   *     the landing I-frame IS the picture on screen, so it rewrites identical pixels. On
-   *     the fallback exits (lost queue, nothing shown) it is a different picture and paints
-   *     in over at most a field: a real-content cut, not a flash of the wrong scene. */
+   *     I-frame INTO the slot still being scanned. Since the exit follows the HUD clock
+   *     (trick_ctrl.sv, 2026-11-27) the landing is a different picture from the held one
+   *     at every release, so it can paint in over at most a field: part of the cut to the
+   *     clock's time, not a flash of a third scene (which the swallow still removes). */
   localparam [1:0] TAIL_SWALLOW_MAX = 2'd3;
   reg        trick_pin_tail;
   reg  [1:0] tail_swallow_n;

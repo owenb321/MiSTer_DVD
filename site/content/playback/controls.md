@@ -342,7 +342,8 @@ at speed: a new picture every quarter of a second, faster the longer you hold �
 **40×** after 2 seconds, **120×** after 4½ and **480×** after 8. The status line stays up
 with the clock running and two to five arrows for the speed, and the progress bar shows
 where you are in the film. Let go and the film carries on
-playing from the picture on screen. Sound and subtitles are off while it runs. Reaching the
+playing from the time on the clock. The picture runs a little behind the clock while you
+hold, so it jumps forward to catch up when playback resumes. Sound and subtitles are off while it runs. Reaching the
 end of the film lets it finish as normal; rewinding to its start resumes playing there.
 
 A physical disc and a disc image run at the same speeds. The core paces both to what a DVD

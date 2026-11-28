@@ -725,11 +725,38 @@ holds at 120x, 60 fps capture): the A->X->A detector finds **0 of 6** flashes on
 Fit: SEED 7 missed clk_mem (89.59 MHz at 100 C); SEED 9 closes (clk_dec 91.87/88.84, clk_mem
 90.14/94.02), 40,771 / 41,910 ALMs (97 %), `clock_check` PASS.
 
+## The exit follows the HUD clock (maintainer, 2026-11-27)
+
+Shown the finding above (the trick HUD clock leads the picture by ~2 rungs), the maintainer
+chose the clock as the reference: "I want the seek to be accurate to the hud clock, not the
+trick play image". So `dev-trickplay11` reverses the "landing on the picture on screen" exit
+of `dev-trickplay9`:
+
+- `dvd/trick_ctrl.sv` exits to `cur_rbn` = `dsi_nv_pck_lbn`, the sector of the last NAV pack
+  the demux parsed. The HUD clock is the cell start plus the `c_eltm` of that same pack,
+  latched together at `dsi_commit`, so play resumes exactly at the time on the clock, and
+  with `hud_keep` the clock does not move at the release. The picture steps forward to it
+  (the decoder and its cadence slot hold pictures the demux has passed). Released before the
+  demux parsed a trick NAV pack, `cur_rbn` is still the entry seek's landing: the entry
+  point. The edge exit is unchanged (the edge VOBU).
+- **Removed:** the on-screen queue (`q0`-`q3`, `shown`/`skipped`, `shown_ovf`, `nav_prev`,
+  `entry_rbn`, the one-ahead fallback) and its `emu.sv` feeds (`trick_shown_w` off
+  `core_pickups[0]`, `trick_skip_w` off the filter's `skip_n`). The filter keeps `skip_n`.
+- **Kept:** the tail, `trick_pin_tail` and its swallow (`dev-trickplay10`). The pending
+  next-trick picture is still unrelated to both the held picture and the landing.
+  ⚠ The slot-reuse caveat now applies at every release: the landing is a different picture
+  from the held one, so it can paint in over at most a field, as part of the cut.
+
+**Gates:** `run_trick_ctrl.sh --red` rewritten to 12 scenarios: [4]/[5]/[11] put the HUD's
+VOBU apart from the latest arm, [6] armed but nothing parsed; M10 (exit to the latest arm)
+and M11 (the edge to the HUD's VOBU). `check_trick_wiring.py --red` R28 (`cur_rbn` from the
+reader) and R31 (the queue's inputs back).
+
 ## Next step
 
 0. ~~`dev-trickplay10` on the rig~~ done 2026-11-27: 0/6 flashes vs 5/6 (above).
-0b. Decide: the trick HUD clock leads the picture by the lead (above). A fix would queue
-   the HUD's time pair beside the VOBU in `trick_ctrl`'s on-screen queue.
+0b. `dev-trickplay11` on the rig: the same six-release capture; the HUD clock must not step
+   back at a release, the landing must match the clock, and still 0 flashes.
 1. The maintainer's hands-on: gamepad tap, gamepad hold, Trick Play = Off on the pad, and
    the field still on the interlaced raster.
 2. ~~Angle blocks on the rig~~ done 2026-11-26 (above): TFA both angles. Castle on the rig

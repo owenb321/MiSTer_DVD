@@ -734,7 +734,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "dev-trickplay10"
+`define CORE_VERSION "dev-trickplay11"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -1765,12 +1765,10 @@ wire [31:0] trick_nav_w, trick_eltm_w;
 wire [15:0] trick_xcell_w, trick_entries_w;
 // THE EXIT (2026-11-27, docs/trick_play.md "The release"): trick_tail holds from the exit
 // seek to its flush, and trick_hold = active | tail is what keeps the ES filter, audio
-// drop, cadence and field still up through it. trick_shown_w = a display pickup (clk_dec
-// pickup counter, bit 0 into clk_sys); trick_skip_w = the ES filter dropped a VOBU's
-// picture. Both feed trick_ctrl's on-screen queue.
-wire        trick_tail, trick_shown_ovf;
+// drop, cadence and field still up through it. The exit seeks to dsi_nv_pck_lbn, the NAV
+// pack whose time the HUD shows (docs/trick_play.md "The exit follows the HUD clock").
+wire        trick_tail;
 wire        trick_hold = trick_active | trick_tail;
-wire        trick_shown_w, trick_skip_w;
 wire        seek_any_pulse = scrub_seek_pulse | rst_seek_pulse | trick_seek_pulse;
 wire [31:0] seek_any_rbn   = rst_seek_pulse   ? rst_seek_rbn :
                              trick_seek_pulse ? trick_seek_rbn : scrub_seek_rbn;
@@ -2807,11 +2805,8 @@ trick_ctrl trick_ctrl_inst (
     .trick_vobu (trick_vobu_w),
     .trick_nav  (trick_nav_w),
     .trick_edge (trick_edge_w),
-    .shown      (trick_shown_w),
-    .skipped    (trick_skip_w),
     .flush      (seek_ack),
     .tail       (trick_tail),
-    .shown_ovf  (trick_shown_ovf),
     .active     (trick_active),
     .tier       (trick_tier),
     .rev        (trick_rev),
@@ -5566,11 +5561,6 @@ always @(posedge clk_sys)
 wire [7:0] tf_byte;
 wire       tf_mark, tf_valid, tf_ready;
 wire [15:0] tf_skip_n, tf_pair_n;
-reg        tf_skip_b0_q;
-always @(posedge clk_sys) tf_skip_b0_q <= tf_skip_n[0];
-// one clk per dropped first picture; |tf_skip_n so the pipe reset taking an odd count
-// back to 0 is not read as a drop
-assign trick_skip_w = (tf_skip_n[0] ^ tf_skip_b0_q) && (|tf_skip_n);
 trick_es_filter trick_es_filter_inst (
     .clk       (clk_sys),
     .rst_n     (pipe_rst_n),
@@ -6076,11 +6066,6 @@ assign film_det_pal_sync  = film_det_pal_s2;
 // dvd_telem (tools/mister.py telem). See docs/motcomp_throughput.md.
 wire [15:0] core_frames_late, core_frames_dropped;
 wire [15:0] core_pickups;   // DVD-FORK (telemetry): content frames picked up for display (clk_dec, free-running)
-// Trick play's on-screen queue: each pickup toggles bit 0 (pickups are >= one refresh
-// apart, so a two-flop level sync and an edge cannot miss one).
-reg  [2:0] pick_b0_s;
-always @(posedge clk_sys) pick_b0_s <= {pick_b0_s[1:0], core_pickups[0]};
-assign trick_shown_w = pick_b0_s[2] ^ pick_b0_s[1];
 wire [15:0] core_pic_max, core_pic_n, core_pic_over;   // DVD-FORK DEBUG (dec_duty per picture): telemetry words 22..24
 wire [15:0] core_duty_disp, core_duty_starve, core_duty_back, core_duty_ref;   // DVD-FORK DEBUG (dec_duty): clk_dec cycles/4096, telemetry words 16..19
 wire [15:0] aud_play_cnt;   // DVD-FORK (telemetry): audio play ticks/16 (clk_sys, free-running)
