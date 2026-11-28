@@ -489,7 +489,7 @@ otherwise; `--red` runs its mutation arms).
 | `.cue` sheets (audio CD and VCD) | ✅ | `cdda.md` | `main/tests/run_tests.sh --red` |
 | Drive region tool (`set_dvd_region.sh`) | ✅ ⏳ RPC-1 arm | `physical_disc.md` | `tools/test_set_dvd_region.py` |
 | Support bundle: `dvd_report.py` + the Audio+Subtitle chord | ✅ | `bug_reports.md`, `support_bundle_hps.md` | `main/tests` |
-| `Load Video` row names what is mounted (stock `2dd3662` left it blank for the drive, `.iso`, `.cue`): file name, or disc icon + volume label | ✅ HW (maintainer: drive, `.iso`, `.VOB`, audio CD, eject), MERGED PR #NN | `main/integration/INTEGRATION.md` "Steps 63-65" | `main/tests/run_tests.sh --red` |
+| `Load Video` row names what is mounted (stock `2dd3662` left it blank for the drive, `.iso`, `.cue`): file name, or disc icon + volume label | ✅ HW (maintainer: drive, `.iso`, `.VOB`, audio CD, eject), MERGED PR #207 | `main/integration/INTEGRATION.md` "Steps 63-65" | `main/tests/run_tests.sh --red` |
 
 ### Known gaps
 
