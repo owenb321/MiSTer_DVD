@@ -15,8 +15,9 @@ itself a MiSTer port of **Koen De Vleeschauwer's `mpeg2fpga`** hardware MPEG-2 d
 everything needed to turn a decoder into a player.
 
 > **Status: alpha.** Film and TV playback is the supported path and is exercised across a
-> library of hundreds of commercial discs. Interactive DVD *games* are
-> known-incomplete — see [Known limitations](#known-limitations).
+> library of hundreds of commercial discs. Interactive DVD *games* (FMV shooters, trivia
+> and board-game discs) play, with save states to keep their progress, but some still
+> mis-navigate — see [Known limitations](#known-limitations).
 
 
 📖 **[Read the manual](https://owenb321.github.io/MiSTer_DVD)** — install, controls, every setting, CRT and
@@ -44,12 +45,23 @@ know. It is not an endorsement of the approach — draw your own conclusions.
 - **DVD-Video** from a decrypted `.iso` — the disc's own menus, First Play, button
   highlights, chapters, subtitles, multi-angle and still frames, driven by a real
   [DVD virtual machine](https://owenb321.github.io/MiSTer_DVD/reference/compatibility/#navigation)
-  validated against libdvdnav.
+  validated against libdvdnav. Up to 32 subtitle tracks, with a disc's forced subtitles
+  shown even when subtitles are off.
+- **A set-top player's transport** — a status line and seek bar, chapter skip, hold
+  Fast Forward / Rewind to play a film at 16× up to 480×, frame step, A-B repeat, and
+  Stop that remembers your place. See
+  [Controls](https://owenb321.github.io/MiSTer_DVD/playback/controls/).
+- **[Save states](https://owenb321.github.io/MiSTer_DVD/playback/save-states/)** — eight
+  slots per disc plus an autosave, for game discs that keep progress or as a bookmark in a
+  film (needs `MiSTer_DVDcss`).
 - **Physical discs and CSS-encrypted images** with the optional
   [`MiSTer_DVDcss`](https://owenb321.github.io/MiSTer_DVD/formats/physical-discs/) add-on — no PC decrypt step, and
-  encrypted images need no optical drive at all.
+  encrypted images need no optical drive at all. Images are read about 25 seconds ahead,
+  so a network share that stalls doesn't interrupt the film.
 - **Video** — MPEG-2 and MPEG-1, NTSC and PAL auto-detected, progressive or native
-  480i/576i, [3:2 pulldown for film](https://owenb321.github.io/MiSTer_DVD/video/film-24p/), PAL discs
+  480i/576i, [3:2 pulldown for film](https://owenb321.github.io/MiSTer_DVD/video/film-24p/),
+  [Weave, Bob or Blend](https://owenb321.github.io/MiSTer_DVD/video/interlaced/#deinterlace)
+  for video-sourced material, PAL discs
   [converted to NTSC](https://owenb321.github.io/MiSTer_DVD/video/film-24p/#standard-convert) for 60 Hz-only TVs, and one clock for
   picture, sound, subtitles and captions — so lip sync holds across seeks, menus and mode changes.
 - **Audio** — AC-3 (every channel mode), DTS (the core stream, up to 5.1), MP2, and LPCM (up to
@@ -91,7 +103,8 @@ know. It is not an endorsement of the approach — draw your own conclusions.
   bare `.rbf` is enough.
 - **Closed captions are analog-only** and need a television that decodes them. About
   6 NTSC discs in 10 carry them.
-- **Interactive DVD games are incomplete.** Film and TV discs are the supported path.
+- **Interactive DVD games are incomplete.** Most play, but some game discs mis-navigate.
+  Film and TV discs are the supported path.
 
 [Full list, with the reasoning →](https://owenb321.github.io/MiSTer_DVD/reference/compatibility/)
 

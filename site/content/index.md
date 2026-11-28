@@ -11,8 +11,9 @@ HDMI bitstream audio on the ARM side.
 
 !!! warning "Status: alpha"
     Film and TV playback is the supported path and is exercised across a library of
-    hundreds of commercial discs. Interactive DVD *games* are known-incomplete — see
-    [Compatibility](reference/compatibility.md).
+    hundreds of commercial discs. Interactive DVD *games* (FMV shooters, trivia and
+    board-game discs) play, with [save states](playback/save-states.md) to keep their
+    progress, but some still mis-navigate — see [Compatibility](reference/compatibility.md).
 
 <!-- SCREENSHOT hero.png — the core playing a film with the transport HUD visible.
      Save to site/content/assets/img/hero.png. Replace this comment with:
@@ -40,7 +41,10 @@ honest list of what works and what does not.
 
 **Video** — MPEG-2 decode at full rate, plus MPEG-1 (the DVD spec's other permitted video
 format, 352×240 / 352×288). NTSC and PAL are auto-detected from the stream. Progressive
-and native 480i/576i output, and 3:2 pulldown handling for film. Picture, sound,
+and native 480i/576i output, 3:2 pulldown handling for film,
+[Weave, Bob or Blend](video/interlaced.md#deinterlace) for video-sourced material, and
+[Standard Convert](video/film-24p.md#standard-convert) to play a PAL disc on a 60 Hz-only
+display. Picture, sound,
 subtitles and captions are all presented against one clock, so lip sync holds across
 seeks, menus and mode changes.
 
@@ -50,10 +54,14 @@ disc's authored menus work: First Play, root and title menus, PCI/HLI button hig
 D-pad navigation following the authored link graph, subpictures, chapters via the PTT
 tables, multi-angle, seamless-branch interleaved cells, still frames, and
 audio/subtitle/angle/language selection. Transport runs from a gamepad, a USB keyboard or an
-infrared remote, with an on-screen HUD and seek bar.
+infrared remote, with an on-screen HUD and seek bar, chapter skip, fast forward and rewind
+at up to 480×, frame step and A-B repeat — see [Controls](playback/controls.md).
+[Save states](playback/save-states.md) keep a game disc's progress, or your place in a film.
 
 **Audio** — AC-3, DTS and MPEG-1 Layer II decoded entirely in fabric (every AC-3 channel
-mode and the DTS core up to 5.1, downmixed to stereo) to HDMI; 48 kHz LPCM; AC-3 and DTS as
+mode and the DTS core up to 5.1, downmixed to stereo) to HDMI; LPCM in every DVD form, up to
+96 kHz and 8 channels (downmixed); a [Night mode](playback/settings.md#dynamic-range) for
+Dolby Digital; AC-3 and DTS as
 [IEC 61937 bitstream](audio/passthrough.md) to a receiver — over optical S/PDIF, or over
 HDMI itself with the custom Main, so 5.1 needs no add-on board. Tracks with no bitstream
 format — LPCM and MP2 — still play as PCM in that mode.
