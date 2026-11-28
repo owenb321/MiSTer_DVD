@@ -35,6 +35,10 @@
 #       FORWARD PTS gap                          audio playing over it
 #   M14 the re-phase ignores disp_anchored   -> [14e] a stale pre-flush picture makes the new
 #                                               cell's first tag a 'jump' and drops its audio
+#   M15 the trick cadence ignored            -> [15a] pictures follow their jumping PTS
+#   M16 a trick wait counts as late          -> [15b] (A/V Sync off: next_due forced high)
+#   M17 a trick pickup anchors               -> [15a] an audio re-phase per I-frame
+#   M18 the first trick picture waits        -> [15a] a whole period of the old frame
 #
 # ⚠ NOT COVERED HERE, and it cost a hardware round: dvd_audio_decode's play_err is the
 # LIP-SYNC measurement (clock minus audio playback position). Re-basing play_anchor on a
@@ -128,6 +132,15 @@ mut M12 "(d_pic_next < -frame_s);
 # extrapolation, reads as a backward jump and discards the new cell's buffered audio
 # (Scooby-Doo 2 "good job" heard as "job").
 mut M14 "wire disc_jump_w = has_tag && anchored && next_valid && disp_anchored &&" "wire disc_jump_w = has_tag && anchored && next_valid &&" "FAIL \[14e\]"
+# M15-M18: TRICK PLAY CADENCE (docs/trick_play.md "The display cadence"), [15].
+# M15 the cadence ignored: pictures follow their (jumping) PTS again
+mut M15 "pic_due_r  <= cad_en ? (!pic_valid || cad_first || cad_ready)" "pic_due_r  <= 1'b0 ? (!pic_valid || cad_first || cad_ready)" "FAIL \[15a\]"
+# M16 a picture waited for in trick play counts as late (frame_late, the governor)
+mut M16 "next_due_r <= !cad_en &&" "next_due_r <= 1'b1 &&" "FAIL \[15b\]"
+# M17 a trick pickup anchors: every I-frame a PTS jump, every one an audio re-phase
+mut M17 "if (pickup && !cad_en) begin" "if (pickup) begin" "FAIL \[15a\]"
+# M18 the first trick picture waits a whole period instead of showing at once
+mut M18 "(!pic_valid || cad_first || cad_ready)" "(!pic_valid || cad_ready)" "FAIL \[15a\]"
 
 wait
 for f in "$RESDIR"/*; do

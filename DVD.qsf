@@ -147,6 +147,10 @@ set_global_assignment -name SYSTEMVERILOG_FILE dvd/nav_pci.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/aud_drain.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/nav_dsi.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/scrub_ctrl.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/trick_ctrl.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/trick_es_filter.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/kbd_hold.sv
+set_global_assignment -name SYSTEMVERILOG_FILE dvd/pad_hold.sv
 set_global_assignment -name SYSTEMVERILOG_FILE dvd/dpad_seek.sv
 # DVD-remote buttons (2026-09-13): Stop + screensaver, the Aspect button's
 # OSD-override/settle, and A-B repeat. Extracted from emu.sv rather than written
@@ -1650,4 +1654,7 @@ set_global_assignment -name PHYSICAL_SYNTHESIS_COMBO_LOGIC OFF
 # version string. SEED 7 held first roll: clk_dec 92.03/89.82, clk_mem 99.01/99.66
 # (@100C / @-40C). 38,286 / 41,910 ALMs (91 %), 520 / 553 M10K, 87 / 112 DSP.
 # clock_check PASS (0 fail, 0 warn). Build releases/DVD_20261122.rbf.
-set_global_assignment -name SEED 7
+# feature/trick-play (dev-trickplay10): SEED 7 missed clk_mem (89.59 @100C). SEED 9 first in
+# the sweep: clk_dec 91.87/88.84, clk_mem 90.14/94.02 (@100C / @-40C), 40,771 / 41,910 ALMs
+# (97 %). clock_check PASS (0 fail, 0 warn). Re-sweep at the merge.
+set_global_assignment -name SEED 9

@@ -69,6 +69,7 @@ module iso_reader_autoptt_tb;
     wire        seek_ack, jump_ack;
 
     dvd_iso_reader dut (
+        .trick_en(1'b0), .trick_tier(2'd0), .trick_rev(1'b0), .trick_go(1'b0),   // trick play off (a new input floats Z)
         .cc_btns(1'b0),   // issue #176 hold off: a new input floats Z unless tied
         .clk(clk), .rst_n(rst_n), .start(start), .file_size(file_size),
         .lu_lang_pref(16'd0), .title_sel(7'd0),

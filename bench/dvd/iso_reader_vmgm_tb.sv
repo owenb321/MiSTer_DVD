@@ -55,6 +55,7 @@ module iso_reader_vmgm_tb;
     wire [7:0]  cmd_wdata, cmd_nr_pre;
 
     dvd_iso_reader dut (
+        .trick_en(1'b0), .trick_tier(2'd0), .trick_rev(1'b0), .trick_go(1'b0),   // trick play off (a new input floats Z)
         .cc_btns(1'b0),   // issue #176 hold off: a new input floats Z unless tied
         // new reader inputs tied off: a floating input is X, and X on
         // agl_vm_en would poison the angle resolve (see the port comments).

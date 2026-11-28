@@ -52,7 +52,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
              rst,                                                                                                                 // clocked with clk
              stream_data, stream_valid,                                                                                           // clocked with clk
              stream_mark, pts_in, pts_in_valid,                                                                                  // DVD-FORK (PTS association): PES mark + PTS in
-             stc_tick, sched_en, half_scan, stc, stc_anchored, disp_anchored, anchor_req, anchor_disc, cc_credit_valid, cc_credit, anchor_delta, disp_lag, disp_lag_valid, sched_dbg_flags, sched_dbg_dur,                  // DVD-FORK (PTS scheduling): the free-running STC lives here (dvd/disp_sched.sv)
+             stc_tick, sched_en, trick_cad, half_scan, stc, stc_anchored, disp_anchored, anchor_req, anchor_disc, cc_credit_valid, cc_credit, anchor_delta, disp_lag, disp_lag_valid, sched_dbg_flags, sched_dbg_dur,                  // DVD-FORK (PTS scheduling): the free-running STC lives here (dvd/disp_sched.sv)
 	     reg_addr, reg_wr_en, reg_dta_in, reg_rd_en, reg_dta_out,                                                             // clocked with clk
              busy, error, interrupt, watchdog_rst,                                                                                // clocked with clk
              r, g, b, y, u, v, pixel_en, h_sync, v_sync, c_sync, h_pos, v_pos,                                                     // clocked with dot_clk
@@ -120,6 +120,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * emu for every consumer of the clock. */
   input            stc_tick;
   input            sched_en;
+  input            trick_cad;     // DVD-FORK (trick play, docs/trick_play.md): disp_sched's cadence mode
   input      [15:0]half_scan;
   output     [32:0]stc;
   output           stc_anchored;
@@ -528,6 +529,18 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   /* motcomp output */
   wire             motcomp_busy;            // asserted when motcomp input fifo's full
 
+  /* DVD-FORK FIX (full-decoder bench, 2026-11-22): these nets were declared after their first
+   * use, which Quartus accepts and Icarus rejects ("declaration after use"). Declared here
+   * instead, ahead of every use; the two initialised wires became assigns where they were.
+   * No logic changed. bench/dvd/trick_decode_tb.sv builds the whole decoder and needs it. */
+  wire        [3:0]aspect_ratio_information;// par. 6.3.3
+  wire  [7:0] vbw_phase;
+  wire        pic_hdr_pulse, pic_hdr_upd, pic_hdr_second;
+  wire [31:0] pic_hdr_bitpos;
+  wire        sched_due, sched_next_due, sched_catchup_late;
+  wire [11:0] disp_hsrc_w;
+  wire [11:0] disp_hdst_w;
+
   /* vld - syncgen interface */
   wire       [13:0]horizontal_size;         // horizontal size of frame
   wire       [13:0]vertical_size;           // vertical size of frame
@@ -629,7 +642,6 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   wire        [3:0]frame_rate_code;         // par. 6.3.3, Table 6-4
   wire        [1:0]frame_rate_extension_n;  // par. 6.3.3, par. 6.3.5
   wire        [4:0]frame_rate_extension_d;  // par. 6.3.3, par. 6.3.5
-  wire        [3:0]aspect_ratio_information;// par. 6.3.3
 
   assign           error = vld_err;
 
@@ -936,7 +948,6 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * will occupy in the VBUF, in the vld's parse-position coordinate. The
    * arithmetic lives in dvd/vbuf_pos.sv so bench/dvd/pts_chain_tb.sv exercises
    * the same module this core builds. */
-  wire  [7:0] vbw_phase;
   wire [25:0] vbuf_wr_cnt;
   wire        vbuf_wr_pulse;
   wire [28:0] stream_pos;
@@ -1078,8 +1089,6 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   /* read elementary stream from circular buffer, one bitfield at a time */
   /* DVD-FORK (PTS association): getbits parse position -> vld -> pts_assoc */
   wire [31:0] vld_bitpos;
-  wire        pic_hdr_pulse, pic_hdr_upd, pic_hdr_second;
-  wire [31:0] pic_hdr_bitpos;
   wire        skip_ack, skip_rff, skip_field, skip_tff, skip_pf;
 
   /* DVD-FORK (deep-fried menu stills, docs/quant_matrix.md): the bit window
@@ -1618,12 +1627,12 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
   /* DVD-FORK (PTS scheduling, docs/stc_freerun.md): the display scheduler and
    * the free-running STC. Reset by the VBUF flush (a seek/mount), never by the
    * keep_vbuf menu hop's pipe reset -- see the module header. */
-  wire        sched_due, sched_next_due, sched_catchup_late;
   disp_sched disp_sched (
     .clk(clk),
     .rst_n(sync_rst),
     .flush(flush_vbuf_eff),
     .sched_en(sched_en),
+    .cad_en(trick_cad),
     .tick(stc_tick),
     .video_live(video_live),
     .pause(pause),
@@ -1730,6 +1739,7 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
     .blend_en(blend_en),                                     // DVD-FORK (field blend)
     .scan_blend(blend_scan_w),
     .bob_en(bob_en),
+    .trick_cad(trick_cad),                                   // DVD-FORK (trick play): field-parity corrector off
     .std_cad(std_cad),                                       // DVD-FORK (Standard Convert): synthetic 3:2                                         // DVD-FORK (progressive bob)
     .scan_bob(bob_scan_w),
     .scan_bob_bot(bob_bot_w)
@@ -1894,11 +1904,11 @@ module mpeg2video(clk, mem_clk, dot_clk, dot_ce,
    * fills the screen. Crop reads the centre (mb_width - 2*hcrop_mb) macroblocks; hcrop_mb
    * = round(mb_width/8). Off (disp_hcrop_en=0) => hsrc_w == full width, stretch bypassed. */
   wire [7:0]  hcrop_mb_i  = disp_hcrop_en ? ((mb_width + 8'd4) >> 3) : 8'd0;
-  wire [11:0] disp_hsrc_w = (mb_width - (hcrop_mb_i << 1)) << 4;   // (mb_width - 2*hcrop)*16
+  assign      disp_hsrc_w = (mb_width - (hcrop_mb_i << 1)) << 4;   // (mb_width - 2*hcrop)*16
   /* DVD-FORK FIX (SIF analog fill): with the fill active the stretch target is the 720
    * raster width, not the native line width — 352->720 (SIF, qstep 125) or 256->720
    * (Crop+SIF, qstep 91), both inside disp_hstretch's upscale RATIO CONTRACT. */
-  wire [11:0] disp_hdst_w = disp_hfill_en ? 12'd720 : (mb_width << 4); // full raster line width = what a Fit line emits
+  assign      disp_hdst_w = disp_hfill_en ? 12'd720 : (mb_width << 4); // full raster line width = what a Fit line emits
 
   /* DVD-FORK FIX (field start, phase 2): the regfile's syncgen_rst (active LOW, one clk
    * cycle per modeline register write) synchronized to dot_clk — the same sync_reset that

@@ -80,6 +80,7 @@ module iso_reader_bup_tb;
     reg  [7:0]  img [0:IMG_BYTES-1];
 
     dvd_iso_reader #(.NAV_CAP(1)) dut (
+        .trick_en(1'b0), .trick_tier(2'd0), .trick_rev(1'b0), .trick_go(1'b0),   // trick play off (a new input floats Z)
         .cc_btns(1'b0),   // issue #176 hold off: a new input floats Z unless tied
         // new reader inputs tied off: a floating input is X (see the port comments)
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(1'b0),

@@ -35,6 +35,7 @@ module disp_sched_tb;
 
   // ---------------------------------------------------------------- DUT I/O
   reg         flush = 0, sched_en = 1, tick = 0, video_live = 0, pause = 0;
+  reg         cad_en = 0;               // [15] trick play cadence
   reg  [32:0] prov_pts = 0; reg prov_valid = 0;
   reg         pic_valid = 0, pic_pts_valid = 0, pic_pts_2nd = 0, pic_ps = 0, pic_pf = 1, pic_tff = 1, pic_rff = 0;
   reg  [32:0] pic_pts = 0;
@@ -52,7 +53,7 @@ module disp_sched_tb;
   wire signed [33:0] anchor_delta, disp_lag;
 
   disp_sched dut (
-    .clk(clk), .rst_n(rst_n), .flush(flush), .sched_en(sched_en),
+    .clk(clk), .rst_n(rst_n), .flush(flush), .sched_en(sched_en), .cad_en(cad_en),
     .tick(tick), .video_live(video_live), .pause(pause),
     .prov_pts(prov_pts), .prov_valid(prov_valid),
     .pic_valid(pic_valid), .pic_pts_valid(pic_pts_valid), .pic_pts(pic_pts), .pic_pts_2nd(pic_pts_2nd),
@@ -203,6 +204,10 @@ module disp_sched_tb;
   always @(posedge clk) if (anchor_req && anchor_disc) disc_pulses = disc_pulses + 1;
   integer catchups = 0;
   always @(posedge clk) if (catchup_late) catchups = catchups + 1;
+  // [15] the tick of every pickup, for the cadence scenarios
+  integer pk_t [0:63];
+  integer pk_n = 0;
+  always @(posedge clk) if (pickup && pk_n < 64) begin pk_t[pk_n] = now; pk_n = pk_n + 1; end
 
   // ------------------------------------------------------------ scenarios
   integer errors = 0;
@@ -747,7 +752,73 @@ module disp_sched_tb;
     end
     $display("  [14e] stale untagged rff pickup then the new timeline: anchor_disc=%0d (want 0), disp_anchored=%0d", disc_pulses, disp_anchored);
 
-    if (errors == 0) $display("PASS: disp_sched_tb — 20 scenarios");
+    // [15] TRICK PLAY CADENCE (docs/trick_play.md "The display cadence"). cad_en:
+    //      each picture due 22,500 ticks (250 ms) after the previous pickup, PTS
+    //      ignored, the first at once; nothing late; no anchoring.
+    // [15a] 8 pictures, all ready, PTS jumping 30 s forward and back (every one a
+    //       discontinuity the normal path would re-anchor on).
+    reset_world(750, 1501, 1502, 0, 0, 2, 0, 4);
+    cad_en = 1;
+    for (i = 0; i < 8; i = i + 1)
+      add_pic(5000000 + ((i % 2) ? -2700000 : 2700000) * i, 1, 0, 1, 1, 0, 0, 0, 0, 0);
+    pk_n = 0;
+    // (t counts clocks: TICK_DIV of them per tick; 8 pickups need ~7 x 22,500 ticks)
+    t = 0; while (pickups < 8 && t < 8 * 24000 * TICK_DIV) begin @(posedge clk); t = t + 1; end
+    if (pickups < 8) begin errors = errors + 1; $display("FAIL [15a] only %0d of 8 pickups", pickups); end
+    else begin
+      if (pk_t[0] > 20 + 1502) begin
+        errors = errors + 1; $display("FAIL [15a] the first picture waited %0d ticks (want the first opportunity)", pk_t[0]);
+      end
+      for (i = 1; i < 8; i = i + 1)
+        if (pk_t[i] - pk_t[i-1] < 22500 - 750 || pk_t[i] - pk_t[i-1] > 22500 + 1502) begin
+          errors = errors + 1;
+          $display("FAIL [15a] pickup %0d came %0d ticks after the last (want 22500 on the scan grid)", i, pk_t[i] - pk_t[i-1]);
+        end
+    end
+    if (reanchors != 0) begin errors = errors + 1; $display("FAIL [15a] %0d anchor(s) in trick play (want 0)", reanchors); end
+    if (catchups != 0)  begin errors = errors + 1; $display("FAIL [15a] %0d catch-up drop(s) in trick play", catchups); end
+    $display("  [15a] cadence: %0d pickups, mean %0d ticks apart, anchors %0d", pickups,
+             (pk_t[7] - pk_t[0]) / 7, reanchors);
+
+    // [15b] a LATE picture (a slow physical read): ready 60,000 ticks after the
+    //       previous pickup. Shown at the first opportunity after it arrives, and the
+    //       wait is not "late" (next_due low: no frame_late, no governor). Run with
+    //       A/V Sync OFF: there next_due is otherwise forced high, so this is the arm
+    //       that sees cad_en's gate on it (with sched_en on, nothing in trick play
+    //       sets the timeline and next_due is low anyway).
+    reset_world(750, 1501, 1502, 0, 0, 2, 0, 4);
+    cad_en = 1; sched_en = 0;
+    add_pic(1000, 1, 0, 1, 1, 0, 0, 0, 0, 0);
+    add_pic(900000000, 1, 0, 1, 1, 0, 60000, 0, 0, 0);
+    add_pic(2000, 1, 0, 1, 1, 0, 60000, 0, 0, 0);
+    pk_n = 0;
+    t = 0; while (pickups < 3 && t < 120000 * TICK_DIV) begin @(posedge clk); t = t + 1; end
+    if (pickups < 3) begin errors = errors + 1; $display("FAIL [15b] only %0d of 3 pickups", pickups); end
+    else begin
+      if (pk_t[1] < 60000 || pk_t[1] > 60000 + 1502 + 2) begin
+        errors = errors + 1; $display("FAIL [15b] the late picture (ready at 60000) was picked up at %0d", pk_t[1]);
+      end
+      if (pk_t[2] - pk_t[1] < 22500 - 750) begin
+        errors = errors + 1; $display("FAIL [15b] the picture after a late one came only %0d ticks later", pk_t[2] - pk_t[1]);
+      end
+    end
+    if (lates != 0) begin errors = errors + 1; $display("FAIL [15b] %0d late(s) counted while waiting in trick play", lates); end
+    $display("  [15b] late picture at %0d (ready 60000), lates %0d", pk_t[1], lates);
+    sched_en = 1;
+
+    // [15c] cad_en overrides A/V Sync Off (sched_en = 0: every picture due at once)
+    reset_world(750, 1501, 1502, 0, 0, 2, 0, 4);
+    cad_en = 1; sched_en = 0;
+    for (i = 0; i < 4; i = i + 1) add_pic(1000 + 3003 * i, 1, 0, 1, 1, 0, 0, 0, 0, 0);
+    pk_n = 0;
+    t = 0; while (pickups < 4 && t < 4 * 24000 * TICK_DIV) begin @(posedge clk); t = t + 1; end
+    if (pickups < 4 || pk_t[3] - pk_t[0] < 3 * (22500 - 750)) begin
+      errors = errors + 1; $display("FAIL [15c] with A/V Sync off the cadence did not hold (%0d pickups)", pickups);
+    end
+    $display("  [15c] A/V Sync off: %0d pickups over %0d ticks", pickups, pk_t[3] - pk_t[0]);
+    cad_en = 0; sched_en = 1;
+
+    if (errors == 0) $display("PASS: disp_sched_tb — 23 scenarios");
     else begin $display("FAIL: disp_sched_tb — %0d error(s)", errors); $fatal(1); end
     $finish;
   end

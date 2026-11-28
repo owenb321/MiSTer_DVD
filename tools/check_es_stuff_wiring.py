@@ -126,13 +126,30 @@ def main():
     if rst == 'pipe_rst_n':
         bad.append("es_stuff.rst_n is pipe_rst_n -- it must survive the reset it keys on")
 
-    # demux -> shim
-    for dp, sp in (('vid_byte', 'in_byte'), ('vid_mark', 'in_mark'),
-                   ('vid_valid', 'in_valid'), ('vid_ready', 'in_ready')):
-        a = net(pd, dp, 'ps_demux')
-        b = net(sh, sp, 'es_stuff')
-        if a is not None and b is not None and a != b:
-            bad.append(f"ps_demux.{dp} ('{a}') != es_stuff.{sp} ('{b}') -- the shim is bypassed")
+    # demux -> shim, through the trick-play ES filter when it is there
+    # (dvd/trick_es_filter.sv: a wire outside trick play; tools/check_trick_wiring.py
+    # checks its own side of the seam)
+    tf = instantiation_body(src, 'trick_es_filter')
+    if tf is None:
+        for dp, sp in (('vid_byte', 'in_byte'), ('vid_mark', 'in_mark'),
+                       ('vid_valid', 'in_valid'), ('vid_ready', 'in_ready')):
+            a = net(pd, dp, 'ps_demux')
+            b = net(sh, sp, 'es_stuff')
+            if a is not None and b is not None and a != b:
+                bad.append(f"ps_demux.{dp} ('{a}') != es_stuff.{sp} ('{b}') -- the shim is bypassed")
+    else:
+        for dp, fp, fo, sp in (('vid_byte', 'in_byte', 'out_byte', 'in_byte'),
+                               ('vid_mark', 'in_mark', 'out_mark', 'in_mark'),
+                               ('vid_valid', 'in_valid', 'out_valid', 'in_valid'),
+                               ('vid_ready', 'in_ready', 'out_ready', 'in_ready')):
+            a = net(pd, dp, 'ps_demux')
+            b = net(tf, fp, 'trick_es_filter')
+            c = net(tf, fo, 'trick_es_filter')
+            d = net(sh, sp, 'es_stuff')
+            if a is not None and b is not None and a != b:
+                bad.append(f"ps_demux.{dp} ('{a}') != trick_es_filter.{fp} ('{b}')")
+            if c is not None and d is not None and c != d:
+                bad.append(f"trick_es_filter.{fo} ('{c}') != es_stuff.{sp} ('{d}') -- the shim is bypassed")
     # shim -> CDC
     for sp, cp in (('out_data', 'wr_data'), ('out_valid', 'wr_valid'),
                    ('out_ready', 'wr_ready')):
@@ -145,7 +162,7 @@ def main():
         for b in bad:
             print("  RED:", b)
         return 1
-    print("  es_stuff wiring: OK (ps_demux -> es_stuff -> vidfeed_cdc, armed on every jump/seek ack)")
+    print("  es_stuff wiring: OK (ps_demux -> [trick_es_filter] -> es_stuff -> vidfeed_cdc, armed on every jump/seek ack)")
     return 0
 
 

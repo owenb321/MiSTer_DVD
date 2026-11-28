@@ -55,7 +55,8 @@ module resample(
   still_en, scan_start, scan_half,                 // DVD-FORK (pause field still): see dvd/resample_addrgen.v
   blend_en, scan_blend,                            // DVD-FORK (field blend): see dvd/resample_addrgen.v
   bob_en, scan_bob, scan_bob_bot,                  // DVD-FORK (progressive bob): see dvd/resample_addrgen.v
-  std_cad                                          // DVD-FORK (Standard Convert): synthetic 3:2, see dvd/resample_addrgen.v
+  std_cad,                                         // DVD-FORK (Standard Convert): synthetic 3:2, see dvd/resample_addrgen.v
+  trick_cad                                        // DVD-FORK (trick play): field-parity corrector off, see dvd/resample_addrgen.v
   );
 
   input              clk;                      // clock
@@ -127,6 +128,7 @@ module resample(
   output             scan_blend;                  // DVD-FORK (field blend): that scan is a filtered scan (H+1 lines), blend OR bob
   input              bob_en;                      // DVD-FORK (progressive bob): the feature is on
   input              std_cad;                     // DVD-FORK (Standard Convert): synthetic 3:2 on the field raster
+  input              trick_cad;                   // DVD-FORK (trick play): clk_dec level, corrector off
   output             scan_bob;                    // DVD-FORK (progressive bob): that scan uses the bob kernel
   output             scan_bob_bot;                // DVD-FORK (progressive bob): ... and keeps the BOTTOM field
 
@@ -215,6 +217,7 @@ module resample(
     .scan_blend(scan_blend),
     .bob_en(bob_en),                              // DVD-FORK (progressive bob)
     .std_cad(std_cad),                            // DVD-FORK (Standard Convert)
+    .trick_cad(trick_cad),                        // DVD-FORK (trick play): corrector off
     .scan_bob(scan_bob),
     .scan_bob_bot(scan_bob_bot)
     );

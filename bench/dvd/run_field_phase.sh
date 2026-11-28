@@ -96,6 +96,36 @@ PYEOF
         "else if (progressive_sequence && interlaced)" 4 'FAIL \[D\]'
   _cmut C7_prog_seq_top "wire       nxt_first_top = (progressive_sequence && ~cad_on) ? 1'b1 : tff_eff;" \
         "wire       nxt_first_top = progressive_sequence ? 1'b1 : tff_eff;" 4 'FAIL \[[CAD]\]'
+  # Trick play: the corrector must be off under trick_cad ([T-trick]). Each mutant runs
+  # the whole +phase=0 sequence (~10 min); the two run concurrently.
+  _tmut() {  # name old new
+    local d="$CT/$1"; mkdir -p "$d"
+    python3 - "$d/resample_addrgen.v" "$2" "$3" <<'PYEOF' || { echo "  $1: anchor not found" > "$d/res"; return; }
+import sys
+out, old, new = sys.argv[1:4]
+s = open('dvd/resample_addrgen.v').read()
+assert s.count(old) == 1, f"mutation anchor not unique/found: {old!r}"
+open(out, 'w').write(s.replace(old, new))
+PYEOF
+    iverilog -g2012 -D__IVERILOG__ -I rtl/mpeg2 -o "$d/sim" \
+      rtl/mpeg2/resample.v "$d/resample_addrgen.v" rtl/mpeg2/resample_dta.v rtl/mpeg2/resample_bilinear.v \
+      rtl/mpeg2/mem_addr.v rtl/mpeg2/mixer.v $RTL_B >/dev/null 2>&1 \
+      || { echo "  $1: BUILD FAILED" > "$d/res"; return; }
+    local out; out=$(vvp "$d/sim" +phase=0 2>&1 || true)
+    if echo "$out" | grep -q '^\[T-trick\] FAIL: [1-9]' && ! echo "$out" | grep -q '==== PASS'; then
+      echo "  $1: caught ($(echo "$out" | grep '^\[T-trick\] FAIL' | head -1 | cut -c1-80))" > "$d/res"
+    else echo "  $1: *** NOT CAUGHT ***" > "$d/res"; fi
+  }
+  echo
+  echo "============ TRICK PLAY MUTATIONS (each must FAIL [T-trick]) ============"
+  _tmut T1_pickup_arm_on "wire       par_ins  = (alt_break ^ par_fb) && ~trick_cad;" \
+        "wire       par_ins  = (alt_break ^ par_fb);" &
+  _tmut T2_hold_arm_on "(repeat_cnt == 5'd0) && ~hold_freeze && par_fb && ~trick_cad;" \
+        "(repeat_cnt == 5'd0) && ~hold_freeze && par_fb;" &
+  wait
+  for t in T1_pickup_arm_on T2_hold_arm_on; do
+    cat "$CT/$t/res"; grep -q 'caught' "$CT/$t/res" || fail=1
+  done
   rm -rf "$CT"
 
   echo
