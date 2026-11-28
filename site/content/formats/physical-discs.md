@@ -40,6 +40,12 @@ With that in place: open the core with a disc in the drive and it plays; insert 
 the core is open and it plays; eject to stop, with **Eject** (B19) or the drive's own button. Remove the `[DVD]` section, or the binary, and
 the core reverts to image-only playback with the stock Main — nothing else changes.
 
+While a disc from the drive is loaded, the OSD's `Load Video` row starts with a small
+**disc icon** and shows the disc's volume label, the name its maker gave it (for example
+`STAR_WARS_TFA`). A disc with no usable label reads `DVD in drive`, `Video CD in drive` or
+`Audio CD in drive`. An image or file loaded from storage keeps the usual arrow and its
+file name, so the row always tells you which of the two is playing.
+
 A scratch over the disc's navigation data is read around: when a sector of a menu or
 chapter file can't be read, the same sector of its backup copy is used instead (see
 [Troubleshooting](../reference/troubleshooting.md#a-scratched-disc-has-no-menus-or-chapters)).

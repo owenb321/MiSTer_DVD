@@ -8,6 +8,7 @@
 #include <limits.h>
 
 #include "dvd_detect.h"
+#include "dvd_mountname.h"
 
 // Read one 2048-byte data sector with READ(10) — works on DVDs (the CD layer's
 // READ CD / 2352 path does not). Returns 0 on success.
@@ -31,6 +32,14 @@ static int dvd_read10(int fd, uint32_t lba, uint8_t *buf)
 	if (ioctl(fd, SG_IO, &io) < 0) return -1;
 	if (io.status || io.host_status) return -1;
 	return 0;
+}
+
+int dvd_volume_label(int fd, char *out, size_t n)
+{
+	uint8_t sec[2048];
+	if (n) out[0] = 0;
+	if (dvd_read10(fd, 16, sec)) return 0;
+	return dvd_mountname_from_pvd(sec, out, n);
 }
 
 int dvd_video_probe(int fd)

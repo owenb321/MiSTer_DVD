@@ -39,6 +39,7 @@
 
 static int    mounted = 0;         // 1 while WE own slot 0 with the optical drive
 static char   mounted_dev[16] = {0};  // its /dev/srN, exported by dvd_phys_device()
+static char   drive_label[40] = {0};  // its OSD name, exported by dvd_phys_label()
 static time_t last_scan = 0;
 static time_t reset_release_at = 0; // >0 while an eject reset pulse is being held
 
@@ -522,6 +523,12 @@ void dvd_phys_tick(void)
 	int is_dvd_video = dvd_video_probe(fd);
 	int is_vcd = !is_dvd_video && dvd_vcd_probe(fd);
 	int is_audio_cd = !is_dvd_video && !is_vcd && cd_audio_probe(fd);
+	// The OSD load row's name for this disc (dvd_mountname.h), read while the probe
+	// fd is still open: one more READ(10) of the sector dvd_video_probe() just read,
+	// once per insertion. An audio CD has no ISO9660 volume, so it is never asked.
+	if (!(is_dvd_video || is_vcd) || !dvd_volume_label(fd, drive_label, sizeof(drive_label)))
+		snprintf(drive_label, sizeof(drive_label), "%s",
+		         is_dvd_video ? "DVD in drive" : is_vcd ? "Video CD in drive" : "Audio CD in drive");
 	close(fd);
 	if (!is_dvd_video && !is_vcd && !is_audio_cd)
 	{
@@ -562,6 +569,11 @@ void dvd_phys_tick(void)
 		dvd_cdda_toc_upload();
 	}
 	else mounted_dev[0] = 0;
+}
+
+const char *dvd_phys_label(void)
+{
+	return drive_label;
 }
 
 const char *dvd_phys_device(void)

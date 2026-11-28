@@ -745,3 +745,46 @@ no step: `dvd_sstate_note_mount` (step 58) calls the flush itself. **One stock a
 (`OsdDisable();` + `static char path[1024];`, unique at `7317947` and at `fed03e5`): re-verify it on a
 `MAIN_MISTER_REF` bump. Power-off and the reset button never reach it. Detail:
 `docs/nav_engine.md` §11i.
+
+## Steps 63-65 — the `Load Video` row names what is mounted (`support/dvd/dvd_mountname.{h,cpp}`)
+
+| Step | File | What |
+|---|---|---|
+| 63 | `user_io.cpp` | include `support/dvd/dvd_mountname.h` after the `dvd_css.h` include |
+| 64 | `user_io.cpp` | `dvd_mountname_note(...)` (`// dvd:mountname`) before `if (!index \|\| is_cdi() \|\| ...) use_save = pre;` |
+| 65a | `menu.cpp` | include `support/dvd/dvd_mountname.h` after `#include "support.h"` |
+| 65b | `menu.cpp` | the S-row's `strcpy(s, "\x16");` → the disc glyph while the drive holds the slot (`// dvd:loadrow`) |
+
+**Why.** Stock `fed03e5` carries upstream `2dd3662` ("menu: show mounted file for S
+option"): a mounted S slot is drawn as `\x16` plus the basename of `sd_image[n].name`
+(through `pc88_slot_label()`, a pass-through for every other core). Only `FileOpen()` writes
+that field, and the drive (`DVD_PHYS_SENTINEL`, `DVD_PHYS_VCD_SENTINEL`), an `.iso`
+(`dvd_css_open_image()`) and a `.cue` (`dvd_cue_mount()`) never call it. So the row read the
+arrow and nothing else (maintainer, 2026-11-25), or, after a plain `.VOB`/`.mpg`, that
+file's stale name: `FileClose()` does not clear it.
+
+**Step 64's placement.** After `pc88_mount()`, which can still fail a mount, and on every
+call, mount or unmount: the drive mark must be cleared by a file or an eject as surely as the
+drive sets it. `sd_type[index]` is final there (reset to `SD_TYPE_DEFAULT` at the top), and it
+is what says the slot sits on one of our sources rather than an open file. For those the name
+becomes the mount path (an `.iso`, a `.cue`) or `dvd_phys_label()` (the drive); every other
+mount is left to `FileOpen()`.
+
+**The drive's name** is the ISO9660 volume label, read by `dvd_volume_label()`
+(`dvd_detect.cpp`) once per insertion while `dvd_phys` still holds the probe fd, before the
+mount, because the step-64 hook runs inside `user_io_file_mount()`. Missing, non-printable or
+generic labels (`CDROM`, `DVDVOLUME`, `DVD_VIDEO`, `DVDVIDEO`: the generic ones seen in a
+1,618-image library sweep, where 1,494 rebuilt rips read `CDROM`) fall back to `DVD in
+drive` / `Video CD in drive` / `Audio CD in drive`. An audio CD has no volume and is never
+read for one.
+
+**The glyph** is `0x97` (`DVD_MOUNTNAME_GLYPH`), a solid disc with a pin hole, written into
+`charfont[]` at the first drive mount. `charrom.cpp` defines nothing past `0x96`; a custom
+`font=` only replaces it if it is a full 2 KB font, which then also draws its own `0x97`
+there. Files keep the stock arrow, by the maintainer's choice (2026-11-25): only the drive
+needs to stand out.
+
+**Anchors** (unique at `fed03e5`): the `use_save = pre;` line, `#include "support.h"` and
+`strcpy(s, "\x16");` in `menu.cpp`. Re-verify on a `MAIN_MISTER_REF` bump; `2dd3662` is what
+introduced the last one. **Gate:** `main/tests/run_tests.sh --red`
+(`dvd_mountname_test` [1]-[4], `dvd_phys_test` [18]; arms `mn-*`, `phys-label-*`).

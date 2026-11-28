@@ -37,6 +37,8 @@ cp ../support/dvd/*.cpp ../support/dvd/*.h "$TREE/support/dvd/"
 # set_volume -- the framework's ONE attenuator).
 : > "$TREE/spi.h"
 : > "$TREE/audio.h"
+# dvd_mountname.cpp writes the disc glyph into Main's OSD font (charfont[][]).
+: > "$TREE/charrom.h"
 
 fail=0
 for t in *_test.cpp; do
@@ -1005,6 +1007,27 @@ if [ "$RED" -eq 1 ]; then
     red_case dvd_phys.cpp dvd_phys_test.cpp \
         "\[17\] mounts whose hooks saw no device" \
         "s/^\tsnprintf(mounted_dev, sizeof(mounted_dev), \"%s\", dev);$/\t(void)0;/" phys-dev-after-mount
+    # ---- dvd_mountname: the OSD load row's name (2026-11-25) ----------------
+    # a generic label let through: the row would read "CDROM" for most rips
+    red_case dvd_mountname.cpp dvd_mountname_test.cpp \
+        "\"CDROM\" is refused" \
+        's/{ "CDROM", "DVDVOLUME"/{ "DVDVOLUME"/' mn-generic-label
+    # the drive mark only ever set: a file mounted after a disc would keep the disc icon
+    red_case dvd_mountname.cpp dvd_mountname_test.cpp \
+        "the drive mark is cleared" \
+        's/^\tdrive_slot\[index\] = ok \&\& dvd_src \&\& is_drive;$/\tif (ok \&\& dvd_src \&\& is_drive) drive_slot[index] = 1;/' mn-mark-sticky
+    # an .iso left unnamed: the field report itself (arrow, no text)
+    red_case dvd_mountname.cpp dvd_mountname_test.cpp \
+        "\[3\] .iso: the path" \
+        's/^\t\tif (img_name != m) snprintf(img_name, img_name_sz, "%s", m);/\t\t;/' mn-iso-unnamed
+    # dvd_phys never asks the disc: every disc would read "DVD in drive"
+    red_case dvd_phys.cpp dvd_phys_test.cpp \
+        "label usable: named at the mount" \
+        's/^\tif (!(is_dvd_video || is_vcd) || !dvd_volume_label(fd, drive_label, sizeof(drive_label)))$/\tif (1)/' phys-label-unread
+    # an audio CD read for a label it cannot have (a READ(10) the drive must fail)
+    red_case dvd_phys.cpp dvd_phys_test.cpp \
+        "CD-DA: label reads" \
+        's/^\tif (!(is_dvd_video || is_vcd) || !dvd_volume_label(/\tif (!dvd_volume_label(/' phys-label-cdda-read
     echo
 fi
 

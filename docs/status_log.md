@@ -20,6 +20,26 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ---
 
+## The `Load Video` row names what is mounted (2026-11-25)
+
+**State:** ✅ HW, MERGED PR #207 (maintainer, rig 236, 2026-11-25: THE_FORCE_AWAKENS in the drive shows
+the disc icon and its label; an `.iso` and a `.VOB` show the arrow and their names, with no
+stale name carried across; eject restores the extension list; 2026-11-28: an audio CD shows
+the disc icon and `Audio CD in drive`, and plays). Main-only (`dev-loadrowname`); `main/tests
+--red` green. Seen at the audio CD's eject: the tray took a while to open while the
+read-ahead ring drained, then the core soft-reset and the row went back to the extension list.
+Not part of this change (the ring's eject `EBUSY` path, `physical_disc.md`); worth a look if it
+is longer than with v0.11.0's Main. **Field report** (maintainer, testing
+dev-trickplay7): the load row showed the arrow and no text. Stock Main `fed03e5` brought
+upstream `2dd3662`, which draws a mounted S slot from `sd_image[n].name`, and only
+`FileOpen()` writes that; our drive, `.iso` and `.cue` mounts bypass it. **Fix:** a mount hook
+(`dvd_mountname.cpp`, integration steps 63-65) names those slots: the file name for an
+`.iso`/`.cue`, the disc's volume label for the drive (fallback `DVD in drive` / `Video CD in
+drive` / `Audio CD in drive`), and the drive's row gets a disc glyph (`0x97`) in place of the
+arrow. Files keep the arrow (maintainer's choice). **Gate:** `main/tests/run_tests.sh --red`
+(`dvd_mountname_test`, `dvd_phys_test` [18]). **Detail:** `main/integration/INTEGRATION.md`
+"Steps 63-65". **Next:** merge.
+
 ## Trick play: hold FF/REW in a DVD film (2026-11-24 .. 11-28, PR #206)
 
 ✅ **HW-confirmed, merging as PR #206** (`dev-trickplay11`). Full design, measurements and
