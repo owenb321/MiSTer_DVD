@@ -1,23 +1,18 @@
 # MiSTer DVD Player Core
 
-A **DVD player core for the MiSTer FPGA platform** (DE10-Nano / Intel Cyclone V).
+This is a DVD player for the MiSTer. Put a DVD image on the SD card and it plays the way a
+set-top player would: the disc's own menus, chapters, subtitles and surround sound, on an
+HDMI TV or a CRT.
 
-Put a decrypted DVD image on the SD card and it plays — with the disc's own menus,
-button highlights, chapters, subtitles, and multi-channel audio. Decoding and navigation
-run entirely in FPGA fabric, with no HPS-side daemon. On the bare core the ARM only serves
-SD blocks through the standard framework interface, exactly like any other core; the
-optional `MiSTer_DVDcss` Main adds physical discs, CSS decryption and HDMI bitstream audio
-on the ARM side.
+All the decoding happens in the FPGA. The MiSTer's Linux side only reads the disc for it,
+as it would for any other core. Add the optional `MiSTer_DVDcss` Main and it also plays
+encrypted images and real discs from a USB drive, and sends surround sound to a receiver
+over HDMI.
 
 Built as a fork of [`mrchrisster/MiSTer_MPEG2`](https://github.com/mrchrisster/MiSTer_MPEG2),
 itself a MiSTer port of **Koen De Vleeschauwer's `mpeg2fpga`** hardware MPEG-2 decoder
 (2007). The video decode datapath is theirs and is largely unmodified; this project adds
 everything needed to turn a decoder into a player.
-
-> **Status: alpha.** Film and TV playback is the supported path and is exercised across a
-> library of hundreds of commercial discs. Interactive DVD *games* are
-> known-incomplete — see [Known limitations](#known-limitations).
-
 
 📖 **[Read the manual](https://owenb321.github.io/MiSTer_DVD)** — install, controls, every setting, CRT and
 captions, physical discs, troubleshooting.
@@ -44,12 +39,23 @@ know. It is not an endorsement of the approach — draw your own conclusions.
 - **DVD-Video** from a decrypted `.iso` — the disc's own menus, First Play, button
   highlights, chapters, subtitles, multi-angle and still frames, driven by a real
   [DVD virtual machine](https://owenb321.github.io/MiSTer_DVD/reference/compatibility/#navigation)
-  validated against libdvdnav.
+  validated against libdvdnav. Up to 32 subtitle tracks, with a disc's forced subtitles
+  shown even when subtitles are off.
+- **A set-top player's transport** — a status line and seek bar, chapter skip, hold
+  Fast Forward / Rewind to play a film at 16× up to 480×, frame step, A-B repeat, and
+  Stop that remembers your place. See
+  [Controls](https://owenb321.github.io/MiSTer_DVD/playback/controls/).
+- **[Save states](https://owenb321.github.io/MiSTer_DVD/playback/save-states/)** — eight
+  slots per disc plus an autosave, for game discs that keep progress or as a bookmark in a
+  film (needs `MiSTer_DVDcss`).
 - **Physical discs and CSS-encrypted images** with the optional
   [`MiSTer_DVDcss`](https://owenb321.github.io/MiSTer_DVD/formats/physical-discs/) add-on — no PC decrypt step, and
-  encrypted images need no optical drive at all.
+  encrypted images need no optical drive at all. Images are read about 25 seconds ahead,
+  so a network share that stalls doesn't interrupt the film.
 - **Video** — MPEG-2 and MPEG-1, NTSC and PAL auto-detected, progressive or native
-  480i/576i, [3:2 pulldown for film](https://owenb321.github.io/MiSTer_DVD/video/film-24p/), PAL discs
+  480i/576i, [3:2 pulldown for film](https://owenb321.github.io/MiSTer_DVD/video/film-24p/),
+  [Weave, Bob or Blend](https://owenb321.github.io/MiSTer_DVD/video/interlaced/#deinterlace)
+  for video-sourced material, PAL discs
   [converted to NTSC](https://owenb321.github.io/MiSTer_DVD/video/film-24p/#standard-convert) for 60 Hz-only TVs, and one clock for
   picture, sound, subtitles and captions — so lip sync holds across seeks, menus and mode changes.
 - **Audio** — AC-3 (every channel mode), DTS (the core stream, up to 5.1), MP2, and LPCM (up to
@@ -91,7 +97,8 @@ know. It is not an endorsement of the approach — draw your own conclusions.
   bare `.rbf` is enough.
 - **Closed captions are analog-only** and need a television that decodes them. About
   6 NTSC discs in 10 carry them.
-- **Interactive DVD games are incomplete.** Film and TV discs are the supported path.
+- **Interactive DVD games are incomplete.** Most play, but some game discs mis-navigate.
+  Film and TV discs are the supported path.
 
 [Full list, with the reasoning →](https://owenb321.github.io/MiSTer_DVD/reference/compatibility/)
 
