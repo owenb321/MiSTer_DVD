@@ -57,7 +57,7 @@ Map what changed to what must be reviewed:
 | `main/`, `build_release.sh`, `tools/package_release.sh` | `about/building.md`, `getting-started/install.md` |
 | Video output paths (`re_interlace`, `syncgen`, modeline) | `video/analog-crt.md`, `video/interlaced.md`, `video/film-24p.md` |
 | `README.md` changed but `site/content/` did not, or the reverse | **drift flag** — check the two still agree |
-| A new user-visible capability (anything that would make the next release a **minor** bump), a headline limitation removed or added, a status change (games, "alpha") | **README currency pass** (step 4) |
+| A new user-visible capability (anything that would make the next release a **minor** bump), a headline limitation removed or added, a change in what class of disc is supported (e.g. game discs) | **README currency pass** (step 4) |
 | A feature landed or changed status | its row in `CLAUDE.md`'s status index + its `docs/status_log.md` entry |
 | `docs/*.md` changed | harvest check: did user-facing material land in an engineering note instead of the manual? |
 
@@ -97,19 +97,18 @@ the range has a signal from the table above, and **always** on a release sweep
    feature (a format, an output path, a transport mode, a new class of disc that now
    plays) gets a clause or a bullet in **"What works"**, linking its manual page. A fix or
    a setting tweak does not.
-3. Re-read **"Known limitations"** and the **status callout** against the range. A
+3. Re-read **"Known limitations"** against the range. A
    limitation the range removed is deleted or reworded. A new headline limitation is
    added. Keep the list short: the full list lives in `reference/compatibility.md`.
-4. Mirror the same changes into **`site/content/index.md`**. Its "What works" and status
-   callout make the same claims as the README in longer form, and they go stale together.
+4. Mirror the same changes into **`site/content/index.md`**. Its "What works" makes the same claims as the README in longer form, and they go stale together.
    The two must not contradict each other.
 5. On a release sweep, the release commit also bumps `reference/compatibility.md`'s
    "Current as of **vX.Y.Z**" line (the `release` skill, step 2). Check that the page
    below that line really is current to that version.
 
 Keep the README short (~160 lines). It is the landing page, not the manual. Add clauses
-and links rather than paragraphs. Changing the **"alpha"** label is the maintainer's
-decision: flag it in the report, don't change it on a guess.
+and links rather than paragraphs. There is deliberately no status/maturity callout (dropped
+2026-11-27, by user decision); don't add one back.
 
 ## 5. Apply, verify, report
 
