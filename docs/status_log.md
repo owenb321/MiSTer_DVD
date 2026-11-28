@@ -20,9 +20,9 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ---
 
-## Trick play: hold FF/REW in a DVD film (2026-11-24 .. 11-28, PR #NN)
+## Trick play: hold FF/REW in a DVD film (2026-11-24 .. 11-28, PR #206)
 
-✅ **HW-confirmed, merging as PR #NN** (`dev-trickplay11`). Full design, measurements and
+✅ **HW-confirmed, merging as PR #206** (`dev-trickplay11`). Full design, measurements and
 gates: `docs/trick_play.md`. The rounds after the first, in short:
 
 - **Speeds raised** to 16× / 40× / 120× / 480× (maintainer, 2026-11-24); gamepad tap = 10 s,

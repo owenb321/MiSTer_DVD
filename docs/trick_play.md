@@ -1,6 +1,6 @@
 # Trick play (continuous fast-forward / rewind)
 
-Status: ✅ HW-confirmed and MERGED (PR #NN, 2026-11-28): the ES filter
+Status: ✅ HW-confirmed and MERGED (PR #206, 2026-11-28): the ES filter
 (`dvd/trick_es_filter.sv`), the reader's trick walk (`dvd/dvd_iso_reader.sv`), the audio drop
 (`ps_demux` `aud_drop`), the display cadence (`disp_sched` `cad_en`) and the controller
 (`dvd/trick_ctrl.sv`), wired into `dvd/emu.sv`; image and physical drive, angle blocks, the
