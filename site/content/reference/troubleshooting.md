@@ -814,9 +814,10 @@ to say what it picked.
 
 ### The elapsed time is wrong after seeking
 
-On a DVD, Fast Fwd, Rewind and the D-pad all seek to an exact **time**, looked up in the
-disc's own time map, so the time the seek bar showed is the time you land on, give or take
-about half a second.
+On a DVD, a scrub and the D-pad seek to an exact **time**, looked up in the disc's own time
+map, so the time the seek bar showed is the time you land on, give or take about half a
+second. (Holding Fast Fwd or Rewind in a film plays it at speed instead, and letting go
+carries on from the picture on screen; see [Controls](../playback/controls.md).)
 
 A small number of discs author a time map that disagrees with their own clock by a few
 seconds, and a few (mostly games and some anime) have none at all. On those a seek can land

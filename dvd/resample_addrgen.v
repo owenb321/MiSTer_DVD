@@ -52,7 +52,8 @@ module resample_addrgen (
   still_en, scan_start, scan_half,                 // DVD-FORK (pause field still): enable + per-scan sideband to disp_vscale
   blend_en, scan_blend,                            // DVD-FORK (field blend): enable + per-scan sideband to field_blend
   bob_en, scan_bob, scan_bob_bot,                  // DVD-FORK (progressive bob): enable + per-scan kernel select
-  std_cad                                          // DVD-FORK (Standard Convert): synthetic 3:2 on the field raster
+  std_cad,                                         // DVD-FORK (Standard Convert): synthetic 3:2 on the field raster
+  trick_cad                                        // DVD-FORK (trick play): the field-parity corrector is off
   );
 
   input              clk;                      // clock
@@ -316,6 +317,7 @@ module resample_addrgen (
    * windows measured film-like); a true 50i picture's third field repeats its first, a
    * one-field step back in time on motion, accepted. */
   input              std_cad;
+  input              trick_cad;
   output             scan_bob;
   output             scan_bob_bot;
 
@@ -688,7 +690,14 @@ module resample_addrgen (
    * between PR #40 and that fix because the ungated feedback arm repeated a field
    * several times a second on real content; bench/dvd/field_phase_tb.sv scenario [6]
    * is the regression guard (it starves the pixel queue and budgets the repeats). */
-  wire       par_ins  = alt_break ^ par_fb;                       // insert one field instead of picking up
+  /* ★ OFF IN TRICK PLAY (trick_cad, maintainer 2026-11-24). Trick play shows one unrelated
+   * I-frame per 250 ms: every new picture is an "alternation break", so the corrector
+   * slipped a field on nearly every one, and each slip pulsed frame_late (par_late_r),
+   * banking drop debt for frames nothing was late on (HW: lates ticking 1-2 per half
+   * second through every hold, 0 drops). The phase of a 250 ms slideshow does not matter;
+   * after the exit seek the corrector runs as before (its counters keep watching). Gated
+   * by bench/dvd/field_phase_tb.sv [T] and run_field_phase.sh's mutation. */
+  wire       par_ins  = (alt_break ^ par_fb) && ~trick_cad;         // insert one field instead of picking up
   wire       par_slip = (state == STATE_INIT) && ofv_pickup && par_ins;  // the insertion event
   /* Qualified pickup: every pickup-conditioned latch below consumes THIS instead of
    * ofv_pickup, so on an insertion cycle the pending frame stays unconsumed (picked up
@@ -740,7 +749,7 @@ module resample_addrgen (
    * Same par_fb budget as the pickup arm, and the counters are SHARED, so the two arms
    * can never double-correct one verdict. */
   wire       par_hold_ins = (state == STATE_REPEAT) && (next == STATE_NEXT_IMG) &&
-                            (repeat_cnt == 5'd0) && ~hold_freeze && par_fb;
+                            (repeat_cnt == 5'd0) && ~hold_freeze && par_fb && ~trick_cad;
   /* No combinational loop: next's cone is {state, repeat_cnt, ofv_paced, persistence,
    * last_image, image_0..5} and par_fb's is {interlaced, raster_par_err, par_cnt,
    * par_age, last_image} — all registers and inputs, none of them fed by this wire.
@@ -808,10 +817,45 @@ module resample_addrgen (
    * cur_ilace: the DISPLAYED picture is true-interlaced. Latched at the real pickup,
    * because the progressive_frame input describes the picture WAITING at picbuf's output,
    * not the one being held. progressive_sequence pictures are progressive by definition. */
+  /* ================= DVD-FORK (TRICK PLAY RELEASE) =================
+   * trick_pin_tail: from trick_cad falling (the exit seek's flush) to the landing's first
+   * picture. Two jobs:
+   *  1. keep the field still (still_want below): released at trick_cad, the loop alternated
+   *     the last trick picture's two fields for the ~0.3 s of the seek.
+   *  2. ★ SWALLOW the pre-flush pictures (2026-11-27, HDMI capture: 5 of 6 releases flashed
+   *     3-5 frames of a DIFFERENT scene, then the held picture again, then play). picbuf
+   *     shows an anchor only when the NEXT anchor arrives, so in I-only trick play the
+   *     newest decoded trick I-frame is always waiting, unshown; the landing's first I-frame
+   *     emits it (docs/seek_realign.md 5.1: "the in-flight picture and the held I/P anchor
+   *     still reach the screen once after the flush"). After a plain seek that is one frame
+   *     of the same scene; after trick play it is the NEXT trick picture, 30 s on.
+   *     The flush strips every pre-flush picture's PTS tag (motcomp_picbuf.v), and the
+   *     landing VOBU's first I-frame carries one, so: while the pin is up and trick_cad is
+   *     down, an UNTAGGED pickup is consumed (picbuf moves on) but output_frame_sav and
+   *     cur_ilace keep the picture on screen. The first TAGGED pickup shows and ends it.
+   *     TAIL_SWALLOW_MAX bounds it: a stream with no tags never freezes the display.
+   *  ⚠ Slot reuse: once the stale picture is picked up, picbuf may decode the landing
+   *     I-frame INTO the slot still being scanned. Since the exit follows the HUD clock
+   *     (trick_ctrl.sv, 2026-11-27) the landing is a different picture from the held one
+   *     at every release, so it can paint in over at most a field: part of the cut to the
+   *     clock's time, not a flash of a third scene (which the swallow still removes). */
+  localparam [1:0] TAIL_SWALLOW_MAX = 2'd3;
+  reg        trick_pin_tail;
+  reg  [1:0] tail_swallow_n;
+  wire       tail_swallow = trick_pin_tail && ~trick_cad && ~output_pts_valid &&
+                            (tail_swallow_n != TAIL_SWALLOW_MAX);
+  always @(posedge clk)
+    if (~rst) begin trick_pin_tail <= 1'b0; tail_swallow_n <= 2'd0; end
+    else if (trick_cad) begin trick_pin_tail <= 1'b1; tail_swallow_n <= 2'd0; end
+    else if (clk_en && (state == STATE_INIT) && pickup_go) begin
+      if (tail_swallow) tail_swallow_n <= tail_swallow_n + 2'd1;
+      else              trick_pin_tail <= 1'b0;
+    end
+
   reg        cur_ilace;
   always @(posedge clk)
     if (~rst) cur_ilace <= 1'b0;
-    else if (clk_en && (state == STATE_INIT) && pickup_go) cur_ilace <= ~progressive_frame && ~progressive_sequence;
+    else if (clk_en && (state == STATE_INIT) && pickup_go && ~tail_swallow) cur_ilace <= ~progressive_frame && ~progressive_sequence;
 
   /* still_want: evaluated per scan at STATE_NEXT_IMG. ~step_arm: a pending frame step is
    * about to show new content, and the stepped picture's first scan then locks again at
@@ -819,7 +863,17 @@ module resample_addrgen (
    * each picture, steady). ~sif2x: the SIF walk owns the vertical path (MPEG-1 is
    * progressive anyway). */
   wire       img0_field = (image_0 == TOP) || (image_0 == BOTTOM);
-  wire       still_want = still_en && pause && ~step_arm && interlaced && ~deinterlace &&
+  /* ★ TRICK PLAY TOO (trick_cad, maintainer 2026-11-25: "the held images during trick play
+   * ... flicker between fields"). Trick play holds each I-frame ~15 refreshes, so the
+   * persistence loop alternated its two fields exactly as a pause used to. The pin
+   * carries across pickups (as across frame steps), so the walk shows one field of each
+   * picture, steady; trick_cad drops at the release and the lock with it. */
+  /* ★ AND UNTIL THE LANDING'S FIRST PICTURE (2026-11-27, HDMI capture of a release).
+   * trick_cad drops at the exit seek's flush (trick play's tail), but the last trick
+   * picture stays on screen until the landing's first picture is picked up: released
+   * there, the loop alternated that picture's two fields for the ~0.3 s of the seek.
+   * trick_pin_tail carries the lock from trick_cad falling to the next real pickup. */
+  wire       still_want = still_en && (pause || trick_cad || trick_pin_tail) && ~step_arm && interlaced && ~deinterlace &&
                           cur_ilace && img0_field && ~sif2x;
   /* pin_bot: the field held on screen — the one scanned LAST when the lock engages, so
    * the pause shows what was on screen rather than jumping back half a frame. Held for
@@ -1398,7 +1452,7 @@ module resample_addrgen (
   /* save output_frame */
   always @(posedge clk)
     if (~rst) output_frame_sav <= 3'b0;
-    else if (clk_en && (state == STATE_INIT) && pickup_go) output_frame_sav <= output_frame;
+    else if (clk_en && (state == STATE_INIT) && pickup_go && ~tail_swallow) output_frame_sav <= output_frame;   // DVD-FORK: a swallowed pre-flush picture keeps the held one (trick_pin_tail)
     else output_frame_sav <= output_frame_sav;
 
   /* determine frame, top, bottom sequence */

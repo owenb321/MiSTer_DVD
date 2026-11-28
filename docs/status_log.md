@@ -20,6 +20,59 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ---
 
+## Trick play: hold FF/REW in a DVD film (2026-11-24 .. 11-28, PR #206)
+
+✅ **HW-confirmed, merging as PR #206** (`dev-trickplay11`). Full design, measurements and
+gates: `docs/trick_play.md`. The rounds after the first, in short:
+
+- **Speeds raised** to 16× / 40× / 120× / 480× (maintainer, 2026-11-24); gamepad tap = 10 s,
+  hold = trick play (`pad_hold`); OSD `Trick Play` (O[30]) Off = the old scrub.
+- **Trick pictures are field stills** (no flicker on a CRT); the field-parity corrector is
+  off under the cadence.
+- **Angle blocks:** the walk stays in its angle (41-disc sweep); a backward entry picks it
+  (✅ HW, TFA both angles).
+- **The release** (2026-11-27, HDMI captures on the rig): the tail keeps the ES filter,
+  audio drop and cadence up from the exit seek to its flush (no leaked P/B frames); the
+  HUD keeps its pair through the flush; `trick_pin_tail` holds the field still to the
+  landing and swallows the stale pending trick picture (5 of 6 releases flashed another
+  scene, now 0 of 6). The exit seeks to the NAV pack whose time the HUD shows (maintainer's
+  choice over "the picture on screen": the picture lags the clock by ~2 rungs, so the clock
+  stepped back at each release); on the rig the clock is steady at every release.
+- **VM timing unaffected:** `hil_suite` vs v0.11.0, 14 checks, 0 regressions.
+- **Maintainer's hands-on complete** (2026-11-28): pad tap/hold, image and physical disc,
+  Trick Play = Off, CRT field still, both edges.
+- **Fit:** `dev-trickplay11` SEED 9 first roll, clk_dec 90.29/88.49, clk_mem 99.08/99.95 MHz,
+  40,757 / 41,910 ALMs (97 %), `clock_check` PASS. Not re-swept on the merge (maintainer):
+  a marginal fit on `main` gets a follow-up branch. SEED 7 missed clk_mem by 0.4 MHz on
+  `dev-trickplay10`, so the margin is real.
+
+The first round's record follows.
+
+✅ **first HW round passed** (2026-11-24: image and physical drive, both directions, the
+edge, release, tap; image = drive on the same film).
+
+- **Decisions** (maintainer, 2026-11-22): hold FF/REW becomes trick play; only speeds that
+  reliably pull I-frames; no slow motion; a disc image gets no advantage over a physical
+  disc. Then T = 250 ms and 2× / 8× / 40× / 120× (jumps of 0.5 / 2 / 10 / 30 s).
+- **Measured first:** 150-disc sweep (every VOBU with video starts with an I-frame, 0 field
+  pairs, the cut sector holds the next picture in 99.6 %); a DW316 drive over 1,152 reads
+  (transfer dominates, ~1× DVD speed); the splice model 192/192 clean in ffmpeg; the spliced
+  stream through the whole RTL decoder in simulation, within one code value of ffmpeg.
+- **The pieces:** the reader's walk (no-flush jumps on the ILVU path, cell crossing both ways,
+  the edge, the `trick_go` gate), `dvd/trick_es_filter.sv`, `ps_demux` `aud_drop`,
+  `disp_sched` `cad_en`, `dvd/trick_ctrl.sv`, and the HUD reusing the scrub's speed arrows.
+- **Found on the way:** Icarus `$fseek` cannot pass 2 GB in one step; the model's "2 s" rung
+  was the 1.5 s entry; a mid-sector entry armed on a stale NAV signature (`tk_sec_ok`);
+  holding Rewind at a PGC's start re-entered for ever (`need_rel`).
+- **First fit:** SEED 7, timing PASS (clk_dec ≥ 91.6, clk_mem ≥ 99.8 MHz), +866 ALM / +1 M10K /
+  +0 DSP against v0.11.0. Quartus rejected an out-of-range bit select Icarus accepted (10232).
+- **HW round 1:** MIB3 image 10 s FF = 4.0 pictures/s, audio off, 0 drops, ~364 s travelled;
+  the edge stops and resumes at 0:00; a tap is still 10 s. TFA image vs physical DW316: ~122 s
+  vs ~126 s in the same hold (3.91 vs 3.63 pictures/s). `lates` ticks from the field-parity
+  slip (`par_late_r`), not a decode miss: gate it with the cadence.
+- **Open:** a tap on a DVD now enters and leaves at once (it used to nudge the scrub; a
+  UX question for the maintainer); angle blocks beyond the play-order step.
+
 ## ascal Bob resync: a mid-stream switch to Bob on Interlaced HDMI (2026-11-22)
 
 **State:** ✅ HW, MERGED (PR #204; `dev-bobresync`); fit

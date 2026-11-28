@@ -734,7 +734,7 @@ assign CE_PIXEL = interlaced_eff ? ce_pix_q : 1'b1;
 // the branch changes the netlist anyway - and NEVER PER COMMIT. Do not derive
 // either from a git SHA or a timestamp: every compile would become a new
 // netlist. Same-day rebuilds on one branch append a digit ("dev-seekrealign2").
-`define CORE_VERSION "v0.11.0"
+`define CORE_VERSION "dev-trickplay11"
 
 parameter CONF_STR = {
     "DVD;;",
@@ -1047,6 +1047,13 @@ parameter CONF_STR = {
     // wherever the nav layer claims the D-pad (menus, in-title game menus).
     // See docs/dvd_nav.md 2b.
     "P5O[45],D-Pad Seek,Off,On;",
+    // Trick Play: ON by default (index 0, so status[30] = 0 = On; bit 30 was never
+    // allocated in either CONF_STR syntax, so no saved config can carry a stale 1 and
+    // no "v,N" bump is needed). Off = a held Fast Fwd / Rewind in a DVD film scrubs
+    // as before (seek bar, one seek on release) instead of playing at speed: a
+    // physical drive then seeks once, not four times a second (maintainer,
+    // 2026-11-24). Gates trick_allowed below; docs/trick_play.md.
+    "P5O[30],Trick Play,On,Off;",
     // Screensaver: after this long PAUSED or STOPPED, the bouncing idle logo
     // takes over and any button/key dismisses it (burn-in protection -- this
     // core drives real CRTs). dvd/stop_ctl.sv owns the timer; the verdict is a
@@ -1743,8 +1750,28 @@ wire [31:0] scrub_seek_rbn;          // its target RBN (2048-sector, VTSTT_VOBS-
 wire        rst_seek_pulse;
 wire [16:0] rst_seek_secs;
 wire [31:0] rst_seek_rbn;
-wire        seek_any_pulse = scrub_seek_pulse | rst_seek_pulse;
-wire [31:0] seek_any_rbn   = rst_seek_pulse ? rst_seek_rbn : scrub_seek_rbn;
+// TRICK PLAY (dvd/trick_ctrl.sv, docs/trick_play.md): hold FF/REW in a DVD title. Its
+// entry and exit seeks ride the same raw-RBN port, through mode_realign's arbitration.
+wire        trick_active;            // trick play on (clk_sys)
+wire        trick_owns;              // ...or exited and waiting for FF/REW to be released
+wire        trick_allowed;           // a playing DVD title trick play may enter (assigned below)
+wire        trick_claim;             // FF/REW belong to trick play, not scrub_ctrl
+wire [1:0]  trick_tier;
+wire        trick_rev, trick_go;
+wire        trick_seek_pulse;
+wire [31:0] trick_seek_rbn;
+wire        trick_vobu_w, trick_edge_w;
+wire [31:0] trick_nav_w, trick_eltm_w;
+wire [15:0] trick_xcell_w, trick_entries_w;
+// THE EXIT (2026-11-27, docs/trick_play.md "The release"): trick_tail holds from the exit
+// seek to its flush, and trick_hold = active | tail is what keeps the ES filter, audio
+// drop, cadence and field still up through it. The exit seeks to dsi_nv_pck_lbn, the NAV
+// pack whose time the HUD shows (docs/trick_play.md "The exit follows the HUD clock").
+wire        trick_tail;
+wire        trick_hold = trick_active | trick_tail;
+wire        seek_any_pulse = scrub_seek_pulse | rst_seek_pulse | trick_seek_pulse;
+wire [31:0] seek_any_rbn   = rst_seek_pulse   ? rst_seek_rbn :
+                             trick_seek_pulse ? trick_seek_rbn : scrub_seek_rbn;
 wire       seek_rbn_pulse;           // pulse: arbitrated raw-RBN seek -> reader
 wire [31:0] seek_rbn;                // its target RBN (2048-sector, VTSTT_VOBS-rel)
 reg        angle_pulse;              // pulse: cycle camera angle (Phase 9) -> reader
@@ -1918,12 +1945,27 @@ wire sp_route_en;                                  // (assigned at the SPU block
 // gamepad's hold-to-scrub is untouched. Full reasoning: dvd/kbd_map.sv header.
 wire [24:0] kbd_joy;
 
+wire [1:0] kbd_rel;             // kbd_map: Fast Fwd / Rewind release pulses
 kbd_map kbd_map_inst (
     .clk     (clk_sys),
     .rst_n   (reset_n),
     .ps2_key (ps2_key),
-    .joy     (kbd_joy)
+    .joy     (kbd_joy),
+    .rel     (kbd_rel)          // Fast Fwd / Rewind releases, for kbd_hold below
 );
+
+// KEYBOARD / REMOTE FAST FWD AND REWIND: a TAP or a HOLD (dvd/kbd_hold.sv). A tap stays
+// the 10 s jump (dpad_seek below); a hold, or a remote's ~9 taps a second, drives trick
+// play like the gamepad's held B10/B11 (maintainer, 2026-11-24). Where trick play does
+// NOT claim FF/REW (a .mpg, a VCD, a menu) the raw press pulse still jumps at once, as
+// before; there kbd_*_held reaches trick_ctrl too, which ignores it (`allowed` low).
+wire       kbd_ff_tap, kbd_ff_held, kbd_rew_tap, kbd_rew_held;
+kbd_hold kbd_hold_ff  (.clk(clk_sys), .rst_n(reset_n), .press(kbd_joy[13]), .release_(kbd_rel[0]),
+                       .tap(kbd_ff_tap),  .held(kbd_ff_held));
+kbd_hold kbd_hold_rew (.clk(clk_sys), .rst_n(reset_n), .press(kbd_joy[14]), .release_(kbd_rel[1]),
+                       .tap(kbd_rew_tap), .held(kbd_rew_held));
+wire kbd_ff_jump  = trick_claim ? kbd_ff_tap  : kbd_joy[13];
+wire kbd_rew_jump = trick_claim ? kbd_rew_tap : kbd_joy[14];
 
 wire [31:0] joy_eff = joystick_0 | {7'd0, (kbd_joy & ~25'h000_6000)};
 
@@ -1947,6 +1989,17 @@ wire joy_disp  = joy_eff[12];                      // B9 "Display"   (Phase 11 H
 // go to dpad_seek instead (see the joy_eff comment above).
 wire joy_ff    = joy_eff[13];                      // B10 "Fast Fwd" (held scrub fwd)
 wire joy_rew   = joy_eff[14];                      // B11 "Rewind"   (held scrub bwd)
+// GAMEPAD FAST FWD AND REWIND in trick play: a TAP or a HOLD (dvd/pad_hold.sv). A tap
+// jumps 10 s through dpad_seek, like the keyboard and remote; a hold of 400 ms enters
+// trick play (maintainer, 2026-11-24: "quick tap should nudge 10s like the other
+// modes"). Where trick play does not claim the buttons the raw levels still drive
+// scrub_ctrl, as before.
+wire pad_ff_tap, pad_rew_tap, pad_ff_held, pad_rew_held;
+pad_hold pad_hold_inst (.clk(clk_sys), .rst_n(reset_n), .ff(joy_ff), .rew(joy_rew),
+                        .tap_ff(pad_ff_tap), .tap_rew(pad_rew_tap),
+                        .held_ff(pad_ff_held), .held_rew(pad_rew_held));
+wire pad_ff_jump  = trick_claim & pad_ff_tap;
+wire pad_rew_jump = trick_claim & pad_rew_tap;
 wire joy_title = joy_eff[15];                      // B12 "Title"    (VMGM Top Menu)
 wire joy_ret   = joy_eff[16];                      // B13 "Return"   (GoUp)
 // DVD-remote additions. All PRESS edges (never levels): kbd_map emits one-cycle
@@ -1989,6 +2042,7 @@ wire sel_edge   = joy_sel   & ~joy_prev[7];
 wire hud_user_evt = pause_edge
                   | ((chnext_edge | chprev_edge) && (cell_ready || cdda_tracks_on) && !menu_active)
                   | scrub_seek_pulse
+                  | trick_seek_pulse
                   | dpad_pend_evt;
 wire menu_edge  = joy_menu  & ~joy_prev[8];
 wire angle_edge = joy_angle & ~joy_prev[9];
@@ -2231,7 +2285,8 @@ always @(posedge clk_sys or negedge reset_n) begin
         // never see them) and the D-pad clause below is gated on O[45], which a
         // dedicated seek key is deliberately NOT.
         else if ((cell_ready || lin_seek_ok_w) && !menu_active && !in_title_menu &&
-                 (ff_edge || rew_edge || kbd_joy[13] || kbd_joy[14])) pause_q <= 1'b0;
+                 (ff_edge || rew_edge || kbd_ff_jump || kbd_rew_jump ||
+                  trick_seek_pulse)) pause_q <= 1'b0;   // trick play's entry/exit too
         // a D-pad fixed-time seek likewise resumes playback (dvd/dpad_seek.sv
         // issues the jump when the coalesce window closes)
         else if (dpad_seek_en && (cell_ready || lin_seek_ok_w) && !menu_active &&
@@ -2679,8 +2734,11 @@ wire [31:0] cdda_prev_rel = (bar_tgt_rbn_w <= cdda_cur_start_w) ? 32'd0
 scrub_ctrl scrub_ctrl_inst (
     .clk             (clk_sys),
     .rst_n           (reset_n),
-    .held_right      (joy_ff),                   // B10 Fast Fwd = seek forward
-    .held_left       (joy_rew),                  // B11 Rewind   = seek backward
+    // B10/B11 go to trick play (dvd/trick_ctrl.sv below) whenever it may take the
+    // gesture or still holds it; the scrub keeps .mpg/VCD and the DVD states trick play
+    // refuses (a still, armed buttons...).
+    .held_right      (joy_ff  & ~trick_claim),   // B10 Fast Fwd = seek forward
+    .held_left       (joy_rew & ~trick_claim),   // B11 Rewind   = seek backward
     .in_title        ((cell_ready || lin_seek_ok_w) && !menu_active && !in_title_menu),  // title OR linear (VCD/SVCD/.mpg) playback
     .cur_rbn         (cell_ready ? dsi_nv_pck_lbn : lin_blk_w),
     // On an audio CD the bar and the clamp span the CURRENT TRACK, not the
@@ -2724,6 +2782,39 @@ scrub_ctrl scrub_ctrl_inst (
     .jump_dir        (jmp_dir),
     .jump_base       (jmp_base),
     .jump_off        (jmp_off)
+);
+
+// =========================================================================
+// TRICK PLAY - dvd/trick_ctrl.sv (docs/trick_play.md)
+// =========================================================================
+// Allowed in a playing DVD title: cell mode, not a menu or an in-title menu, no
+// buttons armed, not a still, not stopped. Nothing here is a state trick play itself
+// changes: the reader never parks on a still in trick play, and PCI is gated off
+// (ps_demux .pci_enable below) so no buttons arm over trick frames.
+assign trick_allowed = cell_ready && !menu_active && !in_title_menu && !menu_nav &&
+                       !hl_btns_armed && !still_active && !stopped_w &&
+                       !status[30];             // O[30] Trick Play = Off: FF/REW scrub
+assign trick_claim   = trick_allowed || trick_owns;
+trick_ctrl trick_ctrl_inst (
+    .clk        (clk_sys),
+    .rst_n      (reset_n),
+    .held_ff    (pad_ff_held  | kbd_ff_held),   // a gamepad or keyboard / remote HOLD
+    .held_rew   (pad_rew_held | kbd_rew_held),
+    .allowed    (trick_allowed),
+    .cur_rbn    (dsi_nv_pck_lbn),
+    .trick_vobu (trick_vobu_w),
+    .trick_nav  (trick_nav_w),
+    .trick_edge (trick_edge_w),
+    .flush      (seek_ack),
+    .tail       (trick_tail),
+    .active     (trick_active),
+    .tier       (trick_tier),
+    .rev        (trick_rev),
+    .go         (trick_go),
+    .seek_pulse (trick_seek_pulse),
+    .seek_rbn   (trick_seek_rbn),
+    .n_entries  (trick_entries_w),
+    .owns       (trick_owns)
 );
 
 // =========================================================================
@@ -2791,8 +2882,8 @@ dpad_seek dpad_seek_inst (
     // held button into ~9 complete seek gestures a second, and a swallowed
     // release freezes the picture. Here the same burst builds ONE jump.
     // (dvd/kbd_map.sv header carries the measurements.)
-    .lf_edge        ((dpad_seek_en & lf_edge) | kbd_joy[14]),   // Rewind   key = -10 s
-    .rt_edge        ((dpad_seek_en & rt_edge) | kbd_joy[13]),   // Fast Fwd key = +10 s
+    .lf_edge        ((dpad_seek_en & lf_edge) | kbd_rew_jump | pad_rew_jump),  // Rewind   = -10 s (a TAP: kbd_hold, pad_hold)
+    .rt_edge        ((dpad_seek_en & rt_edge) | kbd_ff_jump  | pad_ff_jump),   // Fast Fwd = +10 s (a TAP: kbd_hold, pad_hold)
     .cancel         (jump_ack | chap_pulse | start_streaming | hold_freeze),
     .nav_flush      (load_flush),               // nav_dsi's own reset condition
     .dsi_commit     (dsi_commit),
@@ -3985,6 +4076,16 @@ dvd_iso_reader dvd_iso_reader_inst (
     // Issue #176: buttons on screen OR on the way. Pending matters: the reader
     // reaches a cell's end ~a VBUF ahead of the display, where a window opening in
     // the cell's last second is still parsed-but-not-promoted.
+    // Trick play (docs/trick_play.md): the walk, driven by dvd/trick_ctrl.sv.
+    .trick_en       (trick_active),
+    .trick_tier     (trick_tier),
+    .trick_rev      (trick_rev),
+    .trick_go       (trick_go),
+    .trick_vobu     (trick_vobu_w),
+    .trick_nav      (trick_nav_w),
+    .trick_eltm     (trick_eltm_w),
+    .trick_edge     (trick_edge_w),
+    .trick_xcell_n  (trick_xcell_w),
     .cc_btns        (hl_btns_armed | hl_btns_pend),
 
     .vm_mode        (menus_on),           // Phase 4: the VM drives navigation
@@ -4119,6 +4220,7 @@ ps_demux ps_demux_inst (
     .in_ready     (ps_demux_in_ready),
 
     // O[8:6]: which audio substream/track to forward (default 0 = substream 0x80).
+    .aud_drop     (trick_hold),      // trick play: every audio PES discarded (the ring would stall the demux)
     .aud_track    (aud_track_eff),   // Phase 4: SetSTN (SPRM1) wins when set
     .aud_realign  (aud_switch | dmx_rlgn_go),   // new track, or the landing after a hard flush, starts on a real frame (see dmx_rlgn_go)
 
@@ -4129,7 +4231,7 @@ ps_demux ps_demux_inst (
     // enable - with subtitles Off it discarded the button subpicture PES
     // before spu_decode ever saw it (highlight only appeared if subs were on
     // at menu load). sp_en = O[15] | menu-up, defined at the transport block.
-    .sp_enable    (sp_route_en),
+    .sp_enable    (sp_route_en & ~trick_hold),     // no subtitle units over trick frames
 
     // Video ES -> decoder-clock CDC FIFO (vidfeed_dc below). The decoder now runs
     // on clk_dec (81 MHz) while ps_demux is on clk_sys (27 MHz), so the ES byte
@@ -4158,7 +4260,7 @@ ps_demux ps_demux_inst (
     .aud_frame_pts_valid (ps_aud_frame_pts_valid),
 
     // NAV-pack PCI payload -> nav_pci (Phase-3 disc-menu buttons)
-    .pci_enable       (menus_on),
+    .pci_enable       (menus_on & ~trick_hold),     // no buttons arm over trick frames
     .pci_byte         (ps_pci_byte),
     .pci_valid        (ps_pci_valid),
     .pci_frame_start  (ps_pci_frame_start),
@@ -5360,6 +5462,9 @@ wire [15:0] half_scan_dec = conv_an_dec ? 16'd720
                                        : (pal_dec_l ? 16'd900  : 16'd750);
 reg  sched_en_s1, sched_en_dec;
 always @(posedge clk_dec) begin sched_en_s1 <= ~av_freerun; sched_en_dec <= sched_en_s1; end
+// trick play's display cadence (disp_sched cad_en): a level, two flops into clk_dec
+reg  trick_cad_s1, trick_cad_dec;
+always @(posedge clk_dec) begin trick_cad_s1 <= trick_hold; trick_cad_dec <= trick_cad_s1; end
 
 wire [32:0] core_stc;            wire core_stc_anchored;                 // clk_dec
 wire        core_disp_anchored;   // clk_dec: the clock is on the DISPLAY timeline, not the parse front
@@ -5449,15 +5554,38 @@ always @(posedge clk_sys)
 // PTS-association coordinate (vbuf_pos) stays exact and the mark stays on the
 // landing's real byte. Gate: bench/dvd/run_es_stuff.sh, run_menu_junction.sh
 // [J3]/[J4]; wiring: tools/check_es_stuff_wiring.py (emu has no bench).
+// TRICK PLAY ES FILTER (dvd/trick_es_filter.sv): in trick play each read ends with the
+// start of the picture after the reference frame; the filter keeps exactly the
+// reference frame. A wire when trick play is off. Reset by the pipe reset: the entry
+// seek restarts its hunt for a sequence header.
+wire [7:0] tf_byte;
+wire       tf_mark, tf_valid, tf_ready;
+wire [15:0] tf_skip_n, tf_pair_n;
+trick_es_filter trick_es_filter_inst (
+    .clk       (clk_sys),
+    .rst_n     (pipe_rst_n),
+    .en        (trick_hold),
+    .in_byte   (ps_vid_byte),
+    .in_mark   (ps_vid_mark),
+    .in_valid  (ps_vid_valid),
+    .in_ready  (ps_vid_ready),
+    .out_byte  (tf_byte),
+    .out_mark  (tf_mark),
+    .out_valid (tf_valid),
+    .out_ready (tf_ready),
+    .skip_n    (tf_skip_n),
+    .pair_n    (tf_pair_n)
+);
+
 es_stuff #(.N(128)) es_stuff_inst (
     .clk        (clk_sys),
     .rst_n      (reset_n),            // NOT pipe_rst_n: it must survive the reset it keys on
     .arm        (es_stuff_arm),       // every jump/seek ack (13r: flushes too)
     .pipe_rst_n (pipe_rst_n),
-    .in_byte    (ps_vid_byte),
-    .in_mark    (ps_vid_mark),
-    .in_valid   (ps_vid_valid),
-    .in_ready   (ps_vid_ready),
+    .in_byte    (tf_byte),            // via the trick-play ES filter (a wire outside trick play)
+    .in_mark    (tf_mark),
+    .in_valid   (tf_valid),
+    .in_ready   (tf_ready),
     .out_data   (vidfeed_wr_data),
     .out_valid  (vidfeed_wr_valid),
     .out_ready  (vidfeed_wr_ready),
@@ -5810,6 +5938,7 @@ mpeg2video mpeg2video_inst (
     .pts_in_valid (dec_pts_in_valid),
     .stc_tick     (stc_tick_dec),      // DVD-FORK (PTS scheduling): the 90 kHz tick, clk_sys/300 crossed into clk_dec
     .sched_en     (sched_en_dec),      // DVD-FORK (PTS scheduling): 0 = free-run (O[13] A/V Sync Off diagnostic)
+    .trick_cad    (trick_cad_dec),     // trick play: one picture per 250 ms, PTS ignored
     .half_scan    (half_scan_dec),     // DVD-FORK (PTS scheduling): half the raster's image-scan period, ticks
     .stc          (core_stc),          // DVD-FORK (PTS scheduling): the clock (clk_dec)
     .stc_anchored (core_stc_anchored),
@@ -7064,9 +7193,40 @@ wire [3:0]  hud_alpha_w;
 // when no cell list is loaded (linear .VOB fallback). Known Phase-7
 // characteristic: c_eltm is parse-front-timed, so the readout leads the
 // picture by the VBUF depth (~1 s). (whole_eltm_w is declared beside nav_pci.)
+// ★ ONE VOBU'S PAIR (2026-11-24, trick play on a physical drive): cur_cell_start is
+// READER-timed (the cell it streams now) and dsi_c_eltm DEMUX-timed (the last NAV
+// pack parsed). At a cell crossing the reader moves first, so for the time it takes
+// the new cell's first NAV pack to reach the demux the clock read new-start + old-
+// elapsed: about a whole cell AHEAD, then back. Trick play made it visible (one
+// VOBU per 250 ms, a drive seek before each new cell: +94 s for ~0.2 s on TFA).
+// So the pair is latched together at dsi_commit (scalars and table complete, see
+// nav_dsi's staleness contract). Before the first NAV pack after a flush there is
+// no pair: the start follows the reader live and c_eltm is nav_dsi's reset 0, as
+// before. gated by tools/check_trick_wiring.py.
+// ★ TRICK PLAY'S EXIT KEEPS THE LAST PAIR (2026-11-27, HDMI capture: 8:48 -> 7:48 ->
+// 9:18). The exit seek's flush drops the pair, and until the landing's first NAV pack the
+// reader-live fallback read the landing cell's start + 0. hud_keep, set by trick play's
+// tail and cleared by the next NAV pack, holds the last pair through that gap (the
+// landing is the VOBU on screen, so its time is the one already shown). The pair's data
+// registers therefore carry no pipe reset; only hud_pair_v does.
+reg [31:0] hud_cs_l, hud_eltm_l;
+reg        hud_pair_v, hud_keep;
+always @(posedge clk_sys or negedge pipe_rst_n) begin
+    if (!pipe_rst_n)     hud_pair_v <= 1'b0;
+    else if (dsi_commit) hud_pair_v <= 1'b1;
+end
+always @(posedge clk_sys) begin
+    if (dsi_commit) begin hud_cs_l <= cur_cell_start_w; hud_eltm_l <= dsi_c_eltm; end
+end
+always @(posedge clk_sys or negedge reset_n) begin
+    if (!reset_n)        hud_keep <= 1'b0;
+    else if (dsi_commit) hud_keep <= 1'b0;
+    else if (trick_tail) hud_keep <= 1'b1;
+end
+wire hud_use_l = hud_pair_v | hud_keep;
 bcd_time_add hud_time_add (
-    .a   (cur_cell_start_w),
-    .b   (dsi_c_eltm),
+    .a   (hud_use_l ? hud_cs_l   : cur_cell_start_w),
+    .b   (hud_use_l ? hud_eltm_l : dsi_c_eltm),
     .sum (whole_eltm_w)
 );
 // SEEK-PREVIEW CLOCK -- dvd/seek_time.sv. The HUD clock used to sit frozen at
@@ -7238,13 +7398,15 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     // leaves the picture clean, and B9 toggles from there in either mode.
     .pause_seed   (!step_paused),
     .pause_show_o (hud_pause_show_w),         // shared with seek_bar: ONE latch
-    .bar_active   (bar_active_w),
+    // Trick play keeps the status line up for the whole gesture (the seek bar itself is
+    // the scrub's and does not show: seek_bar takes bar_active_w alone).
+    .bar_active   (bar_active_w | trick_active),
     // The status-line transport icon is shared: a HELD FF/REW scrub renders
     // its accelerating tier, and an open D-pad coalesce window renders the tap
     // COUNT in the same "x n" field. hold_freeze itself is untouched -- it still
     // pauses the governor/audio below, which a D-pad tap deliberately does not.
-    .scrub_held   (hold_freeze | dpad_pend),
-    .scrub_dir    (hold_freeze ? hud_dir_w  : dpad_pend_dir),
+    .scrub_held   (hold_freeze | dpad_pend | trick_active),
+    .scrub_dir    (trick_active ? ~trick_rev : hold_freeze ? hud_dir_w  : dpad_pend_dir),
     // ⚠ A D-PAD GESTURE HAS NO SPEED TIER, so it feeds 0 = two plain direction
     // arrows. It used to feed dpad_pend_n, the TAP COUNT, into a field the HUD
     // then printed as "xN" -- which was already a category error (a count is not
@@ -7252,7 +7414,8 @@ transport_hud #(.HUD_QX_ADJ(5)) transport_hud_inst (
     // an arrow count: four taps would have rendered as the fastest scrub tier.
     // Nothing is lost -- the popup line shows the gesture's real magnitude
     // ("SEEK FWD 12:30"), which is strictly more than the tap count ever said.
-    .scrub_tier   (hold_freeze ? hud_tier_w : 2'd0),
+    // Trick play: its tier, 16x..480x as two to five arrows.
+    .scrub_tier   (trick_active ? trick_tier : hold_freeze ? hud_tier_w : 2'd0),
     .display_edge (display_edge),
     .stop_on      (stopped_w & stop_kept_w),   // stage 1 only; stage 2 is bare logo
     .aspct_evt    (aspct_evt_w),
@@ -7365,7 +7528,11 @@ seek_bar #(.BAR_QX_ADJ(4)) seek_bar_inst (
     // track table spans the CURRENT TRACK instead (user decision 2026-09-10,
     // reversing the earlier whole-disc bar) -- matching its track-relative
     // clock, and matching the per-track FF/REW clamp above.
-    .force_show (cdda_mode_w && hud_persist_w), // shown/hidden WITH the status line
+    // Trick play: the LIVE playhead for the whole gesture (bar_active stays the
+    // scrub's alone, so there is no stale base/cursor: fill = cur_rbn, the demux's
+    // NAV pack, which is each trick picture's own VOBU). Maintainer, 2026-11-24:
+    // "why is there no progress bar when scrubbing?"
+    .force_show ((cdda_mode_w && hud_persist_w) | trick_active), // shown/hidden WITH the status line
     .menu_active(menus_on && menu_active),
     .cur_rbn    (cell_ready ? dsi_nv_pck_lbn : lin_blk_w),
     .pgc_loaded (pgc_loaded),

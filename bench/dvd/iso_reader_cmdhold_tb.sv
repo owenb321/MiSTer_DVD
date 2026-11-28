@@ -128,6 +128,7 @@ module iso_reader_cmdhold_tb;
     wire [10:0] ptt_cur_w;
 
     dvd_iso_reader #(.SEC_DIV(1000), .DRAIN_WD(DRAIN_WD_TB)) dut (
+        .trick_en(1'b0), .trick_tier(2'd0), .trick_rev(1'b0), .trick_go(1'b0),   // trick play off (a new input floats Z)
         .cc_btns(cc_btns),
         .ptt_upd(ptt_upd_w), .ptt_cur(ptt_cur_w),
         .agl_vm(4'd0), .agl_vm_en(1'b0), .vm_pre_done(vm_pre_done_w),   // as emu: the angle waits for PRE

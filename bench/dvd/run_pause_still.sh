@@ -48,6 +48,11 @@ run green film_control_bottom   pass +pfr=1 +pin=1
 run green letterbox_pin_top     pass +lb=1 +pin=0
 run green letterbox_pin_bottom  pass +lb=1 +pin=1
 run green letterbox_film        pass +lb=1 +pfr=1 +pin=0
+# trick play (trick_cad, not pause): a held trick picture is a field still too, and the
+# pin carries to the walk's next picture
+run green trick_pin_top         pass +trick=1 +pin=0
+run green trick_pin_bottom      pass +trick=1 +pin=1
+run green trick_film            pass +trick=1 +pfr=1 +pin=0
 
 if [ "${1:-}" = "--red" ]; then
   echo "== RED: feature disabled (the pre-fix addrgen behaviour)"
@@ -76,7 +81,15 @@ if [ "${1:-}" = "--red" ]; then
   # M3: HALF blends with weight 0 (no interpolation)
   mut_run M3_half_f0        dvd/disp_vscale.sv 's/(e_mode == M_HALF) ? 8.d128/(e_mode == M_HALF) ? 8'"'"'d0/' 0
   # M4: lock not released by resume (pause term dropped)
-  mut_run M4_lock_sticky    dvd/resample_addrgen.v 's/still_en \&\& pause \&\& ~step_arm/still_en \&\& ~step_arm/' 0
+  mut_run M4_lock_sticky    dvd/resample_addrgen.v 's/still_en \&\& (pause || trick_cad || trick_pin_tail) \&\& ~step_arm/still_en \&\& ~step_arm/' 0
+  # M9: trick play does not engage the still (the field flicker the maintainer saw)
+  mut_run M9_no_trick       dvd/resample_addrgen.v 's/(pause || trick_cad || trick_pin_tail) \&\& ~step_arm/pause \&\& ~step_arm/' 0 +trick=1
+  # M10: the lock dropped with trick_cad at the exit, before the landing's first picture
+  mut_run M10_no_pin_tail   dvd/resample_addrgen.v 's/(pause || trick_cad || trick_pin_tail) \&\& ~step_arm/(pause || trick_cad) \&\& ~step_arm/' 0 +trick=1
+  # M11: no swallow -- the untagged pre-flush picture is shown (the release flash)
+  mut_run M11_no_swallow    dvd/resample_addrgen.v 's/pickup_go \&\& ~tail_swallow) output_frame_sav/pickup_go) output_frame_sav/' 0 +trick=1
+  # M12: the swallow ignores the tag -- the landing's own picture is swallowed too
+  mut_run M12_swallow_tagged dvd/resample_addrgen.v 's/trick_pin_tail \&\& ~trick_cad \&\& ~output_pts_valid \&\&/trick_pin_tail \&\& ~trick_cad \&\&/' 0 +trick=1
   # M5: the busy term dropped from routing (a scan can overtake a draining one)
   mut_run M5_no_busy_route  dvd/disp_vscale.sv 's/wire        ft_route = vscale_en | sb_half | path_busy;/wire        ft_route = vscale_en | sb_half;/' 0
   # M7: Letterbox's interpolated slot loses its half-line phase

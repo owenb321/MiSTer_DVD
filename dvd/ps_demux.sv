@@ -64,6 +64,10 @@ module ps_demux (
     // forwarded; the rest are discarded. Without this, all substreams interleave
     // into the one in-fabric decoder and the audio is garbage. Default 0 = 0x80.
     input  wire  [2:0]  aud_track,
+    // Trick play (docs/trick_play.md): discard EVERY audio PES, MP2 and private_stream_1
+    // alike, on the same path a non-selected track takes, so nothing reaches the audio
+    // ring (whose backpressure would stall the demux) while video is spliced.
+    input  wire         aud_drop,
     // Pulse: the audio track just changed and the audio chain is being reset
     // (emu: flush_ctl's aud_resync on an aud_switch). From here the demux
     // (a) drops the rest of the OLD track's in-flight PES -- it would land in the
@@ -603,7 +607,7 @@ always_ff @(posedge clk or negedge rst_n) begin
                         // so no cross-codec ambiguity on the shared track number.
                         // Non-selected MP2 tracks fall to the skip-by-length path.
                         8'b1100_0???: begin
-                            if (in_byte[2:0] == aud_track) begin
+                            if (in_byte[2:0] == aud_track && !aud_drop) begin
                                 aud_type_r <= 2'd3;          // T_MP2 (was the dead "unknown" sentinel)
                                 state      <= S_PES_LEN_HI;
                             end else state <= S_SYS_LEN_HI;
@@ -826,7 +830,7 @@ always_ff @(posedge clk or negedge rst_n) begin
                         bytes_remaining <= pes_length - 16'd1;
                         state           <= S_DISCARD;
                     end
-                end else if (in_byte[2:0] != aud_track) begin
+                end else if (aud_drop || in_byte[2:0] != aud_track) begin
                     // Not the selected audio track. A DVD interleaves several audio
                     // substreams (e.g. Matrix AC-3 0x80/0x81/0x82); forwarding all of
                     // them garbles the one in-fabric decoder. Discard this PES.

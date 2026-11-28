@@ -140,6 +140,17 @@ module field_phase_tb;
   reg        top_field_first = 1;
   reg        repeat_first_field = 0;
   reg        film_mode = 0;                  // [5]: tff toggles per consumed picture
+  reg        trick_cad_r = 0;                // trick play: the corrector must not insert (scenario [T])
+  reg        tk_watch = 0;
+  integer    tk_trig = 0, tk_ins = 0, tk_late = 0;
+  always @(posedge clk) if (tk_watch && resample.resample_addrgen.clk_en) begin
+    if ((resample.resample_addrgen.ofv_pickup &&
+         (resample.resample_addrgen.alt_break ^ resample.resample_addrgen.par_fb)) ||
+        resample.resample_addrgen.par_fb)                        tk_trig = tk_trig + 1;
+    if (resample.resample_addrgen.par_slip || resample.resample_addrgen.par_hold_ins)
+                                                                 tk_ins  = tk_ins + 1;
+    if (resample.resample_addrgen.par_late_r)                    tk_late = tk_late + 1;
+  end
   reg        std_cad_r = 0;                  // +stdcad: Standard Convert's synthetic 3:2
   always @(posedge clk)
     if (rst && film_mode && output_frame_rd) top_field_first <= ~top_field_first;
@@ -188,6 +199,7 @@ module field_phase_tb;
     .clk(clk), .rst(srst),
     .output_frame(output_frame), .output_frame_valid(output_frame_valid),
     .output_frame_rd(output_frame_rd),
+    .output_pts(33'd0), .output_pts_valid(1'b1), .output_pts_2nd(1'b0),   // every picture tagged: trick_pin_tail never swallows here (pause_still_tb covers it)
     .progressive_sequence(progressive_sequence), .progressive_frame(progressive_frame),
     .informative(1'b1),
     .top_field_first(top_field_first), .repeat_first_field(repeat_first_field),
@@ -207,7 +219,7 @@ module field_phase_tb;
 `ifndef NO_PARITY_FIX
     .raster_par_err(par_err_sync),
 `endif
-    .vscale_mode(2'd0), .hcrop_en(1'b0), .still_en(1'b0), .blend_en(1'b0), .bob_en(1'b0), .std_cad(std_cad_r), .sched_due(1'b1), .sched_next_due(1'b1)
+    .vscale_mode(2'd0), .hcrop_en(1'b0), .still_en(1'b0), .blend_en(1'b0), .bob_en(1'b0), .std_cad(std_cad_r), .trick_cad(trick_cad_r), .sched_due(1'b1), .sched_next_due(1'b1)
   );
 
   // framestore_reader + full-rate behavioural memory, LINE-STAMPED.
@@ -302,7 +314,7 @@ module field_phase_tb;
   // ====================================================================
   localparam [7:0] CODE_LO = 8'd128;      // luma at/above this is picture, below is blanking
   localparam [31:0] FNV_OFF = 32'h811C_9DC5, FNV_PRM = 32'h0100_0193;
-  localparam integer MAXFLD = 600;
+  localparam integer MAXFLD = 1000;     // 600 until [T-trick]/[T-after]: their fields filled it before [12-c]
 
   // one sample per displayed line, at a fixed column safely inside the 64-pixel picture
   wire       pix_probe = pixel_en_out && (h_pos == 12'd4);
@@ -727,6 +739,31 @@ module field_phase_tb;
     progressive_frame = 0; repeat_first_field = 0; film_mode = 0; top_field_first = 1;
     stutter(4);
     check_window_s("7-post-stutter", SETTLE_FB, SETTLE_FB); // the feedback arm heals the rest
+
+    // [T] TRICK PLAY: the corrector is OFF (trick_cad; docs/trick_play.md). One unrelated
+    // I-frame per 250 ms breaks alternation at nearly every pickup, and each slip pulsed
+    // frame_late. Under trick_cad the same stimulus that fires both arms above ([2]/[4]
+    // alternation breaks, [8] a misaligned hold) must insert NOTHING and pulse no late.
+    // Non-vacuous: the raw triggers (alt_break ^ par_fb at a pickup, par_fb in a hold)
+    // must be seen during the window. After it, [T-after] proves the corrector is back.
+    trick_cad_r = 1;  tk_watch = 1;
+    output_frame_valid = 0; repeat (3) @(negedge v_sync); top_field_first = 0;
+    output_frame_valid = 1; wait_flds(12);
+    output_frame_valid = 0; repeat (3) @(negedge v_sync); top_field_first = 1;
+    output_frame_valid = 1; wait_flds(12);
+    force_misaligned();
+    output_frame_valid = 0; wait_flds(60);
+    tk_watch = 0;
+    if (tk_trig == 0) begin
+      errors = errors + 1; $display("[T-trick] FAIL: VACUOUS - no corrector trigger fired during the window");
+    end else if (tk_ins != 0 || tk_late != 0) begin
+      errors = errors + 1;
+      $display("[T-trick] FAIL: %0d insertion(s), %0d par_late pulse(s) under trick_cad (%0d trigger(s))", tk_ins, tk_late, tk_trig);
+    end else
+      $display("[T-trick] PASS: %0d corrector trigger(s), 0 insertions, 0 late pulses under trick_cad", tk_trig);
+    trick_cad_r = 0;
+    output_frame_valid = 1;
+    check_window_s("T-after", SETTLE_FB, SETTLE_FB);       // the corrector heals again
     end   // !start_only
 
     // [10] DECODER SOFT RESET — the start every mount and every menu<->title jump makes
@@ -829,7 +866,10 @@ module field_phase_tb;
 
   // global watchdog: the raster must keep producing fields
   initial begin
-    #400_000_000;  // 400 ms sim time
+    // 400 ms until the trick-play windows ([T-trick]/[T-after]) added fields ahead of
+    // [10]-[12]; it caps a stall, not the scenario list, so it has headroom. (A full
+    // MAXFLD record buffer also reads as a stall here: fld_n stops counting.)
+    #800_000_000;  // 800 ms sim time
     $fatal(1, "TIMEOUT: field flow stalled (fields=%0d)", fld_n);
   end
 

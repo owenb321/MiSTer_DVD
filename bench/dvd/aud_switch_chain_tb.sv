@@ -91,7 +91,7 @@ wire        pd_xfer  = pd_v && pd_ready;
 ps_demux dmx (
     .clk(clk), .rst_n(rst_n),
     .in_byte(in_byte), .in_valid(in_valid), .in_ready(in_ready),
-    .aud_track(aud_track), .aud_realign(dmx_realign), .sp_track(5'd0), .sp_enable(1'b0),
+    .aud_drop(1'b0), .aud_track(aud_track), .aud_realign(dmx_realign), .sp_track(5'd0), .sp_enable(1'b0),
     .vid_byte(), .vid_valid(), .vid_mark(), .vid_ready(1'b1),
     .aud_byte(pd_b), .aud_valid(pd_v), .aud_type(pd_t), .aud_frame_start(pd_fs),
     .aud_ready(pd_ready),

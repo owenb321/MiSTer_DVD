@@ -3124,7 +3124,11 @@ why `still_active` has to be excluded explicitly: a re-align would otherwise fir
 Design + the RED/GREEN evidence: `docs/single_raster_analog.md` §6. Suite:
 `bench/dvd/run_mode_realign.sh`.
 
-### 2d. Trick play (continuous 2×/4×/… playback) — ❌ NOT BUILT, and NOT a variation on seeking
+### 2d. Trick play (continuous 2×/4×/… playback) — NOT a variation on seeking
+
+> **✅ Shipped (PR #206, 2026-11-28, HW-confirmed)**: the design,
+> the measurements and the gates are in `docs/trick_play.md`. The notes below are the
+> 2026-09-03 analysis it started from.
 
 Recorded 2026-09-03 so the next session starts from facts. Everything above **repositions**
 the reader and lets the flush contract re-lock; trick play must do the opposite — never flush

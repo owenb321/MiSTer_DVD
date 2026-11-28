@@ -85,7 +85,8 @@ everything.
 
 The two fields of a video-sourced picture are two different moments, 1/60 s apart. Showing
 both alternately while paused would flicker between them, so when you pause (or frame-step)
-such a picture the player holds **one** field, filling the other field's lines by
+such a picture, and for each picture [trick play](../playback/controls.md) holds on
+screen, the player holds **one** field, filling the other field's lines by
 interpolation — the "field still" a set-top player shows. The still is steady on a CRT and
 over HDMI with either `Deinterlace` setting, at the cost of half the vertical detail while
 paused.

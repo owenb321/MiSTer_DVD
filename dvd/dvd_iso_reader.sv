@@ -148,6 +148,20 @@ module dvd_iso_reader #(
     input      [16:0] seek_tm_secs,
     output reg        tmap_used,      // the last time seek landed through the map
     output reg        tmap_fell,      // ...or fell back to seek_rbn
+    // TRICK PLAY (docs/trick_play.md "The reader"). While trick_en is high, every NAV
+    // pack the reader streams arms a jump: the fetch ends at the VOBU's first
+    // reference picture (nv + vobu_1stref_ea), then moves WITHOUT A FLUSH to the
+    // VOBU the tier's fwda/bwda rung names (the ILVU jump's no-flush path). The
+    // jump waits for trick_go, the cadence gate. Cell commands are never run.
+    input             trick_en,       // level: trick play (title domain, cell mode)
+    input      [1:0]  trick_tier,     // 0..3 = 0.5 / 2 / 10 / 30 s per VOBU
+    input             trick_rev,      // 1 = backwards (bwda)
+    input             trick_go,       // level: the next jump may fire (cadence gate)
+    output reg        trick_vobu,     // pulse: a VOBU's read was armed (trick_nav/eltm new)
+    output reg [31:0] trick_nav,      // its NAV pack RBN (the exit seek's target)
+    output reg [31:0] trick_eltm,     // its DSI c_eltm (BCD hh mm ss ff)
+    output reg        trick_edge,     // level: the PGC's edge was reached; no further jump
+    output reg [15:0] trick_xcell_n,  // jumps that crossed into another cell
     // IFO header gate (audit 8). Sticky per mount (cleared on start), clk domain.
     // An IFO whose sector 0 lacks its "DVDVIDEO-VMG"/"DVDVIDEO-VTS" magic is
     // re-read from its .BUP; these say it happened (telemetry word 14 bits 10-12).
@@ -854,8 +868,11 @@ reg [32:0] cell_meta_mem  [0:MAXCELL-1];  // {heur, pb_secs[15:0]@4-7, still_tim
                                           // may hold the full 16-bit duration instead
                                           // of the byte's 254 s clamp).
 reg [7:0]  cell_cat_mem   [0:MAXCELL-1];  // cell category byte@0 (Phase 9 angles)
+reg [31:0] cell_lv_mem    [0:MAXCELL-1];  // cell last_vobu_start_sector @16 (RBN): where
+                                          // trick play lands going BACK into a cell
 reg [7:0]  cell_raddr;                     // BRAM read address (current cell)
 reg [31:0] cf_rd, cl_rd;                   // registered first/last for cell_raddr
+reg [31:0] lv_rd;                          // registered last_vobu_start for cell_raddr
 reg [32:0] cm_rd;                          // registered {heur, pb_secs, still, cmd_nr} for cell_raddr
 reg [7:0]  cc_rd;                          // registered category byte for cell_raddr
 
@@ -944,6 +961,16 @@ reg [31:0] snoop_nextv;                      // vobu_sri.next_vobu (DSI @0x13A -
 reg [31:0] snoop_rbn;                         // this nav sector's RBN (= play_blk)
 reg        snoop_done;                        // pulse: a nav sector's block-2 finished
 wire       ilvu_active = angle_active || seamless_active;   // snoop/jump gate
+// Trick play's extra DSI fields (captured only while trick_en, off the same stream).
+reg [31:0] snoop_ref;                         // vobu_1stref_ea (DSI 0x0C -> sector 0x413)
+reg [31:0] snoop_eltm;                        // c_eltm        (DSI 0x1C -> sector 0x423)
+reg [31:0] snoop_prevv;                       // vobu_sri.prev_vobu (DSI 0x13E -> 0x545)
+reg [31:0] snoop_r0, snoop_r1, snoop_r2, snoop_r3;  // the tier rungs, this direction
+// The sector's first byte arrived with trick_en already high, so every field above
+// belongs to THIS sector. Without it, trick_en rising mid-sector armed on a video
+// sector whose 0x400 bytes had already passed, with snoop_sig left over from the
+// last angle/seamless NAV pack (found by run_trick_reader.sh on MEN_IN_BLACK_3).
+reg        tk_sec_ok;
 
 // Armed ILVU jump: fire a no-flush RBN jump when play_blk passes ilvu_end_rbn.
 reg        ilvu_armed;
@@ -1980,6 +2007,7 @@ always @(posedge clk) begin
     cl_rd <= cell_last_mem [cell_raddr];
     cm_rd <= cell_meta_mem [cell_raddr];
     cc_rd <= cell_cat_mem  [cell_raddr];   // Phase-9 cell category byte@0
+    lv_rd <= cell_lv_mem   [cell_raddr];   // trick play: a backward cell entry
 end
 
 // Phase 11: cur_cell_start continuously tracks the STREAMING cell via its own
@@ -2212,6 +2240,11 @@ always @(posedge clk)
 // sector's RBN (= play_blk). snoop_done pulses at the DSI region's last byte;
 // the FSM evaluates + arms the ILVU jump then.
 // =========================================================================
+// Trick-play rung field offsets in the sector (see the snoop below).
+wire [10:0] rg0_d = sd_buff_addr[10:0] - (trick_rev ? 11'h565 : 11'h521);   // 4 s
+wire [10:0] rg1_d = sd_buff_addr[10:0] - (trick_rev ? 11'h585 : 11'h501);   // 10 s
+wire [10:0] rg2_d = sd_buff_addr[10:0] - (trick_rev ? 11'h589 : 11'h4FD);   // 30 s
+wire [10:0] rg3_d = sd_buff_addr[10:0] - (trick_rev ? 11'h591 : 11'h4F5);   // 120 s
 wire [3:0]  ang_idx = cur_angle - 4'd1;   // 0-based; every cur_angle writer gives >= 1
 wire [10:0] agli_o  = 11'h4BB + 11'd6 * {7'd0, ang_idx};                 // sector offset
 // Byte index relative to that entry: one subtractor instead of four offset
@@ -2219,7 +2252,9 @@ wire [10:0] agli_o  = 11'h4BB + 11'd6 * {7'd0, ang_idx};                 // sect
 wire [10:0] agli_d  = sd_buff_addr[10:0] - agli_o;
 always @(posedge clk) begin
     snoop_done <= 1'b0;
-    if (state==S_STREAM && sd_buff_wr && ilvu_active) begin
+    if (state==S_STREAM && sd_buff_wr && sd_buff_addr[10:0] == 11'd0)
+        tk_sec_ok <= trick_en;
+    if (state==S_STREAM && sd_buff_wr && (ilvu_active || trick_en)) begin
         case (sd_buff_addr[10:0])
             11'h400: snoop_sig[31:24] <= sd_buff_dout;
             11'h401: snoop_sig[23:16] <= sd_buff_dout;
@@ -2237,8 +2272,30 @@ always @(posedge clk) begin
             11'h542: snoop_nextv[23:16] <= sd_buff_dout;
             11'h543: snoop_nextv[15:8]  <= sd_buff_dout;
             11'h544: snoop_nextv[7:0]   <= sd_buff_dout;
+            // trick play (harmless when not in trick play: nothing reads them)
+            11'h413: snoop_ref[31:24]   <= sd_buff_dout;
+            11'h414: snoop_ref[23:16]   <= sd_buff_dout;
+            11'h415: snoop_ref[15:8]    <= sd_buff_dout;
+            11'h416: snoop_ref[7:0]     <= sd_buff_dout;
+            11'h423: snoop_eltm[31:24]  <= sd_buff_dout;
+            11'h424: snoop_eltm[23:16]  <= sd_buff_dout;
+            11'h425: snoop_eltm[15:8]   <= sd_buff_dout;
+            11'h426: snoop_eltm[7:0]    <= sd_buff_dout;
+            11'h545: snoop_prevv[31:24] <= sd_buff_dout;
+            11'h546: snoop_prevv[23:16] <= sd_buff_dout;
+            11'h547: snoop_prevv[15:8]  <= sd_buff_dout;
+            11'h548: snoop_prevv[7:0]   <= sd_buff_dout;
             default: ;
         endcase
+        // The four tier rungs (4 / 10 / 30 / 120 s) for this direction. DSI vobu_sri:
+        // fwda[i] @0xEE+4i -> sector 0x4F5+4i, i = 11 / 3 / 2 / 0;
+        // bwda[k] @0x142+4k -> sector 0x549+4k, k = 7 / 15 / 16 / 18 (bwda runs short
+        // to long, fwda long to short: libdvdread vobu_sri_t, tools/nav_extract.py).
+        // One subtractor per rung; a field's 4 bytes arrive in order, MSB first.
+        if (rg0_d < 11'd4) snoop_r0 <= {snoop_r0[23:0], sd_buff_dout};
+        if (rg1_d < 11'd4) snoop_r1 <= {snoop_r1[23:0], sd_buff_dout};
+        if (rg2_d < 11'd4) snoop_r2 <= {snoop_r2[23:0], sd_buff_dout};
+        if (rg3_d < 11'd4) snoop_r3 <= {snoop_r3[23:0], sd_buff_dout};
         if (sd_buff_addr[10:0] == 11'd0)          snoop_rbn <= play_blk;
         if (agli_d == 11'd0) snoop_agli[31:24] <= sd_buff_dout;
         if (agli_d == 11'd1) snoop_agli[23:16] <= sd_buff_dout;
@@ -2287,6 +2344,72 @@ wire [31:0] snoop_nvtgt  = snoop_rbn + {2'b0, snoop_nvoff};
 // empty angle-menu stubs). Key on the snooped VALUE.
 wire        snoop_ag_ok  = snoop_valid   && (snoop_tgt   <= cl_rd);
 wire        snoop_nv_ok  = snoop_nvvalid && (snoop_nvtgt <= cl_rd);
+
+// =========================================================================
+// TRICK PLAY (docs/trick_play.md "The reader"). At each NAV pack the snoop has
+// captured this VOBU's 1stref_ea and its four tier rungs. The jump target is the
+// tier's rung when it is a usable offset inside the current cell; a rung the disc left
+// 0 falls through to the next shorter one, and an all-zero table to next_vobu /
+// prev_vobu. END_OF_CELL (or a target outside the cell) = the cell's edge: the next
+// cell in play order going forward (its first sector), the previous one going back (its
+// last VOBU, cell_lv_mem). Past the PGC's first or last cell: land on that cell's
+// boundary VOBU (first going back, last going forward), then trick_edge and the reader
+// holds. tools/trick_splice.py
+// walk_cells is the model, byte for byte (bench/dvd/run_trick_reader.sh).
+// =========================================================================
+reg        trick_armed;               // a VOBU's read is armed: stop at trick_end
+reg [31:0] trick_end;                 // its last sector (nv + 1stref_ea)
+reg [31:0] trick_tgt;                 // in-cell target (the next VOBU's NAV pack)
+reg        trick_x;                   // ...or cross to trick_cell instead
+reg [7:0]  trick_cell;
+reg        trick_hold;                // armed at the PGC's edge: never fires
+reg        trick_wait;                // reached trick_end, waiting for the gate
+reg        trick_lv;                  // the next cell load starts at lv_rd (backwards)
+reg        trick_credit;              // trick_go seen since the last jump
+wire [31:0] tk_adj = trick_rev ? snoop_prevv : snoop_nextv;
+// Entry classes (plain wires, not a function: CLAUDE.md, Quartus 17 and new functions):
+// z = 0 (not authored), e = 0x3FFFFFFF END_OF_CELL (the cell ends within that jump),
+// v = a usable offset.
+wire        tk_z3  = (snoop_r3[29:0] == 30'd0),  tk_e3 = (snoop_r3[29:0] == 30'h3FFFFFFF);
+wire        tk_z2  = (snoop_r2[29:0] == 30'd0),  tk_e2 = (snoop_r2[29:0] == 30'h3FFFFFFF);
+wire        tk_z1  = (snoop_r1[29:0] == 30'd0),  tk_e1 = (snoop_r1[29:0] == 30'h3FFFFFFF);
+wire        tk_z0  = (snoop_r0[29:0] == 30'd0),  tk_e0 = (snoop_r0[29:0] == 30'h3FFFFFFF);
+wire        tk_vA  = (tk_adj[29:0]   != 30'h3FFFFFFF) && (tk_adj[29:0]   != 30'd0);
+// ★ THE TIER'S OWN RUNG DECIDES (2026-11-24, second HW round). A usable rung is the
+// jump; END_OF_CELL means the cell ends within this tier's jump, so CROSS now (skipping
+// less than one jump keeps the tier's speed). Only a rung the disc left ZERO falls
+// through to the next shorter one, and only an all-zero table to the adjacent VOBU.
+// Stepping down on END_OF_CELL instead crawled every cell end in 4 s steps (Matrix: 30 s
+// tier at +3/+4 s for ~1.5 s at a time; with the old 0.5 s rung, one VOBU at a time).
+// tk_c<n> = still undecided after rung n (the tier is below it, or it was zero).
+wire        tk_c3  = (trick_tier != 2'd3) || tk_z3;
+wire        tk_r2  = (trick_tier >= 2'd2) && tk_c3;
+wire        tk_c2  = tk_c3 && ((trick_tier < 2'd2) || tk_z2);
+wire        tk_r1  = (trick_tier >= 2'd1) && tk_c2;
+wire        tk_c1  = tk_c2 && ((trick_tier < 2'd1) || tk_z1);
+wire        tk_c0  = tk_c1 && tk_z0;
+wire        tk_u3  = !tk_c3 && !tk_e3;
+wire        tk_u2  = tk_r2 && !tk_z2 && !tk_e2;
+wire        tk_u1  = tk_r1 && !tk_z1 && !tk_e1;
+wire        tk_u0  = tk_c1 && !tk_z0 && !tk_e0;
+wire        tk_uA  = tk_c0 && tk_vA;
+wire [29:0] tk_off = tk_u3 ? snoop_r3[29:0] : tk_u2 ? snoop_r2[29:0] :
+                     tk_u1 ? snoop_r1[29:0] : tk_u0 ? snoop_r0[29:0] : tk_adj[29:0];
+wire [31:0] tk_tgt = trick_rev ? (snoop_rbn - {2'b0, tk_off}) : (snoop_rbn + {2'b0, tk_off});
+wire        tk_ok  = (tk_u3 || tk_u2 || tk_u1 || tk_u0 || tk_uA) &&
+                     (trick_rev ? (tk_tgt >= cf_rd) : (tk_tgt <= cl_rd));
+// the neighbouring cell in play order (an angle block counts as one cell)
+wire [7:0]  tk_prev_base = angle_active ? block_first : cell_i;
+wire        tk_edge = trick_rev ? (tk_prev_base == 8'd0) : (cell_after >= cell_count);
+wire [7:0]  tk_xcell = trick_rev ? (tk_prev_base - 8'd1) : cell_after;
+// ★ THE PGC'S EDGE LANDS ON THE CELL'S BOUNDARY VOBU before it holds: its first VOBU
+// going back (cf_rd: a cell starts with a NAV pack), its last going forward (lv_rd).
+// Crossing on END_OF_CELL would otherwise hold up to one jump short: a rewind to the
+// start stopping two minutes in at 480x.
+wire [31:0] tk_bnd  = trick_rev ? cf_rd : lv_rd;
+wire        tk_land = !tk_ok && tk_edge && (snoop_rbn != tk_bnd);
+wire        tk_in   = tk_ok || tk_land;
+wire [31:0] tk_dst  = tk_ok ? tk_tgt : tk_bnd;
 
 // =========================================================================
 // cell list write (from the P_CELL walker: first_sector completes at entry
@@ -2477,6 +2600,7 @@ always @(posedge clk)
         end
         if (cell_bi == 5'd23) begin
             cell_last_mem[cell_wi] <= {wacc, pb_rdata};
+            cell_lv_mem[cell_wi]   <= lv_c;   // captured at byte 19 (@16) of this record
             // same cell_wi as the byte-11 cellf_we above (the index advances
             // only after the 24-byte record), so the two strobes pair up.
             cellf_lwe  <= 1'b1;
@@ -2724,6 +2848,20 @@ always @(posedge clk or negedge rst_n) begin
         ang_pre_wd   <= 24'd0;
         ilvu_armed   <= 1'b0;
         ilvu_end_rbn <= 32'd0;
+        trick_armed  <= 1'b0;
+        trick_end    <= 32'd0;
+        trick_tgt    <= 32'd0;
+        trick_x      <= 1'b0;
+        trick_cell   <= 8'd0;
+        trick_hold   <= 1'b0;
+        trick_wait   <= 1'b0;
+        trick_lv     <= 1'b0;
+        trick_credit <= 1'b0;
+        trick_vobu   <= 1'b0;
+        trick_nav    <= 32'd0;
+        trick_eltm   <= 32'd0;
+        trick_edge   <= 1'b0;
+        trick_xcell_n <= 16'd0;
         ilvu_target  <= 32'd0;
         ilvu_from_agli <= 1'b0;
         chap_st      <= CH_IDLE;
@@ -2915,6 +3053,27 @@ always @(posedge clk or negedge rst_n) begin
             ilvu_end_rbn   <= snoop_iend;
             ilvu_target    <= snoop_nvtgt;
             ilvu_from_agli <= 1'b0;
+        end
+
+        // ---- Trick play: arm at every NAV pack (see the TRICK PLAY note) ----
+        trick_vobu   <= 1'b0;
+        trick_credit <= trick_en && (trick_credit || trick_go);
+        if (!trick_en) begin
+            trick_armed <= 1'b0;
+            trick_hold  <= 1'b0;
+            trick_edge  <= 1'b0;
+        end else if (snoop_done && tk_sec_ok && cell_mode && !menu_dom &&
+                     snoop_sig == 32'h000001BF && snoop_sub == 8'h01) begin
+            trick_armed <= 1'b1;
+            trick_end   <= snoop_rbn + snoop_ref;
+            trick_tgt   <= tk_dst;
+            trick_x     <= !tk_in;
+            trick_cell  <= tk_xcell;
+            trick_hold  <= !tk_in && tk_edge;
+            trick_edge  <= !tk_in && tk_edge;
+            trick_vobu  <= 1'b1;
+            trick_nav   <= snoop_rbn;
+            trick_eltm  <= snoop_eltm;
         end
 
         // ---- Raw MODE2/2352 position walk (parallel; one step per delivered
@@ -3483,6 +3642,10 @@ always @(posedge clk or negedge rst_n) begin
             seamless_active <= 1'b0;
             cell_seamless_r <= 1'b0;
             ilvu_armed     <= 1'b0;
+            trick_armed    <= 1'b0;   // a seek (trick play's entry and exit) disarms
+            trick_wait     <= 1'b0;
+            trick_hold     <= 1'b0;
+            trick_lv       <= 1'b0;
             seek_pending <= 1'b0;
             seek_tm      <= 1'b0;          // consumed below (reads the old value)
             seek_ack     <= 1'b1;          // tell emu.sv to pulse load_flush
@@ -5059,6 +5222,10 @@ always @(posedge clk or negedge rst_n) begin
                 seamless_active <= 1'b0;
                 cell_seamless_r <= 1'b0;
                 ilvu_armed     <= 1'b0;
+                trick_armed    <= 1'b0;   // a new PGC: nothing of the old one's walk
+                trick_wait     <= 1'b0;
+                trick_hold     <= 1'b0;
+                trick_lv       <= 1'b0;
                 cur_angle      <= 4'd1;
                 pre_seen       <= 1'b0;   // this PGC's PRE has not run yet
                 state      <= S_CELL_LOAD;
@@ -5089,6 +5256,26 @@ always @(posedge clk or negedge rst_n) begin
                                     : (cl_rd + 32'd1);
                         state    <= S_STREAM;
                     end
+                end else if (trick_lv && cc_is_angle && !cc_blk_first && !angle_resolved
+                             && cell_i != 8'd0) begin
+                    // ★ TRICK PLAY, BACKWARDS INTO AN ANGLE BLOCK (docs/trick_play.md "Angle blocks").
+                    // A backward crossing loads the cell before the one it leaves, which
+                    // for a block is its LAST angle (block_mode 3), not its first. The
+                    // pick below runs only on the first, so the reader streamed the last
+                    // sibling with angle_active low, and the next crossing stepped to the
+                    // sibling before it: TFA's opening crawl walked cell 6 -> 3 -> 2 -> 1,
+                    // one copy of the segment per angle. Walk the cell table back to the
+                    // block's first cell (one cell per S_CELL_LOAD pass, the table's read
+                    // latency) and fall into the normal pick there; trick_lv stays set,
+                    // so the chosen angle's cell then lands on its LAST VOBU.
+                    // Inside the block the walk needs nothing more: on the 41 library
+                    // discs with angle blocks in the feature (104,789 VOBUs) every usable
+                    // trick rung lands on the same angle; a jump that would leave it is
+                    // authored END_OF_CELL, which crosses. A cell with no angle category
+                    // (a malformed block) ends the walk on the title path; cell 0 bounds it.
+                    cell_i     <= cell_i - 8'd1;
+                    cell_raddr <= cell_i - 8'd1;
+                    state      <= S_CELL_LOAD;
                 end else if (cc_blk_first && !angle_resolved) begin
                     // MULTI-ANGLE (Phase 9): the first cell of an angle block.
                     // Count this block's angle cells, then load the cur_angle cell
@@ -5168,7 +5355,9 @@ always @(posedge clk or negedge rst_n) begin
                     strm_idx    <= eff_base;
                     seek_cum    <= 32'd0;
                     seek_target <= rbn_override ? seek_rbn_l
+                                 : trick_lv     ? lv_rd          // trick play, backwards
                                                 : cf_rd;         // RBN = sector unit
+                    trick_lv    <= 1'b0;
                     play_end    <= cl_rd + 32'd1;                // last+1 (exclusive)
                     rbn_override <= 1'b0;
                     state       <= S_LAT;   // wait for ext_blocks_q at eff_base
@@ -5621,7 +5810,52 @@ always @(posedge clk or negedge rst_n) begin
             // the PGC cell list in program order, mapping each cell's
             // concatenated 2048-sector position through the extent table.
             S_STREAM: begin
-                if (!blk_inflight && !strm_done && cache_has_room) begin
+                if (trick_wait) begin
+                    // Trick play stopped at a VOBU's reference picture. No read is
+                    // issued while waiting; the cache keeps draining.
+                    if (!trick_en) begin
+                        // Trick play ended without a seek (the controller normally
+                        // seeks; this is the floor): carry on from the next sector.
+                        trick_wait  <= 1'b0;
+                        trick_armed <= 1'b0;
+                        if (trick_end + 32'd1 < play_end) begin
+                            seek_rbn_l   <= trick_end + 32'd1;
+                            rbn_override <= 1'b1;
+                            cell_raddr   <= cell_i;
+                            state        <= S_CELL_LOAD;
+                        end else if (cell_after < cell_count) begin
+                            cell_i     <= cell_after;
+                            cell_raddr <= cell_after;
+                            state      <= S_CELL_LOAD;
+                        end else begin
+                            strm_done  <= 1'b1;
+                        end
+                    end else if (!trick_hold && (trick_credit || trick_go)) begin
+                        // TRICK JUMP: no flush, like the ILVU jump below (cache and
+                        // decoder untouched). In-cell: stream from the target RBN in
+                        // this cell. Crossing: load the neighbouring cell from its first
+                        // sector (forward) or its last VOBU (backward, trick_lv). The
+                        // cell-finished path (cell commands, stills, POST) never runs.
+                        trick_armed  <= 1'b0;
+                        trick_wait   <= 1'b0;
+                        trick_credit <= 1'b0;
+                        if (!trick_x) begin
+                            seek_rbn_l   <= trick_tgt;
+                            rbn_override <= 1'b1;
+                            cell_raddr   <= cell_i;
+                        end else begin
+                            cell_i        <= trick_cell;
+                            cell_raddr    <= trick_cell;
+                            trick_lv      <= trick_rev;
+                            trick_xcell_n <= trick_xcell_n + 16'd1;
+                            angle_active   <= 1'b0;       // leaving any angle block, as
+                            angle_resolved <= 1'b0;       // the cell-finished path does
+                            angle_count    <= 4'd0;
+                            ilvu_armed     <= 1'b0;
+                        end
+                        state <= S_CELL_LOAD;
+                    end
+                end else if (!blk_inflight && !strm_done && cache_has_room) begin
                     // ext_start_q = ext_mem[strm_idx][start]; valid because every
                     // strm_idx change detours through S_EXT_LOAD before returning
                     // here. Menu domain bypasses the extent table (single VOB).
@@ -5647,7 +5881,35 @@ always @(posedge clk or negedge rst_n) begin
                                                            : 14'd2048);
                         raw_wcnt     <= 12'd0;
                         if (cell_mode) begin
-                            if (ilvu_armed &&
+                            if (trick_armed && play_blk == trick_end) begin
+                                if (trick_en && !trick_hold && (trick_credit || trick_go)) begin
+                                    // TRICK JUMP: no flush, like the ILVU jump below (cache and
+                                    // decoder untouched). In-cell: stream from the target RBN in
+                                    // this cell. Crossing: load the neighbouring cell from its first
+                                    // sector (forward) or its last VOBU (backward, trick_lv). The
+                                    // cell-finished path (cell commands, stills, POST) never runs.
+                                    trick_armed  <= 1'b0;
+                                    trick_wait   <= 1'b0;
+                                    trick_credit <= 1'b0;
+                                    if (!trick_x) begin
+                                        seek_rbn_l   <= trick_tgt;
+                                        rbn_override <= 1'b1;
+                                        cell_raddr   <= cell_i;
+                                    end else begin
+                                        cell_i        <= trick_cell;
+                                        cell_raddr    <= trick_cell;
+                                        trick_lv      <= trick_rev;
+                                        trick_xcell_n <= trick_xcell_n + 16'd1;
+                                        angle_active   <= 1'b0;       // leaving any angle block, as
+                                        angle_resolved <= 1'b0;       // the cell-finished path does
+                                        angle_count    <= 4'd0;
+                                        ilvu_armed     <= 1'b0;
+                                    end
+                                    state <= S_CELL_LOAD;
+                                end else begin
+                                    trick_wait <= 1'b1;   // hold here for the gate
+                                end
+                            end else if (ilvu_armed &&
                                 play_blk == ilvu_end_rbn) begin
                                 // ILVU JUMP: reached the last sector of the
                                 // ILVU_LAST VOBU -> jump to this branch's next ILVU.

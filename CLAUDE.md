@@ -141,7 +141,7 @@ and misdirected a "what's next?" session. To prevent recurrence:
   any per-feature status header in `docs/` (e.g. section headers in
   `docs/dvd_menu_refinements.md`, `docs/dvd_nav.md`, `docs/dvd_vm.md`).
 - Flip the marker to reality: `🔧`/`❌`/`[ ]`/"sim-verified, HW gate pending" →
-  `✅ MERGED (PR #NN)` and, once the board test passes, `✅ HW-CONFIRMED`. If merged but not
+  `✅ MERGED (PR #206)` and, once the board test passes, `✅ HW-CONFIRMED`. If merged but not
   yet hardware-tested, say exactly that (`⏳ HW-confirm pending`) — don't leave it reading "gate pending".
 - **Retire dead branch names.** A merged feature must not still point at a live `feature/*`
   branch in prose — replace it with the PR number.
@@ -399,6 +399,7 @@ otherwise; `--red` runs its mutation arms).
 | Remote buttons: Stop, Aspect, Chapter Menu, A-B, Frame Step, Eject, Volume | ✅ | `dvd_nav.md`, `screensaver.md` | `run_frame_step.sh`, `check_frame_step_wiring.py` |
 | Still off (UOP18): Play/Pause or Select ends a still with no buttons armed or pending (audit 5); a jump no longer leaves a stale still timer | ✅ HW (timed stills, Play + Select, A/B vs `main`; SEED 7), MERGED PR #159 | `dvd_nav.md` "Still off" | `run_still_off.sh --red`, `check_still_off_wiring.py`, `check_select_noop.py` |
 | Frame step as a pause route; unbounded steps; clock follows the step | ✅ | `dvd_nav.md` | `run_frame_step.sh` |
+| Trick play: hold FF/REW in a DVD film = 16×/40×/120×/480×, one I-frame per 250 ms (`trick_ctrl`, reader walk, `trick_es_filter`); tap = 10 s; OSD `Trick Play`; release resumes at the HUD clock's time | ✅ HW (image + drive, angles, CRT field still, edges; maintainer's hands-on), MERGED PR #206; ⚠ fit 97 % ALM, not re-swept | `trick_play.md`, `status_log.md` | `run_trick_*.sh --red`, `run_pause_still.sh --red`, `run_field_phase.sh --red`, `check_trick_wiring.py --red` |
 | Screensaver, and overlays blanked with the picture | ✅ | `screensaver.md` | `run_screensaver.sh`, `check_saver_overlay_wiring.py` |
 | Launch feedback: config versioning, startup OSD, idle logo | ✅ | `idle_screen.md` | — |
 | MGL launch (issue #48) and the drive's slot ownership | 🔧 mostly ✅ | `mgl_launch.md` | `run_mgl.sh`, `main/tests/run_tests.sh` |
@@ -495,7 +496,6 @@ otherwise; `--red` runs its mutation arms).
 - ⏳ Audio dead until a reboot after ~25 core loads in one boot, v0.10.0 too (`dts_ok` 0, cause unknown; `standard_convert.md`). `dts_ok` 0 voids a HIL run.
 - ❌ UDF-only images, parental control.
 - ⏳ 3rd-ed. audit tail (1–8 and 10b shipped): `docs/roadmap.md` "2026-10-01 spec-audit".
-- ❌ Trick play (continuous 2×/4×): needs a flush-free I-frame splice (`docs/dvd_nav.md` §2d).
 - ⚠ `lates` counts one per refresh while a PGC still is held, so boot/menu windows
   over-report (`docs/decode_pacing.md` §2c). Real lates are 0 on the census set since F1 +
   F2, bar one accepted ROGER late on Progressive from PR #142 (F3 is its structural fix).

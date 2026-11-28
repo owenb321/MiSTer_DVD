@@ -142,6 +142,7 @@ module iso_reader_menudrain_tb;
     wire        ptt_upd_w;
     wire [10:0] ptt_cur_w;
     dvd_iso_reader #(.DRAIN_WD(DRAIN_WD_TB)) dut (
+        .trick_en(1'b0), .trick_tier(2'd0), .trick_rev(1'b0), .trick_go(1'b0),   // trick play off (a new input floats Z)
         .cc_btns(1'b0),   // issue #176 hold off: a new input floats Z unless tied
         .ptt_upd(ptt_upd_w), .ptt_cur(ptt_cur_w),
         // new reader inputs tied off: a floating input is X, and X on
@@ -251,7 +252,7 @@ module iso_reader_menudrain_tb;
     ps_demux demux (
         .clk(clk), .rst_n(pipe_rst_n_w),
         .in_byte(fifo_byte), .in_valid(fifo_valid), .in_ready(demux_in_ready),
-        .aud_track(3'd0), .aud_realign(1'b0),
+        .aud_drop(1'b0), .aud_track(3'd0), .aud_realign(1'b0),
         .vid_byte(vid_byte), .vid_valid(vid_valid), .vid_ready(vid_ready),
         .aud_byte(), .aud_valid(), .aud_type(), .aud_frame_start(),
         .aud_ready(1'b1),
