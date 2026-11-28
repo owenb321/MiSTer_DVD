@@ -1,10 +1,11 @@
 # Trick play (continuous fast-forward / rewind)
 
-Status: 🔧 design, offline model, the splice through our RTL decoder in simulation, the ES
-filter (`dvd/trick_es_filter.sv`) and the reader's trick walk (`dvd/dvd_iso_reader.sv`),
-the audio drop (`ps_demux` `aud_drop`), the display cadence (`disp_sched` `cad_en`) and the
-controller (`dvd/trick_ctrl.sv`), all bench-proven and wired into `dvd/emu.sv`; ⏳ the first
-hardware round. `feature/trick-play`, 2026-11-24.
+Status: ✅ HW-confirmed and MERGED (PR #NN, 2026-11-28): the ES filter
+(`dvd/trick_es_filter.sv`), the reader's trick walk (`dvd/dvd_iso_reader.sv`), the audio drop
+(`ps_demux` `aud_drop`), the display cadence (`disp_sched` `cad_en`) and the controller
+(`dvd/trick_ctrl.sv`), wired into `dvd/emu.sv`; image and physical drive, angle blocks, the
+release at the HUD clock and the maintainer's hands-on all passed on the rig. The sections
+below are in the order the work happened.
 The background is `docs/dvd_nav.md` §2d, which records why this is not a seek mode.
 
 ## Decisions (maintainer, 2026-11-22)

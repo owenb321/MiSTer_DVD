@@ -20,11 +20,36 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ---
 
-## Trick play: hold FF/REW in a DVD film (2026-11-24, `feature/trick-play`)
+## Trick play: hold FF/REW in a DVD film (2026-11-24 .. 11-28, PR #NN)
 
-🔧 Built, sim-proven, wired, ✅ **first HW round passed** (2026-11-24: image and physical drive,
-both directions, the edge, release, tap; image = drive on the same film). ⏳ the follow-ups below. Full design,
-measurements and gates: `docs/trick_play.md`.
+✅ **HW-confirmed, merging as PR #NN** (`dev-trickplay11`). Full design, measurements and
+gates: `docs/trick_play.md`. The rounds after the first, in short:
+
+- **Speeds raised** to 16× / 40× / 120× / 480× (maintainer, 2026-11-24); gamepad tap = 10 s,
+  hold = trick play (`pad_hold`); OSD `Trick Play` (O[30]) Off = the old scrub.
+- **Trick pictures are field stills** (no flicker on a CRT); the field-parity corrector is
+  off under the cadence.
+- **Angle blocks:** the walk stays in its angle (41-disc sweep); a backward entry picks it
+  (✅ HW, TFA both angles).
+- **The release** (2026-11-27, HDMI captures on the rig): the tail keeps the ES filter,
+  audio drop and cadence up from the exit seek to its flush (no leaked P/B frames); the
+  HUD keeps its pair through the flush; `trick_pin_tail` holds the field still to the
+  landing and swallows the stale pending trick picture (5 of 6 releases flashed another
+  scene, now 0 of 6). The exit seeks to the NAV pack whose time the HUD shows (maintainer's
+  choice over "the picture on screen": the picture lags the clock by ~2 rungs, so the clock
+  stepped back at each release); on the rig the clock is steady at every release.
+- **VM timing unaffected:** `hil_suite` vs v0.11.0, 14 checks, 0 regressions.
+- **Maintainer's hands-on complete** (2026-11-28): pad tap/hold, image and physical disc,
+  Trick Play = Off, CRT field still, both edges.
+- **Fit:** `dev-trickplay11` SEED 9 first roll, clk_dec 90.29/88.49, clk_mem 99.08/99.95 MHz,
+  40,757 / 41,910 ALMs (97 %), `clock_check` PASS. Not re-swept on the merge (maintainer):
+  a marginal fit on `main` gets a follow-up branch. SEED 7 missed clk_mem by 0.4 MHz on
+  `dev-trickplay10`, so the margin is real.
+
+The first round's record follows.
+
+✅ **first HW round passed** (2026-11-24: image and physical drive, both directions, the
+edge, release, tap; image = drive on the same film).
 
 - **Decisions** (maintainer, 2026-11-22): hold FF/REW becomes trick play; only speeds that
   reliably pull I-frames; no slow motion; a disc image gets no advantage over a physical

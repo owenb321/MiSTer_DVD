@@ -3126,7 +3126,7 @@ Design + the RED/GREEN evidence: `docs/single_raster_analog.md` §6. Suite:
 
 ### 2d. Trick play (continuous 2×/4×/… playback) — NOT a variation on seeking
 
-> **Built 2026-11-24 on `feature/trick-play`** (sim-proven and wired, ⏳ HW): the design,
+> **✅ Shipped (PR #NN, 2026-11-28, HW-confirmed)**: the design,
 > the measurements and the gates are in `docs/trick_play.md`. The notes below are the
 > 2026-09-03 analysis it started from.
 
