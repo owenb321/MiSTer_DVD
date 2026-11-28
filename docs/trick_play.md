@@ -752,11 +752,22 @@ VOBU apart from the latest arm, [6] armed but nothing parsed; M10 (exit to the l
 and M11 (the edge to the HUD's VOBU). `check_trick_wiring.py --red` R28 (`cur_rbn` from the
 reader) and R31 (the queue's inputs back).
 
+**Rig (2026-11-28), `rel6_t11.mkv`**, the same six-release script (Matrix, 4 s holds, so 40x
+at the release): the HUD clock in the last frame with the trick arrows equals the clock in
+the first frame of play at every release read (3:26, 5:09, 6:55, 8:38, 10:22), then ticks on
+(5:09 -> 5:10). No step back (`dev-trickplay9` stepped back ~2 rungs), no step forward. The
+A->X->A detector: 0 of 6 flashes. ✅ HW. Read by eye from frame strips: `hud_read.py` decodes
+the core's own screenshots, not capture frames. Sampled sparsely, the clock looked like it
+jumped forward one rung at each release; it was the last trick rung landing within the half
+second before the release. Check the frame where the arrows go before calling a step.
+Fit: SEED 9 first roll, clk_dec 90.29/88.49, clk_mem 99.08/99.95, 40,757 / 41,910 ALMs,
+`clock_check` PASS.
+
 ## Next step
 
 0. ~~`dev-trickplay10` on the rig~~ done 2026-11-27: 0/6 flashes vs 5/6 (above).
-0b. `dev-trickplay11` on the rig: the same six-release capture; the HUD clock must not step
-   back at a release, the landing must match the clock, and still 0 flashes.
+0b. ~~`dev-trickplay11` on the rig~~ done 2026-11-28: clock steady at every release, 0/6
+   flashes (above).
 1. The maintainer's hands-on: gamepad tap, gamepad hold, Trick Play = Off on the pad, and
    the field still on the interlaced raster.
 2. ~~Angle blocks on the rig~~ done 2026-11-26 (above): TFA both angles. Castle on the rig
