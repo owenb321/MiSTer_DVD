@@ -770,8 +770,9 @@ Fit: SEED 9 first roll, clk_dec 90.29/88.49, clk_mem 99.08/99.95, 40,757 / 41,91
    flashes (above).
 1. The maintainer's hands-on on `dev-trickplay11` (2026-11-28): ✅ trick pictures steady (no
    flicker), ✅ FF/REW on an image and a physical disc, ✅ gamepad tap = 10 s seek, ✅ gamepad
-   hold = the speed ladder. ⏳ Trick Play = Off on the pad, the field still on the interlaced
-   raster, and the two edges (REW to the start, FF to the end).
+   hold = the speed ladder, ✅ Trick Play = Off (pad hold scrubs, one seek at release),
+   ✅ the field still on a CRT (steady), ✅ both edges (REW stops at the start and plays,
+   FF into the end finishes the film normally). Hands-on complete.
 2. ~~Angle blocks on the rig~~ done 2026-11-26 (above): TFA both angles. Castle on the rig
    is optional; its blocks are covered by the bench arms.
 3. The fit's ALM margin (97 %): a seed sweep, or trimming `kbd_hold`'s counters.
