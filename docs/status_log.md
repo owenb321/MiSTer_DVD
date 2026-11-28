@@ -22,7 +22,7 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 ## The `Load Video` row names what is mounted (2026-11-25)
 
-**State:** ✅ HW (maintainer, rig 236, 2026-11-25: THE_FORCE_AWAKENS in the drive shows
+**State:** ✅ HW, MERGED PR #NN (maintainer, rig 236, 2026-11-25: THE_FORCE_AWAKENS in the drive shows
 the disc icon and its label; an `.iso` and a `.VOB` show the arrow and their names, with no
 stale name carried across; eject restores the extension list; 2026-11-28: an audio CD shows
 the disc icon and `Audio CD in drive`, and plays). Main-only (`dev-loadrowname`); `main/tests
