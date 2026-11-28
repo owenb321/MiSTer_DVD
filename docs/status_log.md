@@ -24,9 +24,12 @@ predate later confirmations; the `CLAUDE.md` index carries the reconciled status
 
 **State:** ✅ HW (maintainer, rig 236, 2026-11-25: THE_FORCE_AWAKENS in the drive shows
 the disc icon and its label; an `.iso` and a `.VOB` show the arrow and their names, with no
-stale name carried across; eject restores the extension list). Main-only
-(`feature/load-row-name`, `dev-loadrowname`); `main/tests --red` green. ⏳ an audio CD in the
-drive (`Audio CD in drive`) not yet looked at. **Field report** (maintainer, testing
+stale name carried across; eject restores the extension list; 2026-11-28: an audio CD shows
+the disc icon and `Audio CD in drive`, and plays). Main-only (`dev-loadrowname`); `main/tests
+--red` green. Seen at the audio CD's eject: the tray took a while to open while the
+read-ahead ring drained, then the core soft-reset and the row went back to the extension list.
+Not part of this change (the ring's eject `EBUSY` path, `physical_disc.md`); worth a look if it
+is longer than with v0.11.0's Main. **Field report** (maintainer, testing
 dev-trickplay7): the load row showed the arrow and no text. Stock Main `fed03e5` brought
 upstream `2dd3662`, which draws a mounted S slot from `sd_image[n].name`, and only
 `FileOpen()` writes that; our drive, `.iso` and `.cue` mounts bypass it. **Fix:** a mount hook
@@ -35,7 +38,7 @@ upstream `2dd3662`, which draws a mounted S slot from `sd_image[n].name`, and on
 drive` / `Audio CD in drive`), and the drive's row gets a disc glyph (`0x97`) in place of the
 arrow. Files keep the arrow (maintainer's choice). **Gate:** `main/tests/run_tests.sh --red`
 (`dvd_mountname_test`, `dvd_phys_test` [18]). **Detail:** `main/integration/INTEGRATION.md`
-"Steps 63-65". **Next:** look at the row with an audio CD in the drive; then merge.
+"Steps 63-65". **Next:** merge.
 
 ## ascal Bob resync: a mid-stream switch to Bob on Interlaced HDMI (2026-11-22)
 
