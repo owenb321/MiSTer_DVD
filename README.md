@@ -1,24 +1,18 @@
 # MiSTer DVD Player Core
 
-A **DVD player core for the MiSTer FPGA platform** (DE10-Nano / Intel Cyclone V).
+This is a DVD player for the MiSTer. Put a DVD image on the SD card and it plays the way a
+set-top player would: the disc's own menus, chapters, subtitles and surround sound, on an
+HDMI TV or a CRT.
 
-Put a decrypted DVD image on the SD card and it plays — with the disc's own menus,
-button highlights, chapters, subtitles, and multi-channel audio. Decoding and navigation
-run entirely in FPGA fabric, with no HPS-side daemon. On the bare core the ARM only serves
-SD blocks through the standard framework interface, exactly like any other core; the
-optional `MiSTer_DVDcss` Main adds physical discs, CSS decryption and HDMI bitstream audio
-on the ARM side.
+All the decoding happens in the FPGA. The MiSTer's Linux side only reads the disc for it,
+as it would for any other core. Add the optional `MiSTer_DVDcss` Main and it also plays
+encrypted images and real discs from a USB drive, and sends surround sound to a receiver
+over HDMI.
 
 Built as a fork of [`mrchrisster/MiSTer_MPEG2`](https://github.com/mrchrisster/MiSTer_MPEG2),
 itself a MiSTer port of **Koen De Vleeschauwer's `mpeg2fpga`** hardware MPEG-2 decoder
 (2007). The video decode datapath is theirs and is largely unmodified; this project adds
 everything needed to turn a decoder into a player.
-
-> **Status: alpha.** Film and TV playback is the supported path and is exercised across a
-> library of hundreds of commercial discs. Interactive DVD *games* (FMV shooters, trivia
-> and board-game discs) play, with save states to keep their progress, but some still
-> mis-navigate — see [Known limitations](#known-limitations).
-
 
 📖 **[Read the manual](https://owenb321.github.io/MiSTer_DVD)** — install, controls, every setting, CRT and
 captions, physical discs, troubleshooting.
